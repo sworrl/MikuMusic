@@ -15,4 +15,6 @@
     <string name="widget_desc_weather">Miku weather badge</string>
     <string name="widget_desc_thermal">Miku thermal badge — CPU &amp; battery temp</string>
     <string name="widget_desc_volume">Miku volume badge</string>
+    <string name="widget_desc_bpm_tapper">Miku tap-tempo orb — tap to find the BPM</string>
+    <string name="widget_desc_bpm_combo">Miku BPM combo — live tempo + tap-tempo orb</string>
 </resources>

@@ -970,6 +970,9 @@ object MikuWeatherService {
                         isLoading = false,
                         error = null
                     )
+                    // Refresh the placed weather widgets with the new condition; no-op with none
+                    // placed, and never let a widget failure poison the fetch cycle.
+                    try { com.miku.launcher.widget.MikuWeatherWidget.pushUpdate(ctx) } catch (_: Throwable) {}
                 } else {
                     _state.value = _state.value.copy(isLoading = false, error = "HTTP ${omConn.responseCode}")
                 }

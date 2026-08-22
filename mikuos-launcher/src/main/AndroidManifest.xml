@@ -146,6 +146,96 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_miku_battery_info" />
         </receiver>
+        <receiver
+            android:name=".widget.MikuLauncherClockWidget"
+            android:exported="true"
+            android:label="Miku Clock">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_clock_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuSignalWidget"
+            android:exported="true"
+            android:label="Miku Signal">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_signal_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuBpmWidget"
+            android:exported="true"
+            android:label="Miku Now Playing BPM">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_bpm_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuBpmTapperWidget"
+            android:exported="true"
+            android:label="Miku BPM Tapper">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.miku.launcher.BPM_TAP" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_bpm_tapper_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuBpmComboWidget"
+            android:exported="true"
+            android:label="Miku BPM Combo">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.miku.launcher.BPM_TAP" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_bpm_combo_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuWeatherWidget"
+            android:exported="true"
+            android:label="Miku Weather">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_weather_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuThermalWidget"
+            android:exported="true"
+            android:label="Miku Thermal">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_thermal_info" />
+        </receiver>
+        <receiver
+            android:name=".widget.MikuVolumeWidget"
+            android:exported="true"
+            android:label="Miku Volume">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_volume_info" />
+        </receiver>
 
         <!-- Installs MikuLockscreenManager at boot so the power-button/screen state machine is
              armed even before the launcher UI is opened. -->

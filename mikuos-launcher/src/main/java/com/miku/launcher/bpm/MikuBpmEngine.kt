@@ -79,6 +79,13 @@ object MikuBpmEngine {
                         )
                     }
                 }
+                // Keep the placed BPM widgets live. pushUpdate throttles itself (pulses arrive
+                // every beat) and no-ops with none placed; never let it take down the receiver.
+                try {
+                    val app = ctx.applicationContext
+                    com.miku.launcher.widget.MikuBpmWidget.pushUpdate(app)
+                    com.miku.launcher.widget.MikuBpmComboWidget.pushUpdate(app)
+                } catch (_: Throwable) {}
             }
         }
 

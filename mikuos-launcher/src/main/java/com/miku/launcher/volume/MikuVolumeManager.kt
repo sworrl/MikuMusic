@@ -155,6 +155,9 @@ object MikuVolumeManager {
             maxVolume = max,
             isMuted = isMuted
         )
+        // Keep the placed volume widgets in step with every level change. pushUpdate throttles
+        // itself (knob spins fire in bursts) and no-ops with none placed; never crash the manager.
+        try { com.miku.launcher.widget.MikuVolumeWidget.pushUpdate(ctx.applicationContext) } catch (_: Throwable) {}
     }
 
     fun triggerHud(ctx: Context, delta: Int? = null) {
