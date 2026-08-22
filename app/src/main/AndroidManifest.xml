@@ -262,6 +262,19 @@
             </intent-filter>
         </service>
 
+        <!-- Hardware/BT media-button routing when the app is NOT foreground. Without this, the
+             framework delivers ACTION_MEDIA_BUTTON as a broadcast with no receiver → the physical
+             Play/Pause/Next/Prev buttons only worked while MainActivity had focus. Media3's
+             MediaButtonReceiver forwards the button to PlaybackService (starting it if needed),
+             so the session's onMediaButtonEvent fires backgrounded, screen-off, and locked. -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".UsbDacTileService"
             android:icon="@drawable/ic_miku_monitor_status"
