@@ -99,6 +99,9 @@ object PlayerHolder {
         // AudioTrack is created — the framework checks it per-track at construction. This is what
         // routes playback bit-perfect (native rate, no mixer/SRC) to the dual CS43198 DACs.
         runCatching { MikuDirectAudio.ensureAllowListed(app) }
+        // Full-range volume: kill HiBy's "volume lock" (Settings.Global vendor.audio.hw.volume_lock)
+        // which caps STREAM_MUSIC at index 35/40 on the phone-out jacks — see MikuDirectAudio.
+        runCatching { MikuDirectAudio.ensureFullVolumeRange(app) }
 
         // Integer PCM output with bit-perfect DIRECT support for dual CS43198 DACs:
         // Media3's stock DefaultAudioSink either downsamples 24/32-bit to 16-bit (float=false)
@@ -115,6 +118,56 @@ object PlayerHolder {
                     .setEnableFloatOutput(false)
                     .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
                     .build()
+            }
+
+            // Hi-res decode path: the platform MediaCodec decoders cannot emit 24-bit integer
+            // PCM (KEY_PCM_ENCODING only accepts 8/16-bit and float), so with float output off a
+            // 24-bit FLAC would be TRUNCATED to 16-bit inside the codec before the sink ever saw
+            // it. For sources whose container declares a >16-bit depth (FlacExtractor etc. set
+            // Format.pcmEncoding from the stream header), ask the codec for float output — a
+            // lossless carrier for <=24-bit samples — and MikuDirectAudioSink converts it back to
+            // 24-bit packed integer PCM for the DACs' direct_pcm profile. 16-bit sources are
+            // untouched (stay 16-bit end to end); a codec that ignores the key just keeps
+            // emitting 16-bit, which the sink also handles.
+            override fun buildAudioRenderers(
+                context: Context,
+                extensionRendererMode: Int,
+                mediaCodecSelector: androidx.media3.exoplayer.mediacodec.MediaCodecSelector,
+                enableDecoderFallback: Boolean,
+                audioSink: androidx.media3.exoplayer.audio.AudioSink,
+                eventHandler: android.os.Handler,
+                eventListener: androidx.media3.exoplayer.audio.AudioRendererEventListener,
+                out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
+            ) {
+                out.add(object : androidx.media3.exoplayer.audio.MediaCodecAudioRenderer(
+                    context,
+                    mediaCodecSelector,
+                    enableDecoderFallback,
+                    eventHandler,
+                    eventListener,
+                    audioSink
+                ) {
+                    override fun getMediaFormat(
+                        format: androidx.media3.common.Format,
+                        codecMimeType: String,
+                        codecMaxInputSize: Int,
+                        codecOperatingRate: Float
+                    ): android.media.MediaFormat {
+                        val mediaFormat = super.getMediaFormat(
+                            format, codecMimeType, codecMaxInputSize, codecOperatingRate
+                        )
+                        if (androidx.media3.common.util.Util.SDK_INT >= 24 &&
+                            format.pcmEncoding != androidx.media3.common.Format.NO_VALUE &&
+                            androidx.media3.common.util.Util.isEncodingHighResolutionPcm(format.pcmEncoding)
+                        ) {
+                            mediaFormat.setInteger(
+                                android.media.MediaFormat.KEY_PCM_ENCODING,
+                                android.media.AudioFormat.ENCODING_PCM_FLOAT
+                            )
+                        }
+                        return mediaFormat
+                    }
+                })
             }
         }
 

@@ -51,6 +51,7 @@ import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.audio.AudioProcessingPipeline;
 import androidx.media3.common.audio.AudioProcessor;
 import androidx.media3.common.audio.AudioProcessor.UnhandledAudioFormatException;
+import androidx.media3.common.audio.BaseAudioProcessor;
 import androidx.media3.common.audio.SonicAudioProcessor;
 import androidx.media3.common.audio.ToInt16PcmAudioProcessor;
 import androidx.media3.common.util.Assertions;
@@ -439,6 +440,7 @@ public final class MikuDirectAudioSink implements AudioSink {
   private final ChannelMappingAudioProcessor channelMappingAudioProcessor;
   private final TrimmingAudioProcessor trimmingAudioProcessor;
   private final ImmutableList<AudioProcessor> toIntPcmAvailableAudioProcessors;
+  private final ImmutableList<AudioProcessor> toHiResIntPcmAvailableAudioProcessors;
   private final ImmutableList<AudioProcessor> toFloatPcmAvailableAudioProcessors;
   private final ConditionVariable releasingConditionVariable;
   private final AudioTrackPositionTracker audioTrackPositionTracker;
@@ -527,6 +529,13 @@ public final class MikuDirectAudioSink implements AudioSink {
     toIntPcmAvailableAudioProcessors =
         ImmutableList.of(
             channelMappingAudioProcessor, trimmingAudioProcessor);
+    // Hi-res integer output chain: every stock int processor (channel mapping, trimming, sonic,
+    // silence skipping) throws UnhandledAudioFormatException for anything but 16-bit input, so
+    // 24/32-bit integer PCM must bypass them entirely (pass-through, bit-perfect), and float
+    // input (the platform codec's lossless carrier for >16-bit sources) is converted to 24-bit
+    // packed integer PCM — the HiBy direct_pcm HAL profiles accept 16/24/32-bit int, never float.
+    toHiResIntPcmAvailableAudioProcessors =
+        ImmutableList.of(new FloatTo24BitPcmAudioProcessor());
     toFloatPcmAvailableAudioProcessors = ImmutableList.of(new ToFloatPcmAudioProcessor());
     volume = 1f;
     audioSessionId = C.AUDIO_SESSION_ID_UNSET;
@@ -630,9 +639,18 @@ public final class MikuDirectAudioSink implements AudioSink {
       ImmutableList.Builder<AudioProcessor> pipelineProcessors = new ImmutableList.Builder<>();
       if (shouldUseFloatOutput(inputFormat.pcmEncoding)) {
         pipelineProcessors.addAll(toFloatPcmAvailableAudioProcessors);
-      } else {
+      } else if (inputFormat.pcmEncoding == C.ENCODING_PCM_16BIT) {
         pipelineProcessors.addAll(toIntPcmAvailableAudioProcessors);
         pipelineProcessors.add(audioProcessorChain.getAudioProcessors());
+      } else {
+        // 24/32-bit integer PCM and float input with integer output. The 16-bit-only stock
+        // processors are constraint-checked in onConfigure and would throw for these encodings
+        // (verified against media3 1.4.1 bytecode), so hi-res runs a minimal chain: integer PCM
+        // passes through untouched at native depth; float becomes 24-bit packed int (exact for
+        // <=24-bit sources — float32's 24-bit significand round-trips them losslessly).
+        // Tradeoff: no gapless edge-trimming / speed adjust / silence skipping on hi-res, same
+        // limitation the stock float path has.
+        pipelineProcessors.addAll(toHiResIntPcmAvailableAudioProcessors);
       }
       audioProcessingPipeline = new AudioProcessingPipeline(pipelineProcessors.build());
 
@@ -733,6 +751,26 @@ public final class MikuDirectAudioSink implements AudioSink {
                 outputSampleRate,
                 bitrate,
                 enableAudioTrackPlaybackParams ? MAX_PLAYBACK_SPEED : DEFAULT_PLAYBACK_SPEED);
+    // DTA / bit-perfect DIRECT gate (M500, verified in the device's decompiled framework +
+    // disassembled QTI audio policy): AudioTrack.shouldEnablePowerSaving() silently promotes any
+    // MODE_STREAM MUSIC track whose buffer is >= 100ms of audio to FLAG_DEEP_BUFFER, and the QTI
+    // AudioPolicyManager only force-routes a PCM MUSIC track to the "direct_pcm" DIRECT profile
+    // (AudioPolicyManager::getOutputForDevices, "Force direct flags to use pcm offload") when the
+    // requested flags are NONE. Media3's default 250ms+ buffer therefore lands every track on the
+    // deep_buffer MIXER thread. Requesting just UNDER the promotion threshold (frameSize *
+    // sampleRate / 10 bytes, the framework's exact formula) keeps flags at NONE so the policy
+    // opens a DIRECT thread at the file's native rate — the client buffer on a DIRECT output is
+    // negotiated up to the HAL's own size anyway, and ~99ms is ample on the mixer fallback
+    // (BT/A2DP), where DIRECT is refused and this track mixes normally.
+    if (outputMode == OUTPUT_MODE_PCM) {
+      long deepBufferPromotionBytes = (long) outputPcmFrameSize * outputSampleRate / 10;
+      if (bufferSize >= deepBufferPromotionBytes) {
+        bufferSize =
+            max(
+                getAudioTrackMinBufferSize(outputSampleRate, outputChannelConfig, outputEncoding),
+                (int) deepBufferPromotionBytes - outputPcmFrameSize);
+      }
+    }
     offloadDisabledUntilNextConfiguration = false;
     Configuration pendingConfiguration =
         new Configuration(
@@ -1455,6 +1493,9 @@ public final class MikuDirectAudioSink implements AudioSink {
     for (AudioProcessor audioProcessor : toIntPcmAvailableAudioProcessors) {
       audioProcessor.reset();
     }
+    for (AudioProcessor audioProcessor : toHiResIntPcmAvailableAudioProcessors) {
+      audioProcessor.reset();
+    }
     for (AudioProcessor audioProcessor : toFloatPcmAvailableAudioProcessors) {
       audioProcessor.reset();
     }
@@ -2068,6 +2109,58 @@ public final class MikuDirectAudioSink implements AudioSink {
         long elapsedSinceLastFeedMs = SystemClock.elapsedRealtime() - lastFeedElapsedRealtimeMs;
         listener.onUnderrun(bufferSize, bufferSizeMs, elapsedSinceLastFeedMs);
       }
+    }
+  }
+
+  /**
+   * Converts 32-bit float PCM to 24-bit packed little-endian integer PCM, and passes integer PCM
+   * through untouched (inactive).
+   *
+   * <p>Why this exists: the platform MediaCodec decoders cannot emit 24-bit integer PCM (the
+   * {@code KEY_PCM_ENCODING} API only accepts 8/16-bit and float), so the only lossless decode
+   * path for a 24-bit source is float output — float32's 24-bit significand represents every
+   * <=24-bit integer sample exactly, and scaling by 2^23 on both sides is exact, so
+   * float->24-bit-int here is a bit-perfect round trip for 24-bit sources. The HiBy direct_pcm
+   * HAL profiles (the DIRECT path to the dual CS43198 DACs) accept 16/24/32-bit integer PCM and
+   * no float, hence the conversion back to integer before the AudioTrack.
+   */
+  private static final class FloatTo24BitPcmAudioProcessor extends BaseAudioProcessor {
+
+    @Override
+    public AudioProcessor.AudioFormat onConfigure(AudioProcessor.AudioFormat inputAudioFormat)
+        throws UnhandledAudioFormatException {
+      if (inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT) {
+        return new AudioProcessor.AudioFormat(
+            inputAudioFormat.sampleRate, inputAudioFormat.channelCount, C.ENCODING_PCM_24BIT);
+      }
+      if (Util.isEncodingLinearPcm(inputAudioFormat.encoding)) {
+        // 16/24/32-bit integer PCM is already what the DAC path wants — stay inactive so the
+        // samples reach the AudioTrack untouched at native depth.
+        return AudioProcessor.AudioFormat.NOT_SET;
+      }
+      throw new UnhandledAudioFormatException(inputAudioFormat);
+    }
+
+    @Override
+    public void queueInput(ByteBuffer inputBuffer) {
+      int position = inputBuffer.position();
+      int limit = inputBuffer.limit();
+      int sampleCount = (limit - position) / 4;
+      ByteBuffer buffer = replaceOutputBuffer(sampleCount * 3);
+      for (int i = position; i < limit; i += 4) {
+        // Input buffer order is asserted little-endian by handleBuffer upstream.
+        float sample = inputBuffer.getFloat(i);
+        // Exact inverse of the decoder's int->float scaling (n / 2^23): both the multiply and
+        // the representable range are exact for <=24-bit sources; clamp only guards synthetic
+        // full-scale float content.
+        int value = (int) Math.round((double) sample * 0x800000);
+        value = Math.max(-0x800000, Math.min(0x7FFFFF, value));
+        buffer.put((byte) (value & 0xFF));
+        buffer.put((byte) ((value >> 8) & 0xFF));
+        buffer.put((byte) ((value >> 16) & 0xFF));
+      }
+      inputBuffer.position(limit);
+      buffer.flip();
     }
   }
 
