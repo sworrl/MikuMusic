@@ -926,7 +926,9 @@ fun MikuKawaiiLockscreenScreen(
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
+            // Large gap so the now-playing card floats well above the bottom edge / swipe zone
+            // instead of hugging the unlock hint (which stays pinned at the very bottom).
+            Spacer(Modifier.height(96.dp))
 
             // Swipe-up prompt
             val infiniteTransition = rememberInfiniteTransition(label = "ChevronBounce")

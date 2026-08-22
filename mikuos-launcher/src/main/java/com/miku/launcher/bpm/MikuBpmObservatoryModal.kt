@@ -490,6 +490,11 @@ fun KawaiiWaifuTapTempoOrb(
     val bounceScale = remember { Animatable(1.0f) }
     val shockwaveAnim = remember { Animatable(0.0f) }
     var tapCounter by remember { mutableIntStateOf(0) }
+    // Game state: per-session tap timestamps → tap count + a "steadiness" score (how even your
+    // intervals are). A gap > 2s starts a fresh session so the counter/score are per-run.
+    val orbTapTimes = remember { mutableStateListOf<Long>() }
+    var steadiness by remember { mutableStateOf(0f) }   // 0..1, higher = more even taps
+    var bestStreak by remember { mutableIntStateOf(0) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "OrbHaloSpin")
     val haloRotate by infiniteTransition.animateFloat(
@@ -508,7 +513,7 @@ fun KawaiiWaifuTapTempoOrb(
     ) {
         Box(
             modifier = Modifier
-                .size(90.dp),
+                .size(170.dp),
             contentAlignment = Alignment.Center
         ) {
             // Layer 1: Expanding Ripple Shockwave on Tap
@@ -518,7 +523,7 @@ fun KawaiiWaifuTapTempoOrb(
                     drawCircle(
                         color = MikuNeonPink.copy(alpha = (1.0f - shockwaveAnim.value) * 0.8f),
                         radius = radius,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5f)
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 4f)
                     )
                 }
             }
@@ -526,7 +531,7 @@ fun KawaiiWaifuTapTempoOrb(
             // Layer 2: Steadily Spinning Dual-Tone Aura Ring
             Box(
                 Modifier
-                    .size(86.dp)
+                    .size(160.dp)
                     .graphicsLayer { rotationZ = haloRotate }
                     .border(
                         BorderStroke(
@@ -548,7 +553,7 @@ fun KawaiiWaifuTapTempoOrb(
             // Layer 3: Round Kawaii Heart Beat Orb
             Box(
                 modifier = Modifier
-                    .size(76.dp)
+                    .size(148.dp)
                     .scale(bounceScale.value)
                     .clip(CircleShape)
                     .background(
@@ -574,12 +579,34 @@ fun KawaiiWaifuTapTempoOrb(
                         CircleShape
                     )
                     .clickable {
+                        // ---- Game mechanic: per-session tap count + steadiness score ----
+                        val now = SystemClock.elapsedRealtime()
+                        if (orbTapTimes.isNotEmpty() && now - orbTapTimes.last() > 2000L) {
+                            // Idle gap → new session: bank the best streak, reset the run.
+                            if (tapCounter > bestStreak) bestStreak = tapCounter
+                            orbTapTimes.clear()
+                            tapCounter = 0
+                            steadiness = 0f
+                        }
+                        orbTapTimes.add(now)
+                        if (orbTapTimes.size > 8) orbTapTimes.removeAt(0)
                         tapCounter++
-                        // Haptic feedback
+                        if (tapCounter > bestStreak) bestStreak = tapCounter
+                        // Steadiness = how even the intervals are (1 - coefficient of variation).
+                        if (orbTapTimes.size >= 3) {
+                            val iv = (1 until orbTapTimes.size).map { (orbTapTimes[it] - orbTapTimes[it - 1]).toDouble() }
+                            val mean = iv.average()
+                            if (mean > 0) {
+                                val sd = kotlin.math.sqrt(iv.sumOf { (it - mean) * (it - mean) } / iv.size)
+                                steadiness = (1.0 - (sd / mean)).coerceIn(0.0, 1.0).toFloat()
+                            }
+                        }
+                        // Haptic feedback — punchier the steadier you are.
                         try {
                             val vibrator = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+                            val amp = (60 + (steadiness * 195f)).toInt().coerceIn(1, 255)
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                vibrator?.vibrate(android.os.VibrationEffect.createOneShot(30, 255))
+                                vibrator?.vibrate(android.os.VibrationEffect.createOneShot(30, amp))
                             } else {
                                 @Suppress("DEPRECATION")
                                 vibrator?.vibrate(30)
@@ -613,32 +640,107 @@ fun KawaiiWaifuTapTempoOrb(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text(
-                        text = "♥",
-                        color = MikuNeonPink,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Black
-                    )
-                    Text(
-                        text = "TAP",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = AudiowideFont,
-                        letterSpacing = 1.sp
-                    )
+                    if (calculatedBpm != null && tapCounter >= 2) {
+                        // Live BPM front and center, big, as you tap.
+                        Text(
+                            text = String.format("%.0f", calculatedBpm),
+                            color = Color.White,
+                            fontSize = 46.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont
+                        )
+                        Text(
+                            text = "BPM",
+                            color = MikuCyan,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont,
+                            letterSpacing = 2.sp
+                        )
+                    } else {
+                        Text(
+                            text = "♥",
+                            color = MikuNeonPink,
+                            fontSize = 44.sp,
+                            fontWeight = FontWeight.Black
+                        )
+                        Text(
+                            text = "TAP",
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont,
+                            letterSpacing = 2.sp
+                        )
+                    }
                 }
             }
         }
 
-        Spacer(Modifier.height(6.dp))
+        Spacer(Modifier.height(12.dp))
+
+        // ---- Game stat row: tap counter · steadiness score · best streak ----
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TapStatChip(label = "TAPS", value = "$tapCounter", accent = MikuNeonPink)
+            val steadyPct = (steadiness * 100f).toInt()
+            val steadyColor = when {
+                tapCounter < 3 -> MikuTextSecondary
+                steadyPct >= 90 -> Color(0xFF00FF7F)
+                steadyPct >= 70 -> Color(0xFFFFD600)
+                else -> Color(0xFFFF6E6E)
+            }
+            TapStatChip(
+                label = "STEADY",
+                value = if (tapCounter < 3) "--" else "$steadyPct%",
+                accent = steadyColor
+            )
+            TapStatChip(label = "BEST", value = "$bestStreak", accent = MikuCyan)
+        }
+
+        Spacer(Modifier.height(8.dp))
 
         Text(
-            text = if (calculatedBpm != null) "✨ TAP BPM: ${String.format("%.1f", calculatedBpm)}" else "Tap in rhythm to calibrate live tempo",
+            text = when {
+                calculatedBpm == null -> "Tap the orb in rhythm to lock the tempo"
+                steadiness >= 0.9f && tapCounter >= 4 -> "✨ PERFECT LOCK · ${String.format("%.1f", calculatedBpm)} BPM"
+                else -> "✨ TAP BPM: ${String.format("%.1f", calculatedBpm)}"
+            },
             color = if (calculatedBpm != null) Color(0xFF00FF7F) else MikuTextSecondary,
             fontSize = 9.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = AudiowideFont
+        )
+    }
+}
+
+/** Compact stat pill for the tap-tempo game readouts (taps / steadiness / best). */
+@Composable
+private fun TapStatChip(label: String, value: String, accent: Color) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xDD08202A))
+            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 5.dp)
+    ) {
+        Text(
+            text = value,
+            color = accent,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Black,
+            fontFamily = AudiowideFont
+        )
+        Text(
+            text = label,
+            color = Color.White.copy(alpha = 0.65f),
+            fontSize = 7.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = AudiowideFont,
+            letterSpacing = 1.sp
         )
     }
 }
