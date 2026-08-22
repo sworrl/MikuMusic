@@ -844,11 +844,26 @@ fun MikuLauncherScreen() {
         ) {
             // ============================================================
             // TOP STATUS & CLOCK HUD (FLUSH TO TOP, 3D EMBOSSED SYSTEM)
+            // Themable background (gradient presets + photo) drawn behind the live status
+            // content; long-press the bar to cycle themes. Selection persists in prefs.
             // ============================================================
+            var topBarTheme by remember { mutableStateOf(MikuTopBarTheme.load(ctx)) }
+            Box(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 2.dp)) {
+                MikuTopBarBackground(topBarTheme, Modifier.matchParentSize())
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+                    .pointerInput(topBarTheme) {
+                        detectTapGestures(onLongPress = {
+                            val nextTheme = topBarTheme.next()
+                            topBarTheme = nextTheme
+                            MikuTopBarTheme.save(ctx, nextTheme)
+                            android.widget.Toast.makeText(
+                                ctx, "Top bar: ${nextTheme.displayName}", android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        })
+                    }
                     .pointerInput(Unit) {
                         detectVerticalDragGestures(
                             onVerticalDrag = { change, dragAmount ->
@@ -1101,6 +1116,7 @@ fun MikuLauncherScreen() {
                     }
                 }
             }
+            } // end themable top-bar Box (background + status Column)
 
             // ============================================================
             // PAGINATED DESKTOP WORKSPACE
@@ -3686,52 +3702,57 @@ fun ConnectedRfNetworkCapsule(
                     }
                 }
 
-                // ==================== CENTRAL SEAM (if Cellular Active) ====================
-                if (cell.isConnected) {
-                    Box(
-                        Modifier
-                            .padding(horizontal = 4.dp)
-                            .width(1.dp)
-                            .height(14.dp)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(
-                                        wifiColor.copy(alpha = 0.8f),
-                                        cellColor.copy(alpha = 0.8f)
-                                    )
+                // ==================== CENTRAL SEAM ====================
+                // Always draw the cellular pod — a real status bar shows the signal meter even with
+                // no SIM/service (greyed), rather than hiding it. Gating on cell.isConnected was
+                // why "the signal is not on it": on this device the pod simply vanished.
+                Box(
+                    Modifier
+                        .padding(horizontal = 4.dp)
+                        .width(1.dp)
+                        .height(14.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    wifiColor.copy(alpha = 0.8f),
+                                    cellColor.copy(alpha = 0.8f)
                                 )
                             )
-                    )
-
-                    // ==================== POD 2: CELLULAR / LTE ====================
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.5.dp)
-                    ) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(1.2.dp),
-                            verticalAlignment = Alignment.Bottom,
-                            modifier = Modifier.height(9.dp)
-                        ) {
-                            repeat(4) { i ->
-                                val active = (i + 1) <= cell.signalLevel5
-                                Box(
-                                    Modifier
-                                        .width(1.8.dp)
-                                        .height(((i + 1) * 2.2).dp)
-                                        .clip(RoundedCornerShape(0.5.dp))
-                                        .background(if (active) cellColor else Color.White.copy(alpha = 0.2f))
-                                )
-                            }
-                        }
-                        Text(
-                            text = if (cellNoData) "! NO DATA" else "LTE ${cell.signalDbm}d",
-                            color = cellColor,
-                            fontSize = 7.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = AudiowideFont
                         )
+                )
+
+                // ==================== POD 2: CELLULAR / LTE ====================
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.5.dp)
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(1.2.dp),
+                        verticalAlignment = Alignment.Bottom,
+                        modifier = Modifier.height(9.dp)
+                    ) {
+                        repeat(4) { i ->
+                            val active = (i + 1) <= cell.signalLevel5
+                            Box(
+                                Modifier
+                                    .width(1.8.dp)
+                                    .height(((i + 1) * 2.2).dp)
+                                    .clip(RoundedCornerShape(0.5.dp))
+                                    .background(if (active) cellColor else Color.White.copy(alpha = 0.2f))
+                            )
+                        }
                     }
+                    Text(
+                        text = when {
+                            !cell.isConnected -> "NO SIM"
+                            cellNoData -> "! NO DATA"
+                            else -> "LTE ${cell.signalDbm}d"
+                        },
+                        color = cellColor,
+                        fontSize = 7.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = AudiowideFont
+                    )
                 }
             }
         }
