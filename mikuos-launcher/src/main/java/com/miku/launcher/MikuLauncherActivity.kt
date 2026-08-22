@@ -3609,16 +3609,18 @@ fun ConnectedRfNetworkCapsule(
         wifi.rssiDbm >= -80 -> Color(0xFFFFD600)
         else -> Color(0xFFFF5252)
     }
+    // "No data" is only a PROBLEM when cellular is meant to carry data — i.e. Wi-Fi isn't already
+    // providing it. On Wi-Fi the cell radio idling without a data PDN is normal, so show the signal
+    // bars neutrally by level instead of an alarming red warning.
+    val cellNoData = cell.hasSignal && !cell.dataConnected && !wifi.isConnected
     val cellColor = when {
         !cell.isConnected -> Color.White.copy(alpha = 0.5f)
-        // Signal present but no data PDN (the AOSP "!" case) → red warning regardless of bars.
-        cell.hasSignal && !cell.dataConnected -> Color(0xFFFF5252)
+        cellNoData -> Color(0xFFFF5252)                    // genuine no-data (no Wi-Fi fallback)
         cell.signalLevel5 >= 3 -> Color(0xFF00E676)
         cell.signalLevel5 == 2 -> Color(0xFFFFD600)
-        else -> Color(0xFFFF5252)
+        cell.signalLevel5 == 1 -> Color(0xFFFF9800)
+        else -> Color.White.copy(alpha = 0.6f)
     }
-    // Shown as a small overlay glyph on the signal badge when registered-but-no-data.
-    val cellNoData = cell.hasSignal && !cell.dataConnected
 
     Box(
         modifier = modifier
