@@ -7,4 +7,12 @@
     <string name="pulsar_settings_summary">TrueColor PWM, Chroma Spectrum Wave, BPM rhythm pulses &amp; battery gauge</string>
     <string name="fn_settings_title">Hardware Fn Switch &amp; Pocket Lock</string>
     <string name="fn_settings_summary">Digitizer hardware inhibit, volume wheel retention, physical key lock</string>
+    <!-- Miku status-badge widget descriptions (widget picker) -->
+    <string name="widget_desc_battery">Miku battery badge — level &amp; charge</string>
+    <string name="widget_desc_signal">Miku signal badge — Wi-Fi &amp; cellular</string>
+    <string name="widget_desc_clock">Miku clock badge</string>
+    <string name="widget_desc_bpm">Miku now-playing / BPM badge</string>
+    <string name="widget_desc_weather">Miku weather badge</string>
+    <string name="widget_desc_thermal">Miku thermal badge — CPU &amp; battery temp</string>
+    <string name="widget_desc_volume">Miku volume badge</string>
 </resources>

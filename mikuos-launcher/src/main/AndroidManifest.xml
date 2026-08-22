@@ -130,6 +130,23 @@
             </intent-filter>
         </receiver>
 
+        <!-- ============================================================
+             Miku status-badge App Widgets — the in-bar badges as individual, placeable,
+             resizable system widgets. Badge-sized by default, resizable to standard cells.
+             RemoteViews (matching the app's Clock/Music/Tape widgets).
+             ============================================================ -->
+        <receiver
+            android:name=".widget.MikuBatteryWidget"
+            android:exported="true"
+            android:label="Miku Battery">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_miku_battery_info" />
+        </receiver>
+
         <!-- Installs MikuLockscreenManager at boot so the power-button/screen state machine is
              armed even before the launcher UI is opened. -->
         <receiver
