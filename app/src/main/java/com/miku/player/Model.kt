@@ -618,7 +618,43 @@ fun List<Track>.albums(
         }
         AlbumGroup(displayName, artistDisplay, finalTracks)
     }
+    .let { mergeDuplicateAlbumCopies(it) }
     .sortedBy { formatArtistSortKey(it.name, ignoreThe, ctx) }
+
+/** Strip folder-copy noise from an album title so duplicate rips collapse: a trailing "[1234]",
+ *  "(1)", "copy", or "- copy" that an ingest/dedup appended, plus case/whitespace. The album TAG is
+ *  usually clean ("Something Wild") while only the FOLDER carries the suffix, but normalize the
+ *  title too in case the name was recovered from a suffixed folder. */
+private val ALBUM_COPY_SUFFIX_RE =
+    Regex("""\s*(?:\[[0-9]{1,6}\]|\((?:disc\s*)?[0-9]{1,3}\)|-?\s*copy(?:\s*[0-9]+)?)\s*$""", RegexOption.IGNORE_CASE)
+private fun normalizeAlbumTitleForDedup(name: String): String =
+    name.trim().let { ALBUM_COPY_SUFFIX_RE.replace(it, "") }.trim().lowercase()
+
+/** Merge album groups that are the SAME release duplicated across folders — e.g. an ingest that
+ *  copied "Something Wild", "Something Wild [2312]", "Something Wild [2313]". The base grouping is
+ *  folder-keyed (which correctly separates distinct albums) but that also splits genuine duplicate
+ *  copies into 3 tiles; this collapses copies sharing the same normalized album name + album artist
+ *  into one, deduping tracks by track-number + title so each song appears once. Distinct albums that
+ *  merely share a name are NOT merged unless the album artist also matches. */
+private fun mergeDuplicateAlbumCopies(groups: List<AlbumGroup>): List<AlbumGroup> {
+    if (groups.size < 2) return groups
+    val byKey = LinkedHashMap<String, MutableList<AlbumGroup>>()
+    for (g in groups) {
+        val key = normalizeAlbumTitleForDedup(g.name) + " " + g.artist.trim().lowercase()
+        byKey.getOrPut(key) { mutableListOf() }.add(g)
+    }
+    return byKey.values.map { copies ->
+        if (copies.size == 1) copies[0]
+        else {
+            val primary = copies.maxByOrNull { it.tracks.size } ?: copies[0]
+            val mergedTracks = sortAlbumTracks(
+                copies.flatMap { it.tracks }
+                    .distinctBy { "${it.trackNumber} ${it.title.trim().lowercase()}" }
+            )
+            AlbumGroup(primary.name, primary.artist, mergedTracks)
+        }
+    }
+}
 
 // ---- Miku palette ----
 val MikuTeal = Color(0xFF39C5BB)

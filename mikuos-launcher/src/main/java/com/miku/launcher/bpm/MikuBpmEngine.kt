@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.provider.Settings
+import android.util.Log
 import androidx.compose.runtime.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -15,12 +16,22 @@ import kotlinx.coroutines.flow.asStateFlow
  * Collects live tempo, beat pulses, and dominant album colors from MikuMusic.
  */
 object MikuBpmEngine {
+    private const val TAG = "MikuBpmEngine"
     const val ACTION_BPM_UPDATE = "com.miku.action.BPM_UPDATE"
     const val ACTION_BPM_PULSE = "com.miku.action.BPM_PULSE"
     const val EXTRA_BPM = "bpm"
     const val EXTRA_BEAT_INTERVAL_MS = "beat_interval_ms"
     const val EXTRA_IS_PLAYING = "is_playing"
     const val EXTRA_DOMINANT_COLOR = "dominant_color"
+
+    // Every value that enters BpmState is clamped to these — the receiver is necessarily
+    // RECEIVER_EXPORTED (pulses come from com.miku.player), so ANY app can broadcast these
+    // actions. A bogus sender putting tempo in the wrong unit (e.g. beats-per-second ≈ 0.5,
+    // or a raw beat interval) must never reach UI readouts as if it were BPM.
+    private const val MIN_BPM = 40f
+    private const val MAX_BPM = 260f
+    private const val MIN_INTERVAL_MS = 150L
+    private const val MAX_INTERVAL_MS = 3000L
 
     data class BpmState(
         val bpm: Float = 120f,
@@ -35,13 +46,29 @@ object MikuBpmEngine {
 
     private var receiver: BroadcastReceiver? = null
 
+    /** Finite + in-range tempo, else the previous known-good value. */
+    private fun sanitizeBpm(candidate: Float, fallback: Float): Float =
+        if (candidate.isFinite() && candidate in MIN_BPM..MAX_BPM) candidate else fallback
+
+    /** Positive, sane beat interval, else derived from the (already sanitized) tempo. */
+    private fun sanitizeInterval(candidate: Long, bpm: Float): Long =
+        if (candidate in MIN_INTERVAL_MS..MAX_INTERVAL_MS) candidate
+        else (60_000f / bpm).toLong().coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
+
     fun startListening(context: Context) {
         if (receiver != null) return
         val cr = context.contentResolver
-        
-        // Initial state from Settings.Global
-        val initBpm = try { Settings.Global.getFloat(cr, "miku_live_bpm", 120f) } catch (_: Throwable) { 120f }
-        val initInterval = try { Settings.Global.getInt(cr, "miku_beat_interval_ms", 500).toLong() } catch (_: Throwable) { 500L }
+
+        // Initial state from Settings.Global — reads sanitized like broadcasts (stale keys
+        // from older builds may hold values in the wrong unit).
+        val initBpm = sanitizeBpm(
+            try { Settings.Global.getFloat(cr, "miku_live_bpm", 120f) } catch (_: Throwable) { 120f },
+            120f
+        )
+        val initInterval = sanitizeInterval(
+            try { Settings.Global.getInt(cr, "miku_beat_interval_ms", 500).toLong() } catch (_: Throwable) { 500L },
+            initBpm
+        )
         val initPlaying = try { Settings.Global.getInt(cr, "miku_is_playing", 0) == 1 } catch (_: Throwable) { false }
         val initColor = try { Settings.Global.getInt(cr, "miku_album_dominant_color", 0xFF00E5FF.toInt()) } catch (_: Throwable) { 0xFF00E5FF.toInt() }
 
@@ -54,30 +81,44 @@ object MikuBpmEngine {
 
         val r = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
-                when (intent.action) {
-                    ACTION_BPM_UPDATE -> {
-                        val bpm = intent.getFloatExtra(EXTRA_BPM, _state.value.bpm)
-                        val interval = intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, _state.value.beatIntervalMs)
-                        val playing = intent.getBooleanExtra(EXTRA_IS_PLAYING, _state.value.isPlaying)
-                        val color = intent.getIntExtra(EXTRA_DOMINANT_COLOR, _state.value.dominantColor)
-                        _state.value = _state.value.copy(
-                            bpm = bpm,
-                            beatIntervalMs = interval,
-                            isPlaying = playing,
-                            dominantColor = color
-                        )
+                // Nothing in here may throw: an exported receiver that throws crashes the
+                // whole launcher process on a hostile/malformed broadcast.
+                try {
+                    when (intent.action) {
+                        ACTION_BPM_UPDATE -> {
+                            val prev = _state.value
+                            val bpm = sanitizeBpm(intent.getFloatExtra(EXTRA_BPM, prev.bpm), prev.bpm)
+                            val interval = sanitizeInterval(
+                                intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, prev.beatIntervalMs), bpm
+                            )
+                            val playing = intent.getBooleanExtra(EXTRA_IS_PLAYING, prev.isPlaying)
+                            val color = intent.getIntExtra(EXTRA_DOMINANT_COLOR, prev.dominantColor)
+                            _state.value = prev.copy(
+                                bpm = bpm,
+                                beatIntervalMs = interval,
+                                isPlaying = playing,
+                                dominantColor = color
+                            )
+                        }
+                        ACTION_BPM_PULSE -> {
+                            val prev = _state.value
+                            val bpm = sanitizeBpm(intent.getFloatExtra(EXTRA_BPM, prev.bpm), prev.bpm)
+                            val interval = sanitizeInterval(
+                                intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, prev.beatIntervalMs), bpm
+                            )
+                            val color = intent.getIntExtra(EXTRA_DOMINANT_COLOR, prev.dominantColor)
+                            _state.value = prev.copy(
+                                bpm = bpm,
+                                beatIntervalMs = interval,
+                                dominantColor = color,
+                                lastPulseEpochMs = System.currentTimeMillis()
+                            )
+                        }
                     }
-                    ACTION_BPM_PULSE -> {
-                        val bpm = intent.getFloatExtra(EXTRA_BPM, _state.value.bpm)
-                        val interval = intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, _state.value.beatIntervalMs)
-                        val color = intent.getIntExtra(EXTRA_DOMINANT_COLOR, _state.value.dominantColor)
-                        _state.value = _state.value.copy(
-                            bpm = bpm,
-                            beatIntervalMs = interval,
-                            dominantColor = color,
-                            lastPulseEpochMs = System.currentTimeMillis()
-                        )
-                    }
+                } catch (t: Throwable) {
+                    // Malformed extras from a foreign sender — keep last good state, say so once
+                    // per occurrence instead of dying or going silent.
+                    Log.w(TAG, "Dropped malformed BPM broadcast (${intent.action})", t)
                 }
                 // Keep the placed BPM widgets live. pushUpdate throttles itself (pulses arrive
                 // every beat) and no-ops with none placed; never let it take down the receiver.
@@ -105,6 +146,11 @@ object MikuBpmEngine {
                 context.registerReceiver(r, filter)
             }
             receiver = r
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+            // Never crash the launcher over this, but never hide it either — an unregistered
+            // receiver means the whole BPM UI silently freezes at defaults (seen once already,
+            // see the comment above). One warning per attempt; startListening retries on next call.
+            Log.w(TAG, "BPM receiver registration failed — live tempo UI will run on defaults", t)
+        }
     }
 }

@@ -146,14 +146,19 @@ object BpmEngine {
                 if (bytesRead < 0) break
 
                 buffer.position(0)
-                val shorts = bytesRead / 2
-                for (s in 0 until shorts step channelCount) {
-                    if (sampleCount >= maxSamples) break
-                    val sample = buffer.short / 32768.0f
-                    pcmFloats[sampleCount++] = sample
-                    // Skip interleaved channels
-                    for (c in 1 until channelCount) {
-                        if (buffer.hasRemaining()) buffer.short
+                // readSampleData returns raw sample chunks whose byte count is not guaranteed
+                // even, let alone frame-aligned (FLAC frames routinely end mid-short). The old
+                // loop guarded skips with hasRemaining() — true with a single byte left — so
+                // getShort() threw BufferUnderflowException on every such chunk (the recurring
+                // W/BpmEngine "PCM beat detection error" stack). Only read while a complete
+                // 16-bit sample remains.
+                while (sampleCount < maxSamples && buffer.remaining() >= 2) {
+                    pcmFloats[sampleCount++] = buffer.short / 32768.0f
+                    // Skip interleaved channels — guarded the same way.
+                    var c = 1
+                    while (c < channelCount && buffer.remaining() >= 2) {
+                        buffer.short
+                        c++
                     }
                 }
                 extractor.advance()

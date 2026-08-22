@@ -311,6 +311,30 @@ class MikuLauncherActivity : ComponentActivity() {
         onBackPressedDispatcher.onBackPressed()
     }
 
+    // When Miku Music is backgrounded, the LAUNCHER is the foreground window, so the hardware
+    // transport keys land here first. The framework's fall-through to the media session proved
+    // unreliable (the physical Play/Pause/Next/Prev did nothing unless the music app was focused),
+    // so forward media keys explicitly to the active session via AudioManager and consume them —
+    // same fix as the lockscreen. Screen-off (no foreground activity) is still the framework's job.
+    private fun isTransportKey(code: Int) = when (code) {
+        KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE,
+        KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_MEDIA_NEXT,
+        KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_STOP,
+        KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+        KeyEvent.KEYCODE_HEADSETHOOK -> true
+        else -> false
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isTransportKey(event.keyCode)) {
+            runCatching {
+                (getSystemService(AUDIO_SERVICE) as android.media.AudioManager).dispatchMediaKeyEvent(event)
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
