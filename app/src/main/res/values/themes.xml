@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MikuPlayer" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#04161A</item>
+        <item name="android:navigationBarColor">#04161A</item>
+        <item name="android:windowBackground">#04161A</item>
+    </style>
+
+    <style name="Theme.MikuLauncher" parent="android:Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowBackground">#040D12</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowAnimationStyle">@style/MikuKdeWindowAnim</item>
+    </style>
+
+    <!-- KDE-style window transitions: apps FLY AWAY when sent to home (swipe up / task
+         to back), FALL APART (crumble + tumble + drop) when actually closed, and FLY IN
+         when opened. Replaces the stock slide-off-to-the-right. -->
+    <style name="MikuKdeWindowAnim">
+        <!-- open an app -->
+        <item name="android:activityOpenEnterAnimation">@anim/kde_flyin_in</item>
+        <item name="android:taskOpenEnterAnimation">@anim/kde_flyin_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/kde_reveal_in</item>
+        <!-- CLOSE an app (back / finish / recents-close) -> fall apart -->
+        <item name="android:activityCloseExitAnimation">@anim/kde_fallapart_out</item>
+        <item name="android:taskCloseExitAnimation">@anim/kde_fallapart_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/kde_reveal_in</item>
+        <item name="android:taskCloseEnterAnimation">@anim/kde_reveal_in</item>
+        <!-- SWIPE UP to home / send to back -> fly away -->
+        <item name="android:taskToBackExitAnimation">@anim/kde_flyaway_out</item>
+        <item name="android:wallpaperIntraCloseExitAnimation">@anim/kde_flyaway_out</item>
+        <item name="android:wallpaperIntraCloseEnterAnimation">@anim/kde_reveal_in</item>
+        <item name="android:taskToBackEnterAnimation">@anim/kde_reveal_in</item>
+        <item name="android:taskToFrontEnterAnimation">@anim/kde_flyin_in</item>
+        <item name="android:windowExitAnimation">@anim/kde_fallapart_out</item>
+        <item name="android:windowEnterAnimation">@anim/kde_flyin_in</item>
+    </style>
+
+</resources>

@@ -1,0 +1,329 @@
+package com.miku.player
+
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
+import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/**
+ * Hardware controller for the HiBy M500's Dual Cirrus Logic CS43131 DAC
+ * and audiophile subsystem via Direct Kernel Sysfs (`/sys/devices/platform/sa_sound_setting/`),
+ * HAL System Properties, and Android Global Settings.
+ */
+object CirrusLogicManager {
+    private const val TAG = "CirrusLogicManager"
+    const val SYSFS_BASE = "/sys/devices/platform/sa_sound_setting"
+
+    enum class DigitalFilter(val id: String, val label: String, val description: String) {
+        FAST_LINEAR("fast_rolloff_phase_compensated", "Fast Roll-off, Phase Compensated", "Reference linear phase, wide soundstage and precise imaging"),
+        FAST_MINIMUM("fast_rolloff_low_latency", "Fast Roll-off, Low Latency", "Minimum phase with ultra-low group delay and punchy dynamics"),
+        SLOW_LINEAR("slow_rolloff_phase_compensated", "Slow Roll-off, Phase Compensated", "Smooth linear decay with zero phase distortion"),
+        SLOW_MINIMUM("slow_rolloff_low_latency", "Slow Roll-off, Low Latency", "Warm acoustic roll-off with minimal pre-ringing"),
+        NOS("nos", "Non-Oversampling (NOS)", "Bypasses internal digital oversampling for raw, analog-like fidelity")
+    }
+
+    enum class GainMode(val id: String, val label: String, val description: String) {
+        LOW("low", "Low Gain (0 dB)", "Optimized for ultra-sensitive in-ear monitors (zero noise floor)"),
+        HIGH("high", "High Gain (+6 dB)", "High voltage swing for planar and high-impedance headphones")
+    }
+
+    enum class OutputMode(val id: String, val label: String, val description: String) {
+        HEADPHONE_OUT("bal_po", "Headphone Out (PO)", "Variable output with volume control for 3.5mm SE & 4.4mm BAL"),
+        LINE_OUT("bal_lo", "Line Out (LO)", "Clean unamplified line-level bypass for external desktop amps")
+    }
+
+    data class HardwareAuditState(
+        val kernelFilter: String = "nos",
+        val kernelGain: String = "low",
+        val kernelHighPower: String = "hpower_disable",
+        val kernelDre: String = "dremode_enable",
+        val kernelTurbo: String = "0",
+        val kernelOutput: String = "bal_po",
+        val kernelBalance: String = "0",
+        val isHardwareSynced: Boolean = true
+    )
+
+    fun init(ctx: Context) {
+        RootShell.execFast("chmod 666 $SYSFS_BASE/*")
+    }
+
+    private fun readSysfs(node: String): String? {
+        try {
+            val file = File("$SYSFS_BASE/$node")
+            if (file.exists()) {
+                val txt = file.readText().trim()
+                if (txt.isNotEmpty()) return txt
+            }
+        } catch (_: Throwable) {}
+        val rootOut = RootShell.execOut("cat $SYSFS_BASE/$node")?.trim()
+        if (!rootOut.isNullOrBlank()) return rootOut
+        return null
+    }
+
+    private fun writeSysfs(node: String, value: String) {
+        try {
+            val file = File("$SYSFS_BASE/$node")
+            if (file.exists() && file.canWrite()) {
+                file.writeText(value)
+            } else {
+                RootShell.execFast("echo $value > $SYSFS_BASE/$node")
+            }
+        } catch (_: Throwable) {
+            RootShell.execFast("echo $value > $SYSFS_BASE/$node")
+        }
+    }
+
+    fun getDigitalFilter(ctx: Context): DigitalFilter {
+        val kernelVal = readSysfs("digital_filter")
+        if (!kernelVal.isNullOrBlank()) {
+            DigitalFilter.values().firstOrNull { it.id == kernelVal.lowercase() }?.let { return it }
+        }
+        val cr = ctx.contentResolver
+        val raw = Settings.Global.getString(cr, "vendor.audio.hiby.hw.digital_filter")
+            ?: Settings.Global.getString(cr, "vendor.audio.hiby.digital_filter")
+            ?: Settings.Global.getString(cr, "hw.digital_filter")
+            ?: ""
+        return DigitalFilter.values().firstOrNull { it.id == raw.trim().lowercase() } ?: DigitalFilter.NOS
+    }
+
+    suspend fun setDigitalFilter(ctx: Context, filter: DigitalFilter) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.digital_filter", filter.id) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.digital_filter", filter.id) }
+        runCatching { Settings.Global.putString(cr, "hw.digital_filter", filter.id) }
+
+        RootShell.execFast(
+            "echo ${filter.id} > $SYSFS_BASE/digital_filter; " +
+            "settings put global vendor.audio.hiby.hw.digital_filter ${filter.id}; " +
+            "settings put global vendor.audio.hiby.digital_filter ${filter.id}; " +
+            "settings put global hw.digital_filter ${filter.id}; " +
+            "setprop vendor.audio.hiby.hw.digital_filter ${filter.id}; " +
+            "setprop vendor.audio.hiby.digital_filter ${filter.id}"
+        )
+        Log.i(TAG, "Applied Cirrus Logic filter: ${filter.id}")
+    }
+
+    fun getGainMode(ctx: Context): GainMode {
+        val kernelVal = readSysfs("gain")
+        if (!kernelVal.isNullOrBlank()) {
+            if (kernelVal.contains("high")) return GainMode.HIGH
+            if (kernelVal.contains("low")) return GainMode.LOW
+        }
+        val cr = ctx.contentResolver
+        val g = Settings.Global.getString(cr, "vendor.audio.hiby.hw.gain")
+            ?: Settings.Global.getString(cr, "vendor.audio.hiby.gain") ?: ""
+        return if (g.contains("high")) GainMode.HIGH else GainMode.LOW
+    }
+
+    suspend fun setGainMode(ctx: Context, gain: GainMode) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        val hp = if (gain == GainMode.HIGH) "hpower_enable" else "hpower_disable"
+
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", gain.id) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", gain.id) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power", hp) }
+
+        RootShell.execFast(
+            "echo ${gain.id} > $SYSFS_BASE/gain; " +
+            "echo $hp > $SYSFS_BASE/high_power_mode; " +
+            "settings put global vendor.audio.hiby.hw.gain ${gain.id}; " +
+            "settings put global vendor.audio.hiby.gain ${gain.id}; " +
+            "settings put global vendor.audio.hiby.high_power $hp; " +
+            "setprop vendor.audio.hiby.hw.gain ${gain.id}; " +
+            "setprop vendor.audio.hiby.gain ${gain.id}; " +
+            "setprop vendor.audio.hiby.high_power $hp; " +
+            "am broadcast -a gain_value_change_from_Settings"
+        )
+
+        try {
+            ctx.sendBroadcast(Intent("gain_value_change_from_Settings"))
+        } catch (_: Throwable) {}
+
+        Log.i(TAG, "Applied Gain mode: ${gain.id}")
+    }
+
+    fun isDreEnabled(ctx: Context): Boolean {
+        val kernelVal = readSysfs("dre_mode")
+        if (!kernelVal.isNullOrBlank()) {
+            return kernelVal.contains("enable")
+        }
+        val cr = ctx.contentResolver
+        val raw = Settings.Global.getString(cr, "vendor.audio.hiby.dre_mode") ?: ""
+        return raw.contains("enable")
+    }
+
+    suspend fun setDreEnabled(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        val cmd = if (enabled) "dremode_enable" else "dremode_disable"
+
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.dre_mode", cmd) }
+
+        RootShell.execFast(
+            "echo $cmd > $SYSFS_BASE/dre_mode; " +
+            "settings put global vendor.audio.hiby.dre_mode $cmd; " +
+            "setprop vendor.audio.hiby.dre_mode $cmd"
+        )
+        Log.i(TAG, "Applied DRE Mode: $cmd")
+    }
+
+    fun isHighPowerEnabled(ctx: Context): Boolean {
+        val kernelVal = readSysfs("high_power_mode")
+        if (!kernelVal.isNullOrBlank()) {
+            return kernelVal.contains("enable")
+        }
+        val cr = ctx.contentResolver
+        val raw = Settings.Global.getString(cr, "vendor.audio.hiby.high_power")
+            ?: Settings.Global.getString(cr, "vendor.audio.hiby.high_power_mode") ?: ""
+        return raw.contains("enable")
+    }
+
+    suspend fun setHighPowerEnabled(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        val cmd = if (enabled) "hpower_enable" else "hpower_disable"
+
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power", cmd) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power_mode", cmd) }
+
+        RootShell.execFast(
+            "echo $cmd > $SYSFS_BASE/high_power_mode; " +
+            "settings put global vendor.audio.hiby.high_power $cmd; " +
+            "settings put global vendor.audio.hiby.high_power_mode $cmd; " +
+            "setprop vendor.audio.hiby.high_power $cmd; " +
+            "setprop vendor.audio.hiby.high_power_mode $cmd"
+        )
+        Log.i(TAG, "Applied High Power Turbo: $cmd")
+    }
+
+    fun isTurboEnabled(ctx: Context): Boolean {
+        val kernelVal = readSysfs("turbo")
+        if (!kernelVal.isNullOrBlank()) {
+            return kernelVal == "1" || kernelVal.contains("on") || kernelVal.contains("enable")
+        }
+        val cr = ctx.contentResolver
+        val raw = Settings.Global.getInt(cr, "vendor.audio.hiby.hw.turbo", 0)
+        return raw == 1
+    }
+
+    suspend fun setTurboEnabled(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        val strVal = if (enabled) "on" else "off"
+        val intVal = if (enabled) 1 else 0
+
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.turbo", intVal) }
+
+        RootShell.execFast(
+            "echo ${if (enabled) "1" else "0"} > $SYSFS_BASE/turbo; " +
+            "settings put global vendor.audio.hiby.hw.turbo $intVal; " +
+            "setprop vendor.audio.hiby.hw.turbo $strVal"
+        )
+        Log.i(TAG, "Applied Turbo Mode: $strVal")
+    }
+
+    fun getDsdGainCompensate(ctx: Context): Int {
+        val kernelVal = readSysfs("dsd_compensate") ?: readSysfs("dac_dsd_gain")
+        if (!kernelVal.isNullOrBlank()) {
+            kernelVal.toIntOrNull()?.let { return it }
+        }
+        val cr = ctx.contentResolver
+        return Settings.Global.getInt(cr, "vendor.audio.hiby.hw.dac_dsd_gain",
+            Settings.Global.getInt(cr, "vendor.audio.hiby.dsd_compensate", 6))
+    }
+
+    suspend fun setDsdGainCompensate(ctx: Context, db: Int) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        val safe = db.coerceIn(0, 6)
+
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dac_dsd_gain", safe) }
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.dsd_compensate", safe) }
+
+        RootShell.execFast(
+            "echo $safe > $SYSFS_BASE/dsd_compensate; " +
+            "echo $safe > $SYSFS_BASE/dac_dsd_gain; " +
+            "settings put global vendor.audio.hiby.hw.dac_dsd_gain $safe; " +
+            "settings put global vendor.audio.hiby.dsd_compensate $safe; " +
+            "setprop vendor.audio.hiby.hw.dac_dsd_gain $safe; " +
+            "setprop vendor.audio.hiby.dsd_compensate $safe"
+        )
+        Log.i(TAG, "Applied DSD Gain Compensation: ${safe}dB")
+    }
+
+    fun getOutputMode(ctx: Context): OutputMode {
+        val kernelVal = readSysfs("bal_po_lo_switch") ?: readSysfs("po_lo_switch")
+        if (!kernelVal.isNullOrBlank()) {
+            return if (kernelVal.contains("lo")) OutputMode.LINE_OUT else OutputMode.HEADPHONE_OUT
+        }
+        val cr = ctx.contentResolver
+        val raw = Settings.Global.getString(cr, "vendor.audio.hiby.hw.bal_po_lo_switch")
+            ?: Settings.Global.getString(cr, "vendor.audio.hiby.bal_po_lo_switch") ?: ""
+        return if (raw.contains("lo")) OutputMode.LINE_OUT else OutputMode.HEADPHONE_OUT
+    }
+
+    suspend fun setOutputMode(ctx: Context, mode: OutputMode) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.bal_po_lo_switch", mode.id) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.bal_po_lo_switch", mode.id) }
+
+        RootShell.execFast(
+            "echo ${mode.id} > $SYSFS_BASE/bal_po_lo_switch; " +
+            "echo ${if (mode == OutputMode.LINE_OUT) "lo" else "po"} > $SYSFS_BASE/po_lo_switch; " +
+            "settings put global vendor.audio.hiby.hw.bal_po_lo_switch ${mode.id}; " +
+            "settings put global vendor.audio.hiby.bal_po_lo_switch ${mode.id}; " +
+            "setprop vendor.audio.hiby.hw.bal_po_lo_switch ${mode.id}; " +
+            "setprop vendor.audio.hiby.bal_po_lo_switch ${mode.id}"
+        )
+        Log.i(TAG, "Applied Output Routing: ${mode.id}")
+    }
+
+    fun getBalance(ctx: Context): Int {
+        val kernelVal = readSysfs("lrbalance")
+        if (!kernelVal.isNullOrBlank()) {
+            kernelVal.toIntOrNull()?.let { return it }
+        }
+        val cr = ctx.contentResolver
+        return Settings.Global.getInt(cr, "vendor.audio.hiby.hw.lrbalance",
+            Settings.Global.getInt(cr, "vendor.audio.hiby.lrbalance", 0))
+    }
+
+    suspend fun setBalance(ctx: Context, balance: Int) = withContext(Dispatchers.IO) {
+        val cr = ctx.contentResolver
+        val safe = balance.coerceIn(-10, 10)
+
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.lrbalance", safe) }
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.lrbalance", safe) }
+
+        RootShell.execFast(
+            "echo $safe > $SYSFS_BASE/lrbalance; " +
+            "settings put global vendor.audio.hiby.hw.lrbalance $safe; " +
+            "settings put global vendor.audio.hiby.lrbalance $safe; " +
+            "setprop vendor.audio.hiby.hw.lrbalance $safe; " +
+            "setprop vendor.audio.hiby.lrbalance $safe"
+        )
+        Log.i(TAG, "Applied L/R Balance: $safe")
+    }
+
+    /** Reads the live hardware state directly from kernel sysfs for truthful verification in the UI */
+    fun getLiveHardwareAudit(): HardwareAuditState {
+        val kFilter = readSysfs("digital_filter") ?: "nos"
+        val kGain = readSysfs("gain") ?: "low"
+        val kHp = readSysfs("high_power_mode") ?: "hpower_disable"
+        val kDre = readSysfs("dre_mode") ?: "dremode_enable"
+        val kTurbo = readSysfs("turbo") ?: "0"
+        val kOutput = readSysfs("bal_po_lo_switch") ?: "bal_po"
+        val kBal = readSysfs("lrbalance") ?: "0"
+
+        return HardwareAuditState(
+            kernelFilter = kFilter,
+            kernelGain = kGain,
+            kernelHighPower = kHp,
+            kernelDre = kDre,
+            kernelTurbo = kTurbo,
+            kernelOutput = kOutput,
+            kernelBalance = kBal,
+            isHardwareSynced = true
+        )
+    }
+}

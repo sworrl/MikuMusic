@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="MikuOS SystemUI"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.M500Hardware">
+
+        <activity
+            android:name=".MikuSystemUIActivity"
+            android:exported="true"
+            android:label="MikuOS SystemUI"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MikuShadeActivity"
+            android:exported="true"
+            android:label="Quick Settings Shade"
+            android:screenOrientation="portrait"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/Theme.M500Hardware">
+            <intent-filter>
+                <action android:name="android.intent.action.QUICK_SETTINGS" />
+                <action android:name="com.miku.systemui.action.OPEN_SHADE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name="com.android.systemui.SystemUIService"
+            android:exported="true" />
+
+        <service
+            android:name=".MikuNotificationShadeService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <service
+            android:name=".MikuShadeTileService"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher"
+            android:label="Miku Quick Settings"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".MikuNotificationListenerService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <receiver
+            android:name=".SystemUIBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

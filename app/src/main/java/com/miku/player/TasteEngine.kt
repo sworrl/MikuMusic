@@ -1,0 +1,85 @@
+package com.miku.player
+
+import android.content.Context
+
+/**
+ * Local, on-device taste/affinity scoring — the "DNA" the three like tiers (LikeStore) build up.
+ * Deliberately NOT a persisted feature store or a trained model: every score here is a cheap
+ * weighted formula computed live off three tiny boolean sets (a handful of liked tracks/albums/
+ * artists) plus data already sitting in memory (the current track/album/artist lists) — "neural
+ * smart, IO easy," per the design brief. Nothing here writes to disk; LikeStore already owns the
+ * only persisted state this needs.
+ *
+ * The idea: liking things at different tiers is correlated signal, not independent facts. Liking
+ * a Track says a little about the Album and Artist it's on. Liking an Album says a LOT about its
+ * Tracks (you didn't say you love all 12 songs individually, but you basically meant it) and a fair
+ * amount about the Artist. Liking an Artist says a little about everything they've made. None of
+ * this cascades into LikeStore's actual booleans — a liked album never flips individual track
+ * hearts (that's a deliberate, separate design choice, see LikeStore's doc comment) — but it DOES
+ * feed a continuous 0..1 "affinity" score per entity, which is what a future recommendation/
+ * highlight feature would actually rank on, instead of just the boolean "is this exact thing
+ * liked."
+ *
+ * Weights are tuned so a single explicit like at any tier is a strong signal on its own, and
+ * alignment across tiers (you liked the song AND its album AND you like the artist) saturates
+ * affinity at 1.0 well before "liked literally everything" — the whole point is that the more
+ * signals point the same direction, the more confident the score gets.
+ */
+object TasteEngine {
+    // How much liking a TRACK implies about the album/artist it belongs to.
+    private const val TRACK_TO_ALBUM = 0.35f
+    private const val TRACK_TO_ARTIST = 0.15f
+    // How much liking an ALBUM implies about its tracks/artist.
+    private const val ALBUM_TO_TRACK = 0.5f
+    private const val ALBUM_TO_ARTIST = 0.4f
+    // How much liking an ARTIST implies about their albums/tracks.
+    private const val ARTIST_TO_ALBUM = 0.25f
+    private const val ARTIST_TO_TRACK = 0.1f
+
+    /** 1.0 if explicitly liked; otherwise the implied score from its album/artist likes. */
+    fun trackAffinity(track: Track, ctx: Context? = null): Float {
+        if (LikeStore.isLiked(track.id)) return 1f
+        val albumArtist = track.albumArtist.ifBlank { track.artist }
+        var score = 0f
+        if (LikeStore.isAlbumLiked(albumArtist, track.album, ctx)) score += ALBUM_TO_TRACK
+        if (LikeStore.isArtistLiked(track.artist, ctx)) score += ARTIST_TO_TRACK
+        return score.coerceIn(0f, 1f)
+    }
+
+    /** 1.0 if explicitly liked; otherwise implied from the artist's like plus how much of the
+     *  album's own tracks are individually liked (proportional — 3 of 12 liked pulls less than
+     *  10 of 12). */
+    fun albumAffinity(album: AlbumGroup, ctx: Context? = null): Float {
+        if (LikeStore.isAlbumLiked(album.artist, album.name, ctx)) return 1f
+        var score = 0f
+        if (LikeStore.isArtistLiked(album.artist, ctx)) score += ARTIST_TO_ALBUM
+        if (album.tracks.isNotEmpty()) {
+            val likedFrac = album.tracks.count { LikeStore.isLiked(it.id) }.toFloat() / album.tracks.size
+            score += likedFrac * TRACK_TO_ALBUM
+        }
+        return score.coerceIn(0f, 1f)
+    }
+
+    /** 1.0 if explicitly liked; otherwise implied from what fraction of their tracks are liked and
+     *  whether any of their albums are liked outright. */
+    fun artistAffinity(artist: ArtistGroup, ctx: Context? = null): Float {
+        if (LikeStore.isArtistLiked(artist.name, ctx)) return 1f
+        var score = 0f
+        if (artist.tracks.isNotEmpty()) {
+            val likedFrac = artist.tracks.count { LikeStore.isLiked(it.id) }.toFloat() / artist.tracks.size
+            score += likedFrac * TRACK_TO_ARTIST
+        }
+        val albumNames = artist.tracks.map { it.album }.distinct()
+        if (albumNames.any { LikeStore.isAlbumLiked(artist.name, it, ctx) }) score += ALBUM_TO_ARTIST
+        return score.coerceIn(0f, 1f)
+    }
+
+    /** Short human label for a score — used anywhere the raw float would be meaningless to show. */
+    fun label(score: Float): String = when {
+        score >= 0.999f -> "Loved"
+        score >= 0.6f -> "Strong affinity"
+        score >= 0.3f -> "Some affinity"
+        score > 0f -> "Slight affinity"
+        else -> "No signal yet"
+    }
+}

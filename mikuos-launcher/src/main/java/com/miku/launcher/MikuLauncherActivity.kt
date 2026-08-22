@@ -1,0 +1,5564 @@
+package com.miku.launcher
+
+import com.miku.launcher.R
+import android.app.ActivityManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.SharedPreferences
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
+import android.graphics.BitmapFactory
+import android.graphics.drawable.Drawable
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.Uri
+import android.net.wifi.WifiManager
+import android.os.BatteryManager
+import android.os.Bundle
+import android.os.SystemClock
+import android.view.KeyEvent
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.foundation.shape.GenericShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.core.graphics.drawable.toBitmap
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.*
+
+data class InstalledApp(
+    val label: String,
+    val packageName: String,
+    val activityName: String,
+    val iconResId: Int?,
+    val systemIcon: Drawable?,
+    val category: String = "All",
+    val isSystemApp: Boolean = false
+)
+
+data class RecentTaskItem(
+    val taskId: Int,
+    val label: String,
+    val packageName: String,
+    val iconRes: Int?,
+    val systemIcon: Drawable?,
+    val baseIntent: Intent?
+)
+
+data class MikuWallpaperTheme(
+    val id: String,
+    val name: String,
+    val resId: Int
+)
+
+fun resolveAppDisplayLabel(pkg: String, activityName: String = "", rawLabel: String = ""): String {
+    val p = pkg.lowercase()
+    val a = activityName.lowercase()
+    val r = rawLabel.lowercase()
+    return when {
+        p == "com.android.settings" || (p.contains("settings") && !p.contains("miku")) -> "Legacy Settings"
+        p == "com.caf.fmradio" || (p.contains("radio") && !p.contains("miku")) -> "Legacy FM Radio"
+        p == "com.hiby.music" || p.contains("hibymusic") -> "Legacy HiBy Music"
+        p.contains("hibytape") || p == "com.hiby.tape" -> "Legacy Tape"
+        p == "com.miku.player" && (a.contains("settings") || r.contains("settings")) -> "Miku Settings"
+        p == "com.miku.player" && (a.contains("fmradio") || a.contains("radio") || r.contains("radio")) -> "FM Radio"
+        p == "com.miku.player" -> "Miku Music"
+        else -> rawLabel.ifBlank { "App" }
+    }
+}
+
+fun resolveCustomAppIcon(pkg: String, label: String = "", activityName: String = ""): Int? {
+    if (pkg == "com.android.settings") {
+        return R.drawable.ic_settings_miku
+    }
+    val p = (pkg + " " + label + " " + activityName).lowercase()
+    return when {
+        p.contains("magisk") || p.contains("topjohnwu") -> R.drawable.ic_magisk_sakura
+        p.contains("spotify") -> R.drawable.ic_spotify_pink_miku
+        p.contains("setting") -> R.drawable.ic_miku_settings_bespoke
+        p.contains("fmradio") || p.contains("radio") || p.contains("fm") -> R.drawable.ic_fm_miku
+        p.contains("miku.player") || p.contains("miku player") || p.contains("miku music") || (pkg == "com.miku.player") -> R.drawable.ic_miku_music_brand
+        p.contains("hiby.music") || p.contains("hibymusic") -> R.drawable.ic_hiby_music_miku
+        p.contains("roon") -> R.drawable.ic_hiby_roon_ready_miku
+        p.contains("hibyblue") -> R.drawable.ic_hibyblue_miku
+        p.contains("hibycast") -> R.drawable.ic_hibycast_miku
+        p.contains("hibysupport") -> R.drawable.ic_hibysupport_miku
+        p.contains("hibyusb") -> R.drawable.ic_hibyusb_miku
+        p.contains("gallery") || p.contains("photos") -> R.drawable.ic_gallery_miku
+        p.contains("documentsui") || p.contains("file") -> R.drawable.ic_file_miku
+        p.contains("camera") || p.contains("opencamera") -> R.drawable.ic_camera_miku
+        p.contains("clock") || p.contains("deskclock") -> R.drawable.ic_clock_miku
+        p.contains("calculator") || p.contains("calc") -> R.drawable.ic_calculator_miku
+        p.contains("firefox") || p.contains("mozilla") -> R.drawable.ic_firefox_miku
+        p.contains("chrome") -> R.drawable.ic_chrome_miku
+        p.contains("browser") -> R.drawable.ic_browser_miku
+        else -> null
+    }
+}
+
+class MikuLauncherActivity : ComponentActivity() {
+
+    companion object {
+        var requestedRecentsOpen by mutableStateOf(false)
+    }
+
+    private fun hideSystemBars() {
+        try {
+            val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            insetsController.hide(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars())
+            window.decorView.systemUiVisibility = (
+                android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+            )
+        } catch (_: Throwable) {}
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        CrashSentinel.install(this)
+        super.onCreate(savedInstanceState)
+        MikuCompositing.attach(this)   // load saved KDE-compositing per-event choices
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.addFlags(
+            android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN or
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        )
+        hideSystemBars()
+
+        if (intent?.getBooleanExtra("open_recents", false) == true) {
+            requestedRecentsOpen = true
+        }
+
+        // Asynchronously initialize background system services, ADB & network daemons without blocking UI
+        Thread {
+            try {
+                android.provider.Settings.Global.putInt(contentResolver, android.provider.Settings.Global.ADB_ENABLED, 1)
+                android.provider.Settings.Global.putInt(contentResolver, android.provider.Settings.Global.DEVELOPMENT_SETTINGS_ENABLED, 1)
+                android.provider.Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1)
+            } catch (_: Throwable) {}
+
+            // Acquire high performance WiFi Lock so Ingress and Wireless ADB never drop when USB is disconnected
+            try {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                val wifiLock = wm?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "MikuIngressLock")
+                wifiLock?.acquire()
+            } catch (_: Throwable) {}
+
+            RootShell.execFast(
+                "settings put global adb_enabled 1; " +
+                "settings put global development_settings_enabled 1; " +
+                "settings put global adb_wifi_enabled 1; " +
+                "settings put global wifi_sleep_policy 2; " +
+                "settings put global stay_on_while_plugged_in 3; " +
+                "setprop persist.adb.tcp.port 5555; " +
+                "setprop service.adb.tcp.port 5555; " +
+                "setprop persist.sys.usb.config mtp,adb; " +
+                "setprop persist.service.adb.enable 1; " +
+                "appops set com.miku.launcher SYSTEM_ALERT_WINDOW allow; " +
+                "appops set com.miku.player SYSTEM_ALERT_WINDOW allow; " +
+                "appops set com.miku.systemui SYSTEM_ALERT_WINDOW allow; " +
+                "settings put secure default_input_method com.android.inputmethod.latin/.LatinIME; " +
+                "settings put secure enabled_input_methods com.android.inputmethod.latin/.LatinIME; " +
+                "stop adbd 2>/dev/null; start adbd 2>/dev/null"
+            )
+
+            // Initialize Real-Time Network Telemetry & Auto-Rejoin Daemon (Protected)
+            try {
+                com.miku.launcher.network.MikuNetworkService.startMonitoring(applicationContext)
+            } catch (t: Throwable) {
+                android.util.Log.e("MikuLauncher", "Network service start failed", t)
+            }
+
+            // Initialize Real-Time GPS & Open-Meteo Weather Engine (Protected)
+            try {
+                com.miku.launcher.weather.MikuWeatherService.start(applicationContext)
+            } catch (t: Throwable) {
+                android.util.Log.e("MikuLauncher", "Weather service start failed", t)
+            }
+
+            // Initialize OS-Wide Gesture Navigation Overlay (Protected)
+            try {
+                com.miku.launcher.gesture.MikuSystemGestureService.start(applicationContext)
+            } catch (t: Throwable) {
+                android.util.Log.e("MikuLauncher", "Gesture service start failed", t)
+            }
+
+            // Initialize OS-Level Real-Time BPM Engine & Pulsar Light Link
+            try {
+                com.miku.launcher.bpm.MikuBpmEngine.startListening(applicationContext)
+                com.miku.launcher.PulsarLight.startBpmSync(applicationContext)
+            } catch (t: Throwable) {
+                android.util.Log.e("MikuLauncher", "BPM Pulsar engine start failed", t)
+            }
+
+            // Play MikuOS Welcome Jingle (once per boot, gate-controlled by user toggle)
+            try {
+                com.miku.launcher.audio.MikuBootWelcomeService.maybePlay(applicationContext)
+            } catch (_: Throwable) {}
+
+            // Initialize OS-Level Audio Track Library Telemetry Engine
+            try {
+                com.miku.launcher.track.MikuLibraryEngine.init(applicationContext)
+            } catch (t: Throwable) {
+                android.util.Log.e("MikuLauncher", "Library engine start failed", t)
+            }
+
+            // Auto-provision Google Fi / T-Mobile APNs for 4G LTE Auto-Connect
+            try {
+                com.miku.launcher.network.GoogleFiApnManager.autoProvisionIfGoogleFi(applicationContext)
+            } catch (_: Throwable) {}
+
+            // Start System-Level USB Audio & Host Controller Service
+            try {
+                com.miku.launcher.usb.MikuUsbAudioHostService.start(applicationContext)
+            } catch (_: Throwable) {}
+
+            // Install the OS-level Miku lockscreen power-button/screen state machine.
+            try {
+                com.miku.launcher.lockscreen.MikuLockscreenManager.install(applicationContext)
+            } catch (_: Throwable) {}
+        }.start()
+
+        setContent {
+            MikuLauncherScreen()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        hideSystemBars()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        onBackPressedDispatcher.onBackPressed()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemBars()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        hideSystemBars()
+        if (intent.getBooleanExtra("open_recents", false)) {
+            requestedRecentsOpen = true
+        }
+    }
+}
+
+@Composable
+fun MikuLauncherScreen() {
+    val ctx = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    val prefs: SharedPreferences = remember {
+        ctx.getSharedPreferences("miku_launcher_prefs", Context.MODE_PRIVATE)
+    }
+
+    var isAllAppsOpen by remember { mutableStateOf(false) }
+    var isRecentsOpen by remember { mutableStateOf(false) }
+    var isWallpaperPickerOpen by remember { mutableStateOf(false) }
+    var isMonitorModalOpen by remember { mutableStateOf(false) }
+    var isBrainModalOpen by remember { mutableStateOf(false) }
+    var isCyberQuickSettingsOpen by remember { mutableStateOf(false) }
+    var isWeatherObservatoryOpen by remember { mutableStateOf(false) }
+    var isGpsModalOpen by remember { mutableStateOf(false) }
+    var isBatteryObservatoryOpen by remember { mutableStateOf(false) }
+    var isNetworkObservatoryOpen by remember { mutableStateOf(false) }
+    var isDesktopContextMenuOpen by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    var selectedCategory by remember { mutableStateOf("All") }
+    var chibiReaction by remember { mutableStateOf("🎵") }
+    var allApps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
+    var recentTasks by remember { mutableStateOf<List<RecentTaskItem>>(emptyList()) }
+
+    LaunchedEffect(MikuLauncherActivity.requestedRecentsOpen) {
+        if (MikuLauncherActivity.requestedRecentsOpen) {
+            recentTasks = loadRecentTasks(ctx, allApps)
+            isRecentsOpen = true
+            MikuLauncherActivity.requestedRecentsOpen = false
+        }
+    }
+
+    // Intercept Back Press unconditionally so system status bar is NEVER un-hidden or exposed by Android OS
+    BackHandler(enabled = true) {
+        if (isDesktopContextMenuOpen) isDesktopContextMenuOpen = false
+        else if (isWeatherObservatoryOpen) isWeatherObservatoryOpen = false
+        else if (isGpsModalOpen) isGpsModalOpen = false
+        else if (isBatteryObservatoryOpen) isBatteryObservatoryOpen = false
+        else if (isNetworkObservatoryOpen) isNetworkObservatoryOpen = false
+        else if (isCyberQuickSettingsOpen) isCyberQuickSettingsOpen = false
+        else if (isBrainModalOpen) isBrainModalOpen = false
+        else if (isMonitorModalOpen) isMonitorModalOpen = false
+        else if (isAllAppsOpen) isAllAppsOpen = false
+        else if (isRecentsOpen) isRecentsOpen = false
+        else if (isWallpaperPickerOpen) isWallpaperPickerOpen = false
+        else {
+            // Bare launcher root: absorb back gesture completely
+        }
+    }
+
+    // MikuOS theming engine: restore the persisted theme once, and expose the
+    // built-in themes (Default/Halloween/Beach/Cyber Stage/Cozy Cafe) at the TOP
+    // of the wallpaper picker so the theme engine is visible + selectable. Each
+    // theme resolves its wallpaper drawable by name at runtime (falls back to the
+    // default beach art when a theme's dedicated art isn't wired in yet).
+    remember { com.miku.launcher.theme.MikuThemeRegistry.init(ctx); true }
+    val wallpapers = remember {
+        com.miku.launcher.theme.MikuThemeRegistry.builtIns.map { t ->
+            val res = com.miku.launcher.theme.MikuThemeRegistry.resolveDrawableRes(ctx, t.wallpaperDrawableName)
+            MikuWallpaperTheme(
+                "theme_${t.id}",
+                (if (t.hasRealArt) "✦ " else "◇ ") + t.displayName,
+                if (res != 0) res else R.drawable.miku_wallpaper
+            )
+        } + listOf(
+            MikuWallpaperTheme("classic", "Concert Stage (Default)", R.drawable.miku_wallpaper),
+            MikuWallpaperTheme("w0", "Cyan Glow Neon", R.drawable.wall_paper_0),
+            MikuWallpaperTheme("w1", "Electronic Diva", R.drawable.wall_paper_1),
+            MikuWallpaperTheme("w2", "Matrix Circuit", R.drawable.wall_paper_2),
+            MikuWallpaperTheme("w3", "Tokyo Night Shibuya", R.drawable.wall_paper_3),
+            MikuWallpaperTheme("w4", "Chibi Meadow", R.drawable.wall_paper_4),
+            MikuWallpaperTheme("w5", "Pastel Sky", R.drawable.wall_paper_5),
+            MikuWallpaperTheme("w6", "Neon Wave", R.drawable.wall_paper_6),
+            MikuWallpaperTheme("w7", "Cyber Space Hologram", R.drawable.wall_paper_7),
+            MikuWallpaperTheme("w8", "Classic Retro Stage", R.drawable.wall_paper_8),
+            MikuWallpaperTheme("w9", "Chibi Heart Jam", R.drawable.wall_paper_9)
+        )
+    }
+
+    var currentWallpaperId by remember {
+        mutableStateOf(prefs.getString("current_wallpaper_id", "classic") ?: "classic")
+    }
+
+    val currentWallpaperRes = remember(currentWallpaperId) {
+        wallpapers.firstOrNull { it.id == currentWallpaperId }?.resId ?: R.drawable.miku_wallpaper
+    }
+
+    var isOnboardingOpen by remember {
+        mutableStateOf(!prefs.getBoolean("miku_onboarding_completed", false))
+    }
+
+    var isBpmObservatoryOpen by remember { mutableStateOf(false) }
+    var isThermalObservatoryOpen by remember { mutableStateOf(false) }
+
+    var customWallpaperUri by remember {
+        mutableStateOf(prefs.getString("custom_wallpaper_uri", null))
+    }
+
+    val galleryPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            try {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Throwable) {}
+            customWallpaperUri = uri.toString()
+            prefs.edit().putString("custom_wallpaper_uri", uri.toString()).apply()
+        }
+    }
+
+    val customWallpaperBitmap = remember(customWallpaperUri) {
+        if (customWallpaperUri != null) {
+            try {
+                val uri = Uri.parse(customWallpaperUri)
+                val stream = ctx.contentResolver.openInputStream(uri)
+                val bmp = BitmapFactory.decodeStream(stream)
+                stream?.close()
+                bmp?.asImageBitmap()
+            } catch (_: Throwable) {
+                null
+            }
+        } else null
+    }
+
+    var batteryPct by remember { mutableIntStateOf(100) }
+    var isCharging by remember { mutableStateOf(false) }
+    var isWifiConnected by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            try {
+                val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+                val bIntent = ctx.registerReceiver(null, ifilter)
+                val level = bIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                val scale = bIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+                val bStatus = bIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                isCharging = bStatus == BatteryManager.BATTERY_STATUS_CHARGING || bStatus == BatteryManager.BATTERY_STATUS_FULL
+                batteryPct = if (level >= 0 && scale > 0) (level * 100) / scale else 100
+
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                val net = cm?.activeNetwork
+                val caps = cm?.getNetworkCapabilities(net)
+                isWifiConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+            } catch (_: Throwable) {}
+            delay(2500L)
+        }
+    }
+
+    // App Context Dialog State (Long-press on any app)
+    var contextMenuApp by remember { mutableStateOf<InstalledApp?>(null) }
+
+    // Desktop Pinned Favorites Persistence (Miku Music lives on the Diva Dock).
+    // Default desktop starts EMPTY — no pre-pinned apps (avoids phantom slots for
+    // apps that aren't installed). The bottom Diva Dock keeps its icons; the center
+    // Miku Music hero is fixed/permanent. Users can pin apps themselves later.
+    val defaultDesktopFavs = emptySet<String>()
+    var pinnedPackages by remember {
+        mutableStateOf(
+            prefs.getStringSet("miku_desktop_pinned", defaultDesktopFavs)?.toSet() ?: defaultDesktopFavs
+        )
+    }
+    val onTogglePinDesktop = { pkg: String ->
+        val updated = pinnedPackages.toMutableSet()
+        if (updated.contains(pkg)) {
+            updated.remove(pkg)
+        } else {
+            updated.add(pkg)
+        }
+        prefs.edit().putStringSet("miku_desktop_pinned", updated).apply()
+        pinnedPackages = updated
+    }
+
+    // Interactive Pixel Gesture Nav Pill Dragging State
+    var navPillDragY by remember { mutableFloatStateOf(0f) }
+    var isNavPillDragging by remember { mutableStateOf(false) }
+
+    // System-Wide USB Host Connected Modal State
+    var showUsbHostModal by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        com.miku.launcher.usb.MikuUsbAudioHostService.usbConnectedEvents.collect {
+            showUsbHostModal = it
+        }
+    }
+
+    // Horizontal Pager: Page 0 = Main Desktop, Page 1 = Hardware & DAC Telemetry Widgets (Only created when needed)
+    val hasExtraPage = remember(pinnedPackages.size) {
+        pinnedPackages.size > 12 || prefs.getBoolean("enable_widget_page", false)
+    }
+    val pagerState = rememberPagerState(pageCount = { if (hasExtraPage) 2 else 1 })
+
+    // Live Clock & Date
+    var currentTime by remember { mutableStateOf("") }
+    var currentDate by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
+        val dateFormat = SimpleDateFormat("MM/dd/yyyy", Locale.US)
+        while (true) {
+            val now = Date()
+            currentTime = timeFormat.format(now)
+            currentDate = dateFormat.format(now)
+            delay(1000L)
+        }
+    }
+
+    // Query and map all installed apps to official Miku icons (Comprehensive Discovery)
+    val loadAllApps = {
+        val pm = ctx.packageManager
+        val seenPackages = mutableSetOf<String>()
+        val list = mutableListOf<InstalledApp>()
+        val essentialPackages = setOf(
+            "net.sourceforge.opencamera",
+            "com.android.camera2",
+            "com.android.camera",
+            "com.android.gallery3d",
+            "com.google.android.apps.photos",
+            "com.android.documentsui",
+            "com.android.settings",
+            "com.miku.player",
+            "com.spotify.music",
+            "org.mozilla.firefox",
+            "com.android.chrome",
+            "com.plexapp.android",
+            "com.topjohnwu.magisk",
+            "org.fossify.clock",
+            "org.fossify.calendar",
+            "org.fossify.math"
+        )
+
+        val blacklistedPackages = setOf(
+            "com.android.settings",
+            "com.android.gallery3d",
+            "com.android.musicfx",
+            "com.hiby.update",
+            "com.android.fallback",
+            "com.miku.systemui"
+        )
+
+        // 1. Query standard launcher apps
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val launcherInfos = pm.queryIntentActivities(mainIntent, 0)
+        for (info in launcherInfos) {
+            val pkg = info.activityInfo.packageName
+            val activityName = info.activityInfo.name
+            if (pkg == ctx.packageName && activityName == MikuLauncherActivity::class.java.name) continue
+            if (blacklistedPackages.contains(pkg)) continue
+            val rawLabel = info.loadLabel(pm).toString()
+            val label = resolveAppDisplayLabel(pkg, activityName, rawLabel)
+            val systemIcon = try { info.loadIcon(pm) } catch (_: Throwable) { null }
+            val category = resolveAppCategory(pkg, label)
+            val isSys = try {
+                val ai = pm.getApplicationInfo(pkg, 0)
+                (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 && !essentialPackages.contains(pkg)
+            } catch (_: Throwable) { false }
+
+            seenPackages.add(pkg)
+            list.add(
+                InstalledApp(
+                    label = label,
+                    packageName = pkg,
+                    activityName = activityName,
+                    iconResId = resolveCustomAppIcon(pkg, label, activityName),
+                    systemIcon = systemIcon,
+                    category = category,
+                    isSystemApp = isSys
+                )
+            )
+        }
+
+        // 2. Query Leanback launcher apps (TV/DAP interfaces)
+        val leanbackIntent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+        }
+        val leanbackInfos = pm.queryIntentActivities(leanbackIntent, 0)
+        for (info in leanbackInfos) {
+            val pkg = info.activityInfo.packageName
+            if (seenPackages.contains(pkg)) continue
+            if (blacklistedPackages.contains(pkg)) continue
+            val activityName = info.activityInfo.name
+            val rawLabel = info.loadLabel(pm).toString()
+            val label = resolveAppDisplayLabel(pkg, activityName, rawLabel)
+            val systemIcon = try { info.loadIcon(pm) } catch (_: Throwable) { null }
+            val category = resolveAppCategory(pkg, label)
+            val isSys = try {
+                val ai = pm.getApplicationInfo(pkg, 0)
+                (ai.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 && !essentialPackages.contains(pkg)
+            } catch (_: Throwable) { false }
+
+            seenPackages.add(pkg)
+            list.add(
+                InstalledApp(
+                    label = label,
+                    packageName = pkg,
+                    activityName = activityName,
+                    iconResId = resolveCustomAppIcon(pkg, label, activityName),
+                    systemIcon = systemIcon,
+                    category = category,
+                    isSystemApp = isSys
+                )
+            )
+        }
+
+        // 3. Scan all installed packages with launch intents
+        val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+        for (appInfo in installedApps) {
+            val pkg = appInfo.packageName
+            if (seenPackages.contains(pkg)) continue
+            if (pkg == ctx.packageName) continue
+            if (blacklistedPackages.contains(pkg)) continue
+            val launchIntent = pm.getLaunchIntentForPackage(pkg) ?: continue
+            val rawLabel = pm.getApplicationLabel(appInfo).toString()
+            val activityName = launchIntent.component?.className ?: ""
+            val label = resolveAppDisplayLabel(pkg, activityName, rawLabel)
+            val systemIcon = try { appInfo.loadIcon(pm) } catch (_: Throwable) { null }
+            val category = resolveAppCategory(pkg, label)
+            val isSys = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0 && !essentialPackages.contains(pkg)
+
+            seenPackages.add(pkg)
+            list.add(
+                InstalledApp(
+                    label = label,
+                    packageName = pkg,
+                    activityName = activityName,
+                    iconResId = resolveCustomAppIcon(pkg, label, activityName),
+                    systemIcon = systemIcon,
+                    category = category,
+                    isSystemApp = isSys
+                )
+            )
+        }
+
+        // 4. Ensure Miku Suite is explicitly registered
+        val mikuSuite = listOf(
+            InstalledApp(
+                label = "Miku Music",
+                packageName = "com.miku.player",
+                activityName = "com.miku.player.MainActivity",
+                iconResId = R.drawable.ic_miku_music_brand,
+                systemIcon = null,
+                category = "Media",
+                isSystemApp = false
+            ),
+            InstalledApp(
+                label = "Miku Settings",
+                packageName = "com.miku.settings",
+                activityName = "com.miku.settings.MikuSettingsActivity",
+                iconResId = R.drawable.ic_settings_miku,
+                systemIcon = null,
+                category = "System",
+                isSystemApp = false
+            )
+        )
+        for (app in mikuSuite) {
+            if (list.none { it.packageName == app.packageName }) {
+                list.add(app)
+            }
+        }
+
+        allApps = list.sortedBy { it.label.lowercase() }
+    }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            try {
+                loadAllApps()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    LaunchedEffect(isAllAppsOpen) {
+        if (isAllAppsOpen) {
+            withContext(Dispatchers.IO) {
+                try {
+                    loadAllApps()
+                } catch (_: Throwable) {}
+            }
+        }
+    }
+
+    // Dynamic CPU & Battery Thermal Telemetry Poller
+    var cpuTempC by remember { mutableStateOf(34.0f) }
+    var batteryTempC by remember { mutableStateOf(30.0f) }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            withContext(Dispatchers.IO) {
+                var cTemp = 0f
+                val thermalPaths = listOf(
+                    "/sys/class/thermal/thermal_zone0/temp",
+                    "/sys/class/thermal/thermal_zone1/temp",
+                    "/sys/devices/virtual/thermal/thermal_zone0/temp"
+                )
+                for (p in thermalPaths) {
+                    try {
+                        val file = java.io.File(p)
+                        if (file.exists() && file.canRead()) {
+                            val raw = file.readText().trim().toFloatOrNull() ?: 0f
+                            val deg = if (raw > 1000f) raw / 1000f else raw
+                            if (deg in 15f..115f) {
+                                cTemp = deg
+                                break
+                            }
+                        }
+                    } catch (_: Throwable) {}
+                }
+
+                var bTemp = 0f
+                try {
+                    val bIntent = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                    val rawB = bIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
+                    if (rawB > 0) {
+                        bTemp = rawB / 10f
+                    }
+                } catch (_: Throwable) {}
+
+                if (cTemp == 0f) cTemp = if (bTemp > 0f) bTemp + 4.5f else 36.5f
+                if (bTemp == 0f) bTemp = cTemp - 4.0f
+
+                cpuTempC = cTemp
+                batteryTempC = bTemp
+            }
+            delay(4000L)
+        }
+    }
+
+    // Now Playing Telemetry from PlayerHolder & MikuBpmEngine
+    val snapshot = remember { mutableStateOf(PlayerHolder.snapshot()) }
+    var isSystemMusicActive by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            snapshot.value = PlayerHolder.snapshot()
+            val npBpmPlaying = com.miku.launcher.bpm.MikuBpmEngine.state.value.isPlaying
+            val globalPlaying = try { android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_is_playing", 0) == 1 } catch (_: Throwable) { false }
+            val playerHolderPlaying = snapshot.value?.isPlaying == true
+            isSystemMusicActive = playerHolderPlaying || npBpmPlaying || globalPlaying
+            delay(600L)
+        }
+    }
+    val isAudioPlaying = isSystemMusicActive
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(CyberDarkBg)
+    ) {
+        // High-Resolution Official Desktop Wallpaper (Custom Gallery or Miku Artwork)
+        if (customWallpaperBitmap != null) {
+            Image(
+                bitmap = customWallpaperBitmap,
+                contentDescription = "Custom Desktop Wallpaper",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Image(
+                painter = painterResource(id = currentWallpaperRes),
+                contentDescription = "Miku Desktop Wallpaper",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
+
+        // Cyber Vignette Overlay
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0x66040D12),
+                            Color(0x22000000),
+                            Color(0xCC040D12)
+                        )
+                    )
+                )
+        )
+
+        val desktopScale by animateFloatAsState(
+            targetValue = if (isNavPillDragging && navPillDragY < 0f) (1.0f + (navPillDragY / 1400f)).coerceIn(0.84f, 1.0f) else 1.0f,
+            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            label = "DesktopScale"
+        )
+        val desktopTranslationY by animateFloatAsState(
+            targetValue = if (isNavPillDragging && navPillDragY < 0f) (navPillDragY * 0.40f).coerceIn(-140f, 0f) else 0f,
+            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            label = "DesktopTransY"
+        )
+
+        var rootDragY by remember { mutableFloatStateOf(0f) }
+        Column(
+            Modifier
+                .fillMaxSize()
+                .navigationBarsPadding()
+                .padding(top = 4.dp)
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onVerticalDrag = { change, dragAmount ->
+                            if (dragAmount > 10f) {
+                                isCyberQuickSettingsOpen = true
+                                change.consume()
+                            } else if (dragAmount < -12f) {
+                                isAllAppsOpen = true
+                                change.consume()
+                            }
+                        }
+                    )
+                }
+                .graphicsLayer {
+                    scaleX = desktopScale
+                    scaleY = desktopScale
+                    translationY = desktopTranslationY
+                }
+        ) {
+            // ============================================================
+            // TOP STATUS & CLOCK HUD (FLUSH TO TOP, 3D EMBOSSED SYSTEM)
+            // ============================================================
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 2.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onVerticalDrag = { change, dragAmount ->
+                                if (dragAmount > 8f) {
+                                    isCyberQuickSettingsOpen = true
+                                    change.consume()
+                                }
+                            }
+                        )
+                    }
+            ) {
+                val networkState by com.miku.launcher.network.MikuNetworkService.state.collectAsState()
+                val wifi = networkState.wifi
+                val cell = networkState.cellular
+
+                // Tier 1: Hardware & RF Granular Status Row (Flush with top bezel)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Left: Live Dual RF Capsule (Wi-Fi & LTE)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Connected Dual-RF Network Capsule (Wi-Fi & LTE Dual Pod)
+                        ConnectedRfNetworkCapsule(
+                            wifi = wifi,
+                            cell = cell,
+                            onClick = { isNetworkObservatoryOpen = true }
+                        )
+                    }
+
+                    // Right: Badges (CS43198 DAC, Library, BPM, Brain, Thermal, Volume, Battery),
+                    // sewn into the "quilt" — one stitched patch so the far-right battery never
+                    // wraps off the visible header. Bounded to the remaining width and wrapped
+                    // (never scrolls sideways); overflow flows onto a second line INSIDE the patch,
+                    // right-aligned, like a status bar. Same quilt treatment as the lockscreen.
+                    FlowRow(
+                        modifier = Modifier.weight(1f).padding(start = 6.dp).quiltPatch(),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp, Alignment.End),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        // Combined Now-Playing + BPM badge with a live BPM-driven
+                        // equalizer. Always shown (idle → "BPM"; playing → live EQ).
+                        val npBpm by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
+                        MikuNowPlayingBadge(
+                            bpm = npBpm.bpm,
+                            isPlaying = isAudioPlaying || npBpm.isPlaying,
+                            beatIntervalMs = npBpm.beatIntervalMs,
+                            onClick = { isBpmObservatoryOpen = true }
+                        )
+
+                        // CS43198 MasterHIFI DAC Badge (Dac Silicon Chip Shape)
+                        CyberBespokeBadge(
+                            onClick = {
+                                try {
+                                    val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                                    }
+                                    if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
+                                } catch (_: Throwable) {}
+                            },
+                            accentColor = Color(0xFF7C4DFF),
+                            gradient = listOf(Color(0x447C4DFF), Color(0xFF0A0418)),
+                            shape = DacChipShape
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(4.5.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF7C4DFF))
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                "CS43198",
+                                color = Color(0xFFB388FF),
+                                fontSize = 7.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = AudiowideFont
+                            )
+                        }
+
+                        // Real-Time System Audio Library Track Counter Badge
+                        com.miku.launcher.track.MikuLibraryTrackBadge(
+                            onClick = {
+                                try {
+                                    val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.player")?.apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    if (intent != null) {
+                                        // KDE compositing: each app-open cycles a varied effect
+                                        // (zoom -> dissolve -> glide -> burn -> whirl) so we can
+                                        // flash it and see which read best on-device.
+                                        ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
+                                    }
+                                } catch (_: Throwable) {}
+                            }
+                        )
+
+                        // (BPM badge merged into the combined Now-Playing badge above.)
+
+                        // Brain Watchdog Badge (Bio-Shield Hex Shape)
+                        CyberBespokeBadge(
+                            onClick = { isBrainModalOpen = true },
+                            accentColor = Color(0xFF00FF7F),
+                            gradient = listOf(Color(0x3300FF7F), Color(0xFF04150E)),
+                            shape = BrainShieldShape
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(4.5.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF00FF7F))
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                "BRAIN",
+                                color = Color(0xFF00FF7F),
+                                fontSize = 7.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = AudiowideFont
+                            )
+                        }
+
+                        // Live CPU / Battery Thermal Telemetry Badge
+                        MikuThermalBadge(
+                            cpuTempC = cpuTempC,
+                            batteryTempC = batteryTempC,
+                            onClick = { isThermalObservatoryOpen = true }
+                        )
+
+                        // In-Theme Cyber Volume Badge (Just to the left of the battery)
+                        com.miku.launcher.volume.CyberVolumeBadge(
+                            onClick = { com.miku.launcher.volume.MikuVolumeManager.triggerHud(ctx) }
+                        )
+
+                        // Dynamically Colored Quantum Power Core Battery Badge (Far Right)
+                        MikuQuantumBatteryBadge(
+                            batteryPct = batteryPct,
+                            isCharging = isCharging,
+                            onClick = { isBatteryObservatoryOpen = true }
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(3.dp))
+
+                val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
+                val gps = weatherState.gps
+                val weather = weatherState.weather
+
+                // Tier 2: Ephemeral Plasma Glow Clock + Artsy Cyber Weather/GPS Badge
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 1. Clock (Left): Stable compact bounds. Tapping opens the system clock app.
+                    Box(
+                        Modifier
+                            .width(135.dp)
+                            .clickable(
+                                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                                indication = null
+                            ) { launchClockApp(ctx) }
+                    ) {
+                        CyberPlasmaGlowClock(
+                            time = currentTime,
+                            date = currentDate
+                        )
+                    }
+
+                    // 2. Data-Rich Weather & GPS Badge with Dynamic Live Weather Art BG (Center)
+                    MikuCyberWeatherGpsBadge(
+                        weather = weather,
+                        gps = gps,
+                        onWeatherClick = { isWeatherObservatoryOpen = true },
+                        onGpsClick = { isGpsModalOpen = true },
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 3.dp)
+                    )
+
+                    // 3. Cyber Quick Settings HUD Badge (Right)
+                    Box(
+                        Modifier
+                            .width(88.dp)
+                            .offset(y = (-2).dp)
+                    ) {
+                        CyberBespokeBadge(
+                            onClick = { isCyberQuickSettingsOpen = true },
+                            accentColor = MikuCyan,
+                            gradient = listOf(Color(0x3300E5FF), Color(0xFF041015)),
+                            shape = IngressStreamShape
+                        ) {
+                            Icon(
+                                Icons.Default.Tune,
+                                contentDescription = "Quick Settings",
+                                tint = MikuCyan,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Column(
+                                horizontalAlignment = Alignment.End,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    "MIKU OS",
+                                    color = MikuCyan,
+                                    fontSize = 7.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = AudiowideFont,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    "CONTROL",
+                                    color = Color.White,
+                                    fontSize = 6.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Active Severe Weather Warning Banner (if active)
+                if (weather.severeWarning != null) {
+                    Spacer(Modifier.height(3.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 3.dp)
+                            .clip(CutCornerShape(8.dp))
+                            .background(Brush.horizontalGradient(listOf(Color(0xFFFF1744), Color(0xFFB71C1C))))
+                            .border(1.dp, Color(0xFFFF5252), CutCornerShape(8.dp))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            text = weather.severeWarning ?: "",
+                            color = Color.White,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            // ============================================================
+            // PAGINATED DESKTOP WORKSPACE
+            // ============================================================
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onVerticalDrag = { change, dragAmount ->
+                                if (dragAmount > 10f) {
+                                    isCyberQuickSettingsOpen = true
+                                    change.consume()
+                                } else if (dragAmount < -12f) {
+                                    isAllAppsOpen = true
+                                    change.consume()
+                                }
+                            }
+                        )
+                    }
+            ) { page ->
+                when (page) {
+                    0 -> MainDesktopPage(
+                        apps = allApps,
+                        pinnedPackages = pinnedPackages,
+                        snapshot = snapshot.value,
+                        chibiReaction = chibiReaction,
+                        onChibiTap = {
+                            val reactions = listOf("🎵", "💙", "⚡", "✨", "🎤", "🎧", "🌸", "⭐")
+                            chibiReaction = reactions.random()
+                        },
+                        onLaunchApp = { launchApp(ctx, it) },
+                        onAppLongClick = { contextMenuApp = it },
+                        onOpenWallpapers = { isDesktopContextMenuOpen = true },
+                        onSwipeUp = { isAllAppsOpen = true },
+                        onSwipeDown = { isCyberQuickSettingsOpen = true }
+                    )
+                    1 -> HardwareWidgetsPage(
+                        onOpenAudioSettings = {
+                            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            if (intent != null) ctx.startActivity(intent)
+                        },
+                        onOpenPulsarSettings = {
+                            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            if (intent != null) ctx.startActivity(intent)
+                        },
+                        onOpenFnSettings = {
+                            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            if (intent != null) ctx.startActivity(intent)
+                        },
+                        onOpenMonitor = { }
+                    )
+                }
+            }
+
+
+
+            // ============================================================
+            // BOTTOM 3D EMBOSSED DIVA DOCK TRAY
+            // Features spinning rainbow sweep gradient ring, BPM aura pulse,
+            // bottom-aligned bold centerpiece text, and horizontal swipe quick app switching
+            // ============================================================
+            val bpmState by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
+            val isBpmAudioPlaying = isAudioPlaying || bpmState.isPlaying
+            val liveBpm = if (bpmState.bpm in 40f..260f) bpmState.bpm else 128f
+            val beatIntervalMs = (60_000f / liveBpm).toInt().coerceIn(240, 1500)
+
+            val dockInfiniteTransition = rememberInfiniteTransition(label = "DivaDockAura")
+            val rainbowRotation by dockInfiniteTransition.animateFloat(
+                initialValue = 0f,
+                targetValue = 360f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(durationMillis = if (isBpmAudioPlaying) 6000 else 16000, easing = LinearEasing),
+                    repeatMode = RepeatMode.Restart
+                ),
+                label = "DockRainbowRotate"
+            )
+
+            val dockPulseScale by dockInfiniteTransition.animateFloat(
+                initialValue = if (isBpmAudioPlaying) 0.95f else 0.98f,
+                targetValue = if (isBpmAudioPlaying) 1.10f else 1.02f,
+                animationSpec = infiniteRepeatable(
+                    animation = tween(if (isBpmAudioPlaying) (beatIntervalMs / 2) else 3200, easing = FastOutSlowInEasing),
+                    repeatMode = RepeatMode.Reverse
+                ),
+                label = "DockBpmPulse"
+            )
+
+            val rainbowStops = remember {
+                listOf(
+                    Color(0xFF00E5FF), // Cyan
+                    Color(0xFF00FF88), // Mint
+                    Color(0xFFFFD600), // Gold
+                    Color(0xFFFF4081), // Pink
+                    Color(0xFFB388FF), // Purple
+                    Color(0xFF00E5FF)  // Cyan
+                )
+            }
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 0.dp)
+                    .pointerInput(Unit) {
+                        var totalDragX = 0f
+                        var totalDragY = 0f
+                        detectDragGestures(
+                            onDragStart = {
+                                totalDragX = 0f
+                                totalDragY = 0f
+                            },
+                            onDrag = { change, dragAmount ->
+                                change.consume()
+                                totalDragX += dragAmount.x
+                                totalDragY += dragAmount.y
+                            },
+                            onDragEnd = {
+                                val density = ctx.resources.displayMetrics.density
+                                val thresholdPx = 28 * density
+                                if (kotlin.math.abs(totalDragX) > kotlin.math.abs(totalDragY)) {
+                                    if (totalDragX > thresholdPx) {
+                                        // Swipe Right: Quick-switch to previous app
+                                        val recents = loadRecentTasks(ctx, allApps)
+                                        if (recents.isNotEmpty()) {
+                                            bringTaskToFront(ctx, recents.first())
+                                        }
+                                    } else if (totalDragX < -thresholdPx) {
+                                        // Swipe Left: Quick-switch to next app
+                                        val recents = loadRecentTasks(ctx, allApps)
+                                        if (recents.size > 1) {
+                                            bringTaskToFront(ctx, recents[1])
+                                        } else if (recents.isNotEmpty()) {
+                                            bringTaskToFront(ctx, recents[0])
+                                        }
+                                    }
+                                } else {
+                                    if (totalDragY < -thresholdPx) {
+                                        isAllAppsOpen = true
+                                    }
+                                }
+                            }
+                        )
+                    }
+            ) {
+                // Glass tray body
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .clip(RoundedCornerShape(21.dp))
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xEE0D2630),
+                                    Color(0xFF06141B)
+                                )
+                            )
+                        )
+                        .border(
+                            BorderStroke(
+                                1.dp,
+                                Brush.verticalGradient(
+                                    listOf(
+                                        CyberGlassBorder.copy(alpha = 0.9f),
+                                        CyberGlassBorder.copy(alpha = 0.25f),
+                                        CyberGlassBorder.copy(alpha = 0.65f)
+                                    )
+                                )
+                            ),
+                            RoundedCornerShape(21.dp)
+                        )
+                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        // Pinned Browser
+                        DockIconItem(
+                            iconRes = R.drawable.ic_browser_miku,
+                            label = "Browser",
+                            onClick = {
+                                val browserApp = allApps.firstOrNull { it.packageName.contains("chrome") || it.packageName.contains("firefox") || it.packageName.contains("browser") }
+                                if (browserApp != null) launchApp(ctx, browserApp)
+                            }
+                        )
+
+                        // Pinned FM Radio
+                        DockIconItem(
+                            iconRes = R.drawable.ic_fm_miku,
+                            label = "FM Radio",
+                            onClick = {
+                                // Launch FM by EXPLICIT component. getLaunchIntentForPackage("com.miku.player")
+                                // resolves to MainActivity = Miku Music (the "FM icon opens Miku Music" bug),
+                                // so target our FM activity directly, then fall back to the stock CAF FM app —
+                                // never the music package.
+                                var launched = false
+                                try {
+                                    ctx.startActivity(Intent(Intent.ACTION_MAIN).apply {
+                                        component = ComponentName("com.miku.player", "com.miku.player.radio.MikuFMRadioActivity")
+                                        addCategory(Intent.CATEGORY_LAUNCHER)
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    })
+                                    launched = true
+                                } catch (_: Throwable) {}
+                                if (!launched) {
+                                    val caf = ctx.packageManager.getLaunchIntentForPackage("com.caf.fmradio")
+                                        ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                    if (caf != null) try { ctx.startActivity(caf); launched = true } catch (_: Throwable) {}
+                                }
+                                if (!launched) {
+                                    try {
+                                        ctx.startActivity(Intent("com.caf.fmradio.FMRADIO_ACTIVITY")
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                    } catch (_: Throwable) {}
+                                }
+                            }
+                        )
+
+                        // Center Spacer for Raised Hero Centerpiece
+                        Spacer(Modifier.width(72.dp))
+
+                        // Pinned Settings
+                        DockIconItem(
+                            iconRes = R.drawable.ic_settings_miku,
+                            label = "Settings",
+                            onClick = {
+                                val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                if (intent != null) ctx.startActivity(intent)
+                            }
+                        )
+
+                        // Pinned Files
+                        DockIconItem(
+                            iconRes = R.drawable.ic_file_miku,
+                            label = "Files",
+                            onClick = {
+                                val fileApp = allApps.firstOrNull { it.packageName.contains("file", ignoreCase = true) || it.packageName.contains("documentsui", ignoreCase = true) }
+                                if (fileApp != null) launchApp(ctx, fileApp)
+                            }
+                        )
+                    }
+                }
+
+                // RAISED HERO CENTERPIECE: MIKU MUSIC APP (Meeting Rainbow Rotating Border & Live BPM Glow)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 4.dp)
+                        .clickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            try {
+                                val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.player")?.apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                if (intent != null) {
+                                    val options = android.app.ActivityOptions.makeCustomAnimation(
+                                        ctx,
+                                        R.anim.magic_lamp_expand,
+                                        R.anim.magic_lamp_fade_out
+                                    )
+                                    ctx.startActivity(intent, options.toBundle())
+                                }
+                            } catch (_: Throwable) {}
+                        }
+                ) {
+                    Box(
+                        Modifier
+                            .offset(y = (-8).dp)
+                            .size(66.dp)
+                            .scale(dockPulseScale)
+                            .background(
+                                Brush.radialGradient(
+                                    listOf(
+                                        if (isBpmAudioPlaying) Color(bpmState.dominantColor).copy(alpha = 0.65f) else MikuCyan.copy(alpha = 0.35f),
+                                        Color(0xFFB388FF).copy(alpha = 0.25f),
+                                        Color.Transparent
+                                    )
+                                ),
+                                CircleShape
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        // Steadily Rotating Rainbow Border Ring
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .graphicsLayer { rotationZ = rainbowRotation }
+                                .border(
+                                    BorderStroke(
+                                        2.8.dp,
+                                        Brush.sweepGradient(colors = rainbowStops)
+                                    ),
+                                    CircleShape
+                                )
+                        )
+
+                        // Full-Bleed Icon Meeting the Rainbow Border Exactly
+                        Image(
+                            painter = painterResource(id = R.drawable.ic_miku_music_brand),
+                            contentDescription = "Miku Music",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(2.5.dp)
+                                .clip(CircleShape)
+                        )
+                    }
+                    Text(
+                        text = "Miku Music",
+                        color = if (isBpmAudioPlaying) MikuNeonPink else MikuCyan,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.4.sp,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // ============================================================
+            // PIXEL GESTURE NAVIGATION PILL BAR (FLUSH TO BOTTOM EDGE)
+            // Quick Swipe Up -> App Drawer
+            // Long Swipe Up & Hold -> Recents Multi-Tasking Carousel
+            // ============================================================
+            // Bottom spacing padding for OS-wide Miku gesture overlay
+            Spacer(Modifier.height(18.dp))
+        }
+
+        // ============================================================
+        // CYBER NOTIFICATION SHADE & QUICK SETTINGS MODAL
+        // ============================================================
+        AnimatedVisibility(
+            visible = isCyberQuickSettingsOpen,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut()
+        ) {
+            CyberNotificationShadeModal(
+                onClose = { isCyberQuickSettingsOpen = false },
+                onOpenSettings = {
+                    isCyberQuickSettingsOpen = false
+                    val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (intent != null) ctx.startActivity(intent)
+                },
+                onOpenAudioSettings = {
+                    isCyberQuickSettingsOpen = false
+                    val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (intent != null) ctx.startActivity(intent)
+                },
+                batteryPct = batteryPct,
+                isCharging = isCharging,
+                isWifiConnected = isWifiConnected,
+                currentTime = currentTime,
+                currentDate = currentDate
+            )
+        }
+
+        // ============================================================
+        // SYSTEM-WIDE USB HOST CONTROLLER MODAL
+        // ============================================================
+        if (showUsbHostModal) {
+            com.miku.launcher.usb.MikuUsbHostModal(
+                onDismissRequest = { showUsbHostModal = false }
+            )
+        }
+
+        // ============================================================
+        // WALLPAPER & THEME PICKER MODAL (LONG-PRESS DESKTOP)
+        // ============================================================
+        if (isWallpaperPickerOpen) {
+            AlertDialog(
+                onDismissRequest = { isWallpaperPickerOpen = false },
+                containerColor = Color(0xF50A1E26),
+                title = {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Wallpaper & Gallery Picker", color = MikuCyan, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        IconButton(onClick = { isWallpaperPickerOpen = false }) {
+                            Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
+                        }
+                    }
+                },
+                text = {
+                    Column(Modifier.fillMaxWidth()) {
+                        // 1. Primary Action: Direct System Gallery Picker
+                        Button(
+                            onClick = {
+                                isWallpaperPickerOpen = false
+                                galleryPicker.launch("image/*")
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(46.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MikuCyan.copy(alpha = 0.25f)),
+                            border = BorderStroke(1.5.dp, MikuCyan),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("🖼 Choose From Gallery / Files", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        }
+
+                        if (customWallpaperUri != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    customWallpaperUri = null
+                                    prefs.edit().remove("custom_wallpaper_uri").apply()
+                                    isWallpaperPickerOpen = false
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(38.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MikuNeonPink.copy(alpha = 0.2f)),
+                                border = BorderStroke(1.dp, MikuNeonPink),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("🔄 Reset to Default Miku Artwork", color = MikuNeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Spacer(Modifier.height(14.dp))
+                        Text("Or select built-in Hatsune Miku desktop artwork:", color = MikuTextSecondary, fontSize = 11.sp)
+                        Spacer(Modifier.height(8.dp))
+
+                        LazyRow(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(wallpapers) { wp ->
+                                val isSelected = (customWallpaperUri == null && currentWallpaperRes == wp.resId)
+                                Column(
+                                    Modifier
+                                        .width(90.dp)
+                                        .clickable {
+                                            customWallpaperUri = null
+                                            prefs.edit().remove("custom_wallpaper_uri").apply()
+                                            currentWallpaperId = wp.id
+                                            prefs.edit().putString("current_wallpaper_id", wp.id).apply()
+                                            // Persist to the theme engine when a built-in theme is chosen.
+                                            if (wp.id.startsWith("theme_")) {
+                                                com.miku.launcher.theme.MikuThemeRegistry.selectTheme(ctx, wp.id.removePrefix("theme_"))
+                                            }
+                                            isWallpaperPickerOpen = false
+                                        },
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(width = 90.dp, height = 140.dp)
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .border(if (isSelected) 2.dp else 1.dp, if (isSelected) MikuCyan else Color.White.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+                                    ) {
+                                        Image(
+                                            painter = painterResource(id = wp.resId),
+                                            contentDescription = wp.name,
+                                            modifier = Modifier.fillMaxSize(),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = wp.name,
+                                        color = if (isSelected) MikuCyan else Color.White,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {}
+            )
+        }
+
+
+
+        // ============================================================
+        // ALL-APPS CYBER DRAWER SHEET (SWIPE-UP GESTURE)
+        // ============================================================
+        AnimatedVisibility(
+            visible = isAllAppsOpen,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+        ) {
+            CyberAllAppsDrawer(
+                apps = allApps,
+                searchQuery = searchQuery,
+                onSearchChange = { searchQuery = it },
+                selectedCategory = selectedCategory,
+                onCategoryChange = { selectedCategory = it },
+                onLaunchApp = {
+                    isAllAppsOpen = false
+                    launchApp(ctx, it)
+                },
+                onAppLongClick = { contextMenuApp = it },
+                onOpenQuickSettings = {
+                    isAllAppsOpen = false
+                    isCyberQuickSettingsOpen = true
+                },
+                onClose = { isAllAppsOpen = false }
+            )
+        }
+
+        // ============================================================
+        // PIXEL-STYLE RECENTS MULTI-TASKING OVERVIEW (SWIPE & HOLD)
+        // ============================================================
+        AnimatedVisibility(
+            visible = isRecentsOpen,
+            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+        ) {
+            CyberRecentsOverview(
+                tasks = recentTasks,
+                onSelectTask = { task ->
+                    isRecentsOpen = false
+                    bringTaskToFront(ctx, task)
+                },
+                onDismissTask = { task ->
+                    dismissTask(ctx, task)
+                    recentTasks = recentTasks.filter { it.taskId != task.taskId }
+                },
+                onClearAll = {
+                    clearAllTasks(ctx, recentTasks)
+                    recentTasks = emptyList()
+                    isRecentsOpen = false
+                },
+                onClose = { isRecentsOpen = false }
+            )
+        }
+
+        // Context Menu Dialog (Long-press App QoL)
+        if (contextMenuApp != null) {
+            val app = contextMenuApp!!
+            CyberAppContextDialog(
+                app = app,
+                isPinnedOnDesktop = pinnedPackages.contains(app.packageName),
+                onDismiss = { contextMenuApp = null },
+                onAppInfo = {
+                    try {
+                        val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                            data = Uri.parse("package:${app.packageName}")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        ctx.startActivity(intent)
+                    } catch (_: Throwable) {}
+                },
+                onUninstall = {
+                    try {
+                        val intent = Intent(Intent.ACTION_DELETE).apply {
+                            data = Uri.parse("package:${app.packageName}")
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        ctx.startActivity(intent)
+                    } catch (_: Throwable) {}
+                },
+                onTogglePinDesktop = {
+                    onTogglePinDesktop(app.packageName)
+                }
+            )
+        }
+
+        // ============================================================
+        // VERBOSE MIKU MONITOR, BRAIN & OBSERVATORY MODALS
+        // ============================================================
+        if (isDesktopContextMenuOpen) {
+            com.miku.launcher.menu.MikuHomescreenLongpressMenu(
+                onWallpaperAndStyle = { isWallpaperPickerOpen = true },
+                onWidgets = {
+                    coroutineScope.launch {
+                        if (pagerState.pageCount > 1) {
+                            pagerState.animateScrollToPage(1)
+                        } else {
+                            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            if (intent != null) ctx.startActivity(intent)
+                        }
+                    }
+                },
+                onHomeSettings = {
+                    val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (intent != null) ctx.startActivity(intent)
+                },
+                onDismiss = { isDesktopContextMenuOpen = false }
+            )
+        }
+
+        if (isRecentsOpen) {
+            com.miku.launcher.recents.MikuRecentsOverviewCarousel(
+                tasks = recentTasks,
+                onLaunchTask = { task -> bringTaskToFront(ctx, task) },
+                onDismissTask = { task ->
+                    recentTasks = recentTasks.filter { it.taskId != task.taskId }
+                },
+                onClearAll = {
+                    recentTasks = emptyList()
+                },
+                onDismissRequest = { isRecentsOpen = false }
+            )
+        }
+
+        if (isWeatherObservatoryOpen) {
+            com.miku.launcher.weather.MikuWeatherObservatoryModal(
+                onDismissRequest = { isWeatherObservatoryOpen = false }
+            )
+        }
+        if (isGpsModalOpen) {
+            com.miku.launcher.gps.MikuGpsTacticalMapModal(
+                onDismissRequest = { isGpsModalOpen = false }
+            )
+        }
+        if (isBatteryObservatoryOpen) {
+            com.miku.launcher.battery.MikuBatteryObservatoryModal(
+                onDismissRequest = { isBatteryObservatoryOpen = false }
+            )
+        }
+        if (isNetworkObservatoryOpen) {
+            com.miku.launcher.network.MikuNetworkObservatoryModal(
+                onDismissRequest = { isNetworkObservatoryOpen = false }
+            )
+        }
+        if (isBrainModalOpen) {
+            com.miku.launcher.observatory.MikuAnatomicalObservatoryModal(
+                onDismissRequest = { isBrainModalOpen = false }
+            )
+        }
+        if (isBpmObservatoryOpen) {
+            val bpmState by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
+            com.miku.launcher.bpm.MikuBpmObservatoryModal(
+                onClose = { isBpmObservatoryOpen = false },
+                bpmState = bpmState
+            )
+        }
+        if (isThermalObservatoryOpen) {
+            com.miku.launcher.thermal.MikuThermalObservatoryModal(
+                onClose = { isThermalObservatoryOpen = false },
+                cpuTempC = cpuTempC,
+                batteryTempC = batteryTempC
+            )
+        }
+        if (isBatteryObservatoryOpen) {
+            com.miku.launcher.battery.MikuFullscreenChargingModal(
+                onDismiss = { isBatteryObservatoryOpen = false },
+                batteryPct = batteryPct,
+                isCharging = isCharging
+            )
+        }
+
+        // Floating In-Theme Cyber Volume HUD Overlay (Top-Right Aligned near Physical Roller)
+        com.miku.launcher.volume.MikuCyberVolumeHudOverlay(
+            ctx = ctx,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(top = 92.dp, end = 4.dp)
+        )
+
+        val infinitePulse = rememberInfiniteTransition(label = "verPulse")
+        val verColor by infinitePulse.animateColor(
+            initialValue = Color(0x9989ACA7),
+            targetValue = MikuCyan.copy(alpha = 0.85f),
+            animationSpec = infiniteRepeatable(
+                animation = tween(2500, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "verColor"
+        )
+        // ============================================================
+        // MIKUOS BESPOKE 4-STEP FAST-BOOT ONBOARDING WIZARD MODAL
+        // ============================================================
+        if (isOnboardingOpen) {
+            com.miku.launcher.onboarding.MikuOnboardingWizardModal(
+                prefs = prefs,
+                onFinish = {
+                    prefs.edit().putBoolean("miku_onboarding_completed", true).apply()
+                    isOnboardingOpen = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun MainDesktopPage(
+    apps: List<InstalledApp>,
+    pinnedPackages: Set<String>,
+    snapshot: PlayerHolder.PlayerSnapshot?,
+    chibiReaction: String,
+    onChibiTap: () -> Unit,
+    onLaunchApp: (InstalledApp) -> Unit,
+    onAppLongClick: (InstalledApp) -> Unit,
+    onOpenWallpapers: () -> Unit,
+    onSwipeUp: () -> Unit,
+    onSwipeDown: () -> Unit
+) {
+    val ctx = LocalContext.current
+    val desktopApps = apps.filter { pinnedPackages.contains(it.packageName) }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(pass = PointerEventPass.Initial)
+                    var totalY = 0f
+                    var triggered = false
+                    while (true) {
+                        val event = awaitPointerEvent(pass = PointerEventPass.Initial)
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) break
+                        val dy = change.position.y - down.position.y
+                        if (!triggered && dy > 35f) {
+                            triggered = true
+                            onSwipeDown()
+                            change.consume()
+                            break
+                        } else if (!triggered && dy < -35f) {
+                            triggered = true
+                            onSwipeUp()
+                            change.consume()
+                            break
+                        }
+                    }
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures(onLongPress = { onOpenWallpapers() })
+            }
+            .padding(horizontal = 16.dp)
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Spacer(Modifier.height(8.dp))
+
+            // Desktop Favorites Grid (Non-scrolling so gestures pass seamlessly)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                userScrollEnabled = false,
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(desktopApps) { app ->
+                    DesktopAppIconItem(
+                        app = app,
+                        onClick = { onLaunchApp(app) },
+                        onLongClick = { onAppLongClick(app) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HardwareWidgetsPage(
+    onOpenAudioSettings: () -> Unit,
+    onOpenPulsarSettings: () -> Unit,
+    onOpenFnSettings: () -> Unit,
+    onOpenMonitor: () -> Unit
+) {
+    Box(Modifier.fillMaxSize()) {
+        Image(
+            painter = painterResource(id = R.drawable.miku_bg_page1),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xCC040D12))
+        )
+
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 1. Miku Cyber Audio Controller Card
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(CyberGlassCard)
+                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                    .clickable { onOpenAudioSettings() }
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("MIKU CYBER AUDIO CONTROLLER", color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Icon(Icons.Default.Tune, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("DAC Chipset", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Cirrus Logic CS43198", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Filter & Gain", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("NOS Mode / Low Gain 0dB", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // 2. SGM31324 Pulsar RGB Lighting Card
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(CyberGlassCard)
+                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                    .clickable { onOpenPulsarSettings() }
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("SGM31324 PULSAR RGB LIGHTING", color = MikuNeonPink, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Icon(Icons.Default.Lightbulb, contentDescription = null, tint = MikuNeonPink, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Active FX Pattern", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Audio Bitrate Sync / BPM", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("PWM Hardware State", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Online (85% Brightness)", color = MikuNeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // 3. Physical Fn Switch & Pocket Guard Card
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(CyberGlassCard)
+                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                    .clickable { onOpenFnSettings() }
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("PHYSICAL FN & POCKET GUARD", color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Icon(Icons.Default.Lock, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Side Switch Mode", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Touch & Key Lock", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Pocket Safeguards", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Volume Pass-thru ON", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            // 4. MikuOS System Platform Card
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(CyberGlassCard)
+                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                    .clickable { onOpenAudioSettings() }
+                    .padding(14.dp)
+            ) {
+                Column {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("MIKUOS NATIVE SYSTEM", color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Text("v0.1.0", color = MikuCyan, fontSize = 9.sp, fontWeight = FontWeight.Black)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Kernel", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Linux 4.19 · AArch64", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(3.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Subsystem", color = MikuTextSecondary, fontSize = 11.sp)
+                        Text("Platform Signed · Native Compose", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+/**
+ * Pixel-Style Recents Multi-Tasking Carousel Overview.
+ */
+@Composable
+fun CyberRecentsOverview(
+    tasks: List<RecentTaskItem>,
+    onSelectTask: (RecentTaskItem) -> Unit,
+    onDismissTask: (RecentTaskItem) -> Unit,
+    onClearAll: () -> Unit,
+    onClose: () -> Unit
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xF2030D14))
+            .systemBarsPadding()
+            .pointerInput(Unit) {
+                detectTapGestures { onClose() }
+            }
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Header with Close & Title
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(MikuCyan)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "MULTITASKING OVERVIEW",
+                        color = MikuCyan,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 1.sp
+                    )
+                }
+                IconButton(onClick = onClose, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            if (tasks.isEmpty()) {
+                Box(
+                    Modifier.weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("✨", fontSize = 28.sp)
+                        Spacer(Modifier.height(6.dp))
+                        Text("No active background apps", color = MikuTextSecondary, fontSize = 12.sp, fontFamily = AudiowideFont)
+                    }
+                }
+            } else {
+                // Horizontal Carousel of High-Tech Task Cards (Swipe up to dismiss)
+                LazyRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    contentPadding = PaddingValues(horizontal = 16.dp)
+                ) {
+                    items(tasks, key = { "${it.taskId}_${it.packageName}" }) { task ->
+                        var dismissOffset by remember { mutableFloatStateOf(0f) }
+                        val animatedDismissOffset by animateFloatAsState(
+                            targetValue = dismissOffset,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "CardDismiss"
+                        )
+
+                        Box(
+                            Modifier
+                                .width(230.dp)
+                                .fillMaxHeight(0.88f)
+                                .offset(y = animatedDismissOffset.dp)
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(
+                                    Brush.verticalGradient(
+                                        listOf(
+                                            Color(0xFF09202C),
+                                            Color(0xFF05121A)
+                                        )
+                                    )
+                                )
+                                .border(
+                                    BorderStroke(
+                                        1.2.dp,
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                MikuCyan.copy(alpha = 0.8f),
+                                                CyberGlassBorder.copy(alpha = 0.3f),
+                                                MikuNeonPink.copy(alpha = 0.5f)
+                                            )
+                                        )
+                                    ),
+                                    RoundedCornerShape(20.dp)
+                                )
+                                .pointerInput(task.taskId) {
+                                    var startY = 0f
+                                    detectDragGestures(
+                                        onDragStart = { startY = 0f },
+                                        onDragEnd = {
+                                            if (dismissOffset < -100f) {
+                                                onDismissTask(task)
+                                            } else {
+                                                dismissOffset = 0f
+                                            }
+                                        },
+                                        onDragCancel = { dismissOffset = 0f },
+                                        onDrag = { change, dragAmount ->
+                                            change.consume()
+                                            startY += dragAmount.y
+                                            dismissOffset = startY.coerceAtMost(0f)
+                                        }
+                                    )
+                                }
+                                .clickable { onSelectTask(task) }
+                                .padding(14.dp)
+                        ) {
+                            Column(
+                                Modifier.fillMaxSize(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                // Task Header
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(
+                                        Modifier.weight(1f),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (task.iconRes != null) {
+                                            Image(
+                                                painter = painterResource(id = task.iconRes),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(26.dp)
+                                            )
+                                        } else if (task.systemIcon != null) {
+                                            Image(
+                                                bitmap = task.systemIcon.toBitmap(64, 64).asImageBitmap(),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(26.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        Column {
+                                            Text(
+                                                text = task.label,
+                                                color = Color.White,
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = AudiowideFont,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = task.packageName,
+                                                color = MikuTextSecondary,
+                                                fontSize = 7.5.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+
+                                    IconButton(
+                                        onClick = { onDismissTask(task) },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.Gray, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+
+                                // Center App Interactive Preview Mockup
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .weight(1f)
+                                        .padding(vertical = 10.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFF030D12))
+                                        .border(0.8.dp, CyberGlassBorder.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        if (task.iconRes != null) {
+                                            Image(
+                                                painter = painterResource(id = task.iconRes),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(54.dp)
+                                            )
+                                        } else if (task.systemIcon != null) {
+                                            Image(
+                                                bitmap = task.systemIcon.toBitmap(96, 96).asImageBitmap(),
+                                                contentDescription = null,
+                                                modifier = Modifier.size(54.dp)
+                                            )
+                                        }
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            text = "RUNNING",
+                                            color = Color(0xFF00E676),
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Black,
+                                            fontFamily = AudiowideFont,
+                                            letterSpacing = 1.sp
+                                        )
+                                    }
+                                }
+
+                                // Bottom Hint
+                                Text(
+                                    "Tap to switch • Swipe up to dismiss",
+                                    color = MikuTextSecondary,
+                                    fontSize = 8.5.sp,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Bottom "Clear All" Action Button
+            if (tasks.isNotEmpty()) {
+                Button(
+                    onClick = onClearAll,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
+                    border = BorderStroke(1.dp, MikuNeonPink),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.height(42.dp)
+                ) {
+                    Text("CLEAR ALL APPS", color = MikuNeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                }
+            }
+        }
+    }
+}
+@Composable
+fun CyberAppContextDialog(
+    app: InstalledApp,
+    isPinnedOnDesktop: Boolean,
+    onDismiss: () -> Unit,
+    onAppInfo: () -> Unit,
+    onUninstall: () -> Unit,
+    onTogglePinDesktop: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xF504141E),
+        tonalElevation = 12.dp,
+        shape = CutCornerShape(16.dp),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                app.systemIcon?.let { d ->
+                    val bm = remember(app.packageName) {
+                        try { d.toBitmap(80, 80).asImageBitmap() } catch (_: Throwable) { null }
+                    }
+                    if (bm != null) {
+                        Image(bitmap = bm, contentDescription = null, modifier = Modifier.size(32.dp))
+                        Spacer(Modifier.width(10.dp))
+                    }
+                }
+                Column {
+                    Text(app.label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                    Text(app.packageName, color = MikuTextSecondary, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Pin / Unpin Desktop
+                Button(
+                    onClick = {
+                        onTogglePinDesktop()
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
+                    border = BorderStroke(1.dp, MikuCyan.copy(alpha = 0.8f)),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(if (isPinnedOnDesktop) Icons.Default.BookmarkRemove else Icons.Default.BookmarkAdd, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (isPinnedOnDesktop) "Remove from Desktop" else "Pin to Desktop", color = Color.White, fontSize = 11.5.sp, fontFamily = AudiowideFont)
+                    }
+                }
+
+                // App Info (Settings)
+                Button(
+                    onClick = {
+                        onAppInfo()
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF)),
+                    border = BorderStroke(1.dp, CyberGlassBorder),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Info, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("App Details", color = Color.White, fontSize = 11.5.sp, fontFamily = AudiowideFont)
+                    }
+                }
+
+                // Uninstall (if not system app)
+                Button(
+                    onClick = {
+                        onUninstall()
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF1744)),
+                    border = BorderStroke(1.dp, Color(0xFFFF5252)),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.fillMaxWidth().height(42.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Delete, contentDescription = null, tint = Color(0xFFFF5252), modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Uninstall App", color = Color(0xFFFF5252), fontSize = 11.5.sp, fontFamily = AudiowideFont)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("CLOSE", color = MikuCyan, fontFamily = AudiowideFont)
+            }
+        }
+    )
+}
+
+/**
+ * Pixel / AOSP-style Themed 3D Cyber Desktop Context Menu Modal.
+ * Prompts user for Wallpaper & style, Widgets, or Home settings.
+ */
+@Composable
+fun CyberDesktopContextMenuModal(
+    onWallpaperAndStyle: () -> Unit,
+    onWidgets: () -> Unit,
+    onHomeSettings: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x9902080D))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .width(260.dp)
+                .clip(CutCornerShape(16.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color.White.copy(alpha = 0.22f),
+                            Color.Transparent,
+                            Color.Black.copy(alpha = 0.7f)
+                        )
+                    )
+                )
+                .clickable(enabled = false) {}
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(1.dp)
+                    .clip(CutCornerShape(15.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0xFA09222E),
+                                Color(0xFF04121A),
+                                Color(0xFF02090D)
+                            )
+                        )
+                    )
+                    .border(
+                        BorderStroke(
+                            1.dp,
+                            Brush.verticalGradient(
+                                listOf(
+                                    MikuCyan.copy(alpha = 0.9f),
+                                    CyberGlassBorder.copy(alpha = 0.4f),
+                                    MikuNeonPink.copy(alpha = 0.7f)
+                                )
+                            )
+                        ),
+                        CutCornerShape(15.dp)
+                    )
+                    .padding(14.dp)
+            ) {
+                Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "DESKTOP ACTIONS",
+                        color = MikuCyan,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 1.sp
+                    )
+
+                    // 1. Wallpaper & Style
+                    Button(
+                        onClick = {
+                            onDismiss()
+                            onWallpaperAndStyle()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x2200E5FF)),
+                        border = BorderStroke(1.dp, MikuCyan.copy(alpha = 0.7f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Palette, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("Wallpaper & style", color = Color.White, fontSize = 11.5.sp, fontFamily = AudiowideFont)
+                        }
+                    }
+
+                    // 2. Widgets
+                    Button(
+                        onClick = {
+                            onDismiss()
+                            onWidgets()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x227C4DFF)),
+                        border = BorderStroke(1.dp, Color(0xFFB388FF).copy(alpha = 0.7f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Widgets, contentDescription = null, tint = Color(0xFFB388FF), modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("Widgets", color = Color.White, fontSize = 11.5.sp, fontFamily = AudiowideFont)
+                        }
+                    }
+
+                    // 3. Home Settings
+                    Button(
+                        onClick = {
+                            onDismiss()
+                            onHomeSettings()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FF4081)),
+                        border = BorderStroke(1.dp, MikuNeonPink.copy(alpha = 0.7f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(42.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.SettingsSuggest, contentDescription = null, tint = MikuNeonPink, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text("Home settings", color = Color.White, fontSize = 11.5.sp, fontFamily = AudiowideFont)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CyberAllAppsDrawer(
+    apps: List<InstalledApp>,
+    searchQuery: String,
+    onSearchChange: (String) -> Unit,
+    selectedCategory: String,
+    onCategoryChange: (String) -> Unit,
+    onLaunchApp: (InstalledApp) -> Unit,
+    onAppLongClick: (InstalledApp) -> Unit = {},
+    onOpenQuickSettings: () -> Unit = {},
+    onClose: () -> Unit
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val categories = remember { listOf("All", "Audio", "Tools", "Media", "System") }
+    val filteredApps = remember(apps, selectedCategory, searchQuery) {
+        apps.filter {
+            val matchesCategory = when (selectedCategory) {
+                "All" -> !it.isSystemApp
+                "System" -> it.isSystemApp
+                else -> !it.isSystemApp && it.category.equals(selectedCategory, ignoreCase = true)
+            }
+            matchesCategory && (searchQuery.isEmpty() || it.label.contains(searchQuery, ignoreCase = true) || it.packageName.contains(searchQuery, ignoreCase = true))
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(CyberDarkBg)
+    ) {
+        // Waifu Streetwear Tokyo App Drawer Artwork Backdrop (06_waifu_streetwear_tokyo.jpg)
+        Image(
+            painter = painterResource(id = R.drawable.miku_drawer_bg_tokyo),
+            contentDescription = "Miku App Drawer Artwork",
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop
+        )
+
+        // Luminous Frosted Cyber Gradient Overlay (High Visibility)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0x66040D12),
+                            Color(0x33040D12),
+                            Color(0x88040D12)
+                        )
+                    )
+                )
+        )
+        // Pixel-style swipe-down-to-dismiss: when the app grid is scrolled to the top
+        // and the user keeps dragging down, the leftover (unconsumed) scroll accumulates
+        // here and dismisses the drawer past a threshold. Works alongside the back arrow.
+        var pullDownAccum by remember { mutableFloatStateOf(0f) }
+        val dismissThresholdPx = with(LocalDensity.current) { 90.dp.toPx() }
+        val swipeDownDismiss = remember(dismissThresholdPx) {
+            object : NestedScrollConnection {
+                override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    // Any upward scroll (list moving up) resets the pull accumulator.
+                    if (available.y < 0f) pullDownAccum = 0f
+                    return Offset.Zero
+                }
+
+                override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                    if (source == NestedScrollSource.Drag && available.y > 0f) {
+                        pullDownAccum += available.y
+                        if (pullDownAccum > dismissThresholdPx) {
+                            pullDownAccum = 0f
+                            onClose()
+                        }
+                    }
+                    return Offset.Zero
+                }
+            }
+        }
+
+        Column(
+            Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 6.dp)
+                .nestedScroll(swipeDownDismiss)
+        ) {
+            // Drag Down Dismiss Pull-Bar (Tapping or pulling down triggers close or QS)
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(28.dp)
+                    .clickable { onOpenQuickSettings() },
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier
+                        .width(52.dp)
+                        .height(4.5.dp)
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(MikuCyan, MikuNeonPink)
+                            )
+                        )
+                )
+            }
+            // Search Bar with Back Button & Single-Line IME Search Action
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(CyberGlassCard)
+                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = MikuCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                TextField(
+                    value = searchQuery,
+                    onValueChange = onSearchChange,
+                    singleLine = true,
+                    maxLines = 1,
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Search
+                    ),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            keyboardController?.hide()
+                        }
+                    ),
+                    placeholder = { Text("Search Modules & Songs (CV01)...", color = MikuTextSecondary, fontSize = 13.sp) },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { onSearchChange("") }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Category Filter Chips
+            LazyRow(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(categories) { cat ->
+                    val isSelected = selectedCategory.equals(cat, ignoreCase = true)
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (isSelected) MikuCyan else CyberGlassCard)
+                            .border(1.dp, if (isSelected) MikuCyan else CyberGlassBorder, RoundedCornerShape(12.dp))
+                            .clickable { onCategoryChange(cat) }
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = cat,
+                            color = if (isSelected) Color.Black else Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // App Grid (4 Columns)
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(4),
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                items(filteredApps) { app ->
+                    DesktopAppIconItem(
+                        app = app,
+                        onClick = { onLaunchApp(app) },
+                        onLongClick = { onAppLongClick(app) }
+                    )
+                }
+            }
+
+            // (Removed redundant bottom navigation pill — it duplicated the system
+            // 2-tone gesture pill. Swipe-down-to-dismiss is handled by the nestedScroll
+            // connection above, and the header back arrow still closes the drawer.)
+            Spacer(Modifier.height(6.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun DesktopAppIconItem(
+    app: InstalledApp,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
+) {
+    val ctx = LocalContext.current
+    val iconBitmap = remember(app.packageName, app.activityName) {
+        app.systemIcon?.let { d ->
+            try {
+                d.toBitmap(width = 160, height = 160, config = android.graphics.Bitmap.Config.ARGB_8888).asImageBitmap()
+            } catch (_: Throwable) {
+                null
+            }
+        }
+    }
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier.size(54.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val customPainter = remember(app.iconResId) {
+                if (app.iconResId != null && app.iconResId != 0) {
+                    try {
+                        ctx.resources.getDrawable(app.iconResId, ctx.theme)?.toBitmap(160, 160)?.asImageBitmap()
+                    } catch (_: Throwable) { null }
+                } else null
+            }
+
+            if (customPainter != null) {
+                Image(
+                    bitmap = customPainter,
+                    contentDescription = app.label,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else if (iconBitmap != null) {
+                Image(
+                    bitmap = iconBitmap,
+                    contentDescription = app.label,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+
+        Text(
+            text = app.label,
+            color = Color.White,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+fun DockIconItem(
+    iconRes: Int,
+    label: String,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clickable { onClick() }
+            .padding(vertical = 2.dp, horizontal = 4.dp)
+    ) {
+        Box(
+            Modifier.size(46.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Image(
+                painter = painterResource(id = iconRes),
+                contentDescription = label,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = label,
+            color = MikuTextSecondary,
+            fontSize = 8.5.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
+    }
+}
+
+// Standard-launcher behavior: tapping the homescreen clock opens the system clock app.
+// Try Google Clock, then AOSP Deskclock, then the generic SHOW_ALARMS intent, else a Toast.
+fun launchClockApp(ctx: Context) {
+    val pm = ctx.packageManager
+    for (pkg in listOf("com.google.android.deskclock", "com.android.deskclock")) {
+        val intent = pm.getLaunchIntentForPackage(pkg)?.apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (intent != null) {
+            try {
+                ctx.startActivity(intent)
+                return
+            } catch (_: Throwable) {}
+        }
+    }
+    try {
+        val alarmIntent = Intent(android.provider.AlarmClock.ACTION_SHOW_ALARMS).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        if (alarmIntent.resolveActivity(pm) != null) {
+            ctx.startActivity(alarmIntent)
+            return
+        }
+    } catch (_: Throwable) {}
+    android.widget.Toast.makeText(ctx, "No clock app found", android.widget.Toast.LENGTH_SHORT).show()
+}
+
+fun launchApp(ctx: Context, app: InstalledApp) {
+    try {
+        if (app.packageName == "com.android.settings") {
+            val legacyIntent = ctx.packageManager.getLaunchIntentForPackage("com.android.settings")
+                ?: Intent(android.provider.Settings.ACTION_SETTINGS).apply {
+                    setPackage("com.android.settings")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+            ctx.startActivity(legacyIntent)
+            return
+        }
+        if (app.activityName.contains("Settings", ignoreCase = true) || app.label.contains("Miku Settings", ignoreCase = true) || app.packageName == "com.miku.settings") {
+            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+            if (intent != null) {
+                ctx.startActivity(intent)
+                return
+            }
+        }
+        if (app.packageName == "com.miku.player" || app.label.contains("Miku Music", ignoreCase = true)) {
+            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.player")?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+            if (intent != null) {
+                ctx.startActivity(intent)
+                return
+            }
+        }
+        val intent = if (app.activityName.isNotEmpty()) {
+            Intent(Intent.ACTION_MAIN).apply {
+                component = ComponentName(app.packageName, app.activityName)
+                addCategory(Intent.CATEGORY_LAUNCHER)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+        } else {
+            ctx.packageManager.getLaunchIntentForPackage(app.packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+            }
+        }
+        if (intent != null) {
+            val opts = android.app.ActivityOptions.makeCustomAnimation(ctx, android.R.anim.fade_in, android.R.anim.fade_out)
+            ctx.startActivity(intent, opts.toBundle())
+        }
+    } catch (_: Throwable) {}
+}
+
+fun resolveMatchingApp(allApps: List<InstalledApp>, pkg: String, cls: String): InstalledApp? {
+    if (pkg == "com.miku.player") {
+        if (cls.contains("FMRadio") || cls.contains("radio")) {
+            return allApps.firstOrNull { it.activityName.contains("FMRadio") || it.label.contains("FM") }
+        }
+        if (cls.contains("Settings")) {
+            return allApps.firstOrNull { it.activityName.contains("Settings") || it.label.contains("Settings") }
+        }
+        if (cls.contains("MainActivity") || cls.contains("player")) {
+            return allApps.firstOrNull { it.activityName.contains("MainActivity") || it.label.contains("Miku Music") || it.label.contains("Music") }
+        }
+    }
+    return allApps.firstOrNull { it.packageName == pkg && (it.activityName.isEmpty() || it.activityName == cls || cls.endsWith(it.activityName)) }
+        ?: allApps.firstOrNull { it.packageName == pkg }
+}
+
+fun loadRecentTasks(ctx: Context, allApps: List<InstalledApp>): List<RecentTaskItem> {
+    val pm = ctx.packageManager
+    val results = ArrayList<RecentTaskItem>()
+    val seenPackages = HashSet<String>()
+
+    // Tier 1: Query global running activities and tasks via dumpsys activity activities (catches Spotify, Chrome, etc.)
+    try {
+        val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "dumpsys activity activities | grep -E 'Run #[0-9]+:'"))
+        val lines = process.inputStream.bufferedReader().readLines()
+        for (line in lines) {
+            val match = Regex("u0\\s+([a-zA-Z0-9._]+)/([a-zA-Z0-9._]+)\\s+t([0-9]+)").find(line)
+            if (match != null) {
+                val pkg = match.groupValues[1]
+                val cls = match.groupValues[2]
+                val taskId = match.groupValues[3].toIntOrNull() ?: -1
+                if (pkg == ctx.packageName && cls.contains("Launcher")) continue
+                val seenKey = if (pkg == ctx.packageName) "$pkg/$cls" else pkg
+                if (seenPackages.contains(seenKey)) continue
+                seenPackages.add(seenKey)
+
+                val fullCls = if (cls.startsWith(".")) pkg + cls else cls
+                val intent = Intent(Intent.ACTION_MAIN).apply {
+                    component = ComponentName(pkg, fullCls)
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                }
+
+                val matchingApp = resolveMatchingApp(allApps, pkg, fullCls)
+                val label = matchingApp?.label ?: try {
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                } catch (_: Throwable) { pkg }
+
+                val iconRes = matchingApp?.iconResId ?: resolveCustomAppIcon(pkg, label, fullCls)
+                val systemIcon = matchingApp?.systemIcon ?: try {
+                    pm.getApplicationIcon(pkg)
+                } catch (_: Throwable) { null }
+
+                results.add(
+                    RecentTaskItem(
+                        taskId = taskId,
+                        label = label,
+                        packageName = pkg,
+                        iconRes = iconRes,
+                        systemIcon = systemIcon,
+                        baseIntent = intent
+                    )
+                )
+            }
+        }
+    } catch (_: Throwable) {}
+
+    // Tier 2: Query ActivityManager getRecentTasks via reflection / system API
+    if (results.isEmpty()) {
+        try {
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            if (am != null) {
+                @Suppress("DEPRECATION")
+                val recentList = am.getRecentTasks(30, ActivityManager.RECENT_WITH_EXCLUDED or ActivityManager.RECENT_IGNORE_UNAVAILABLE)
+                for (r in recentList) {
+                    val baseIntent = r.baseIntent ?: continue
+                    val cmp = baseIntent.component ?: continue
+                    val pkg = cmp.packageName
+                    val cls = cmp.className
+                    if (pkg == ctx.packageName && cls.contains("Launcher")) continue
+                    val seenKey = if (pkg == ctx.packageName) "$pkg/$cls" else pkg
+                    if (seenPackages.contains(seenKey)) continue
+                    seenPackages.add(seenKey)
+
+                    val matchingApp = resolveMatchingApp(allApps, pkg, cls)
+                    val label = matchingApp?.label ?: try {
+                        pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                    } catch (_: Throwable) { pkg }
+
+                    val iconRes = matchingApp?.iconResId ?: resolveCustomAppIcon(pkg, label, cls)
+                    val systemIcon = matchingApp?.systemIcon ?: try {
+                        pm.getApplicationIcon(pkg)
+                    } catch (_: Throwable) { null }
+
+                    results.add(
+                        RecentTaskItem(
+                            taskId = r.id,
+                            label = label,
+                            packageName = pkg,
+                            iconRes = iconRes,
+                            systemIcon = systemIcon,
+                            baseIntent = baseIntent
+                        )
+                    )
+                }
+            }
+        } catch (_: Throwable) {}
+    }
+
+    // Tier 3: Query appTasks fallback
+    if (results.isEmpty()) {
+        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        val appTasks = try { am?.appTasks } catch (_: Throwable) { null } ?: emptyList()
+        for (task in appTasks) {
+            val info = task.taskInfo ?: continue
+            val baseIntent = info.baseIntent ?: continue
+            val cmp = baseIntent.component ?: continue
+            val pkg = cmp.packageName
+            val cls = cmp.className
+            if (pkg == ctx.packageName && cmp.className.contains("Launcher")) continue
+            val seenKey = if (pkg == ctx.packageName) "$pkg/$cls" else pkg
+            if (seenPackages.contains(seenKey)) continue
+            seenPackages.add(seenKey)
+
+            val matchingApp = resolveMatchingApp(allApps, pkg, cls)
+            val label = matchingApp?.label ?: try {
+                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+            } catch (_: Throwable) { pkg }
+
+            val iconRes = matchingApp?.iconResId ?: resolveCustomAppIcon(pkg, label, cls)
+            val systemIcon = matchingApp?.systemIcon ?: try {
+                pm.getApplicationIcon(pkg)
+            } catch (_: Throwable) { null }
+
+            results.add(
+                RecentTaskItem(
+                    taskId = info.id,
+                    label = label,
+                    packageName = pkg,
+                    iconRes = iconRes,
+                    systemIcon = systemIcon,
+                    baseIntent = baseIntent
+                )
+            )
+        }
+    }
+    return results
+}
+
+fun bringTaskToFront(ctx: Context, task: RecentTaskItem) {
+    // 1. Root am task to-front
+    if (task.taskId > 0) {
+        try {
+            Runtime.getRuntime().exec(arrayOf("su", "-c", "am task to-front ${task.taskId}"))
+            return
+        } catch (_: Throwable) {}
+    }
+    // 2. ActivityManager moveTaskToFront
+    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    if (am != null && task.taskId > 0) {
+        try {
+            am.moveTaskToFront(task.taskId, ActivityManager.MOVE_TASK_WITH_HOME)
+            return
+        } catch (_: Throwable) {}
+    }
+    // 3. Fallback launch via Intent
+    if (task.baseIntent != null) {
+        task.baseIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        try { ctx.startActivity(task.baseIntent) } catch (_: Throwable) {}
+    } else {
+        val launchIntent = ctx.packageManager.getLaunchIntentForPackage(task.packageName)
+        if (launchIntent != null) {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try { ctx.startActivity(launchIntent) } catch (_: Throwable) {}
+        }
+    }
+}
+
+fun dismissTask(ctx: Context, task: RecentTaskItem) {
+    // 1. Terminate package with root am force-stop (works for Spotify, Google apps, 3rd party apps)
+    try {
+        Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop ${task.packageName}"))
+    } catch (_: Throwable) {}
+    // 2. Remove from ActivityManager tasks
+    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return
+    try {
+        am.appTasks.firstOrNull { it.taskInfo?.taskId == task.taskId }?.finishAndRemoveTask()
+    } catch (_: Throwable) {}
+}
+
+fun clearAllTasks(ctx: Context, tasks: List<RecentTaskItem>) {
+    for (t in tasks) {
+        dismissTask(ctx, t)
+    }
+}
+
+fun expandNotificationShade(ctx: Context) {
+    try {
+        val intent = Intent().setClassName("com.miku.systemui", "com.miku.systemui.MikuShadeActivity").apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        ctx.startActivity(intent)
+    } catch (_: Throwable) {
+        try {
+            val sbservice = ctx.getSystemService("statusbar")
+            val statusbarManager = Class.forName("android.app.StatusBarManager")
+            val expand = statusbarManager.getMethod("expandNotificationsPanel")
+            expand.invoke(sbservice)
+        } catch (_: Throwable) {}
+    }
+}
+
+fun resolveMikuThemedIcon(packageName: String): Int? {
+    return when {
+        packageName.contains("music", ignoreCase = true) -> R.drawable.miku_cover
+        packageName.contains("fmradio", ignoreCase = true) || packageName.contains("radio", ignoreCase = true) -> R.drawable.ic_fm_miku
+        packageName.contains("gallery", ignoreCase = true) || packageName.contains("photo", ignoreCase = true) -> R.drawable.ic_gallery_miku
+        packageName.contains("file", ignoreCase = true) || packageName.contains("document", ignoreCase = true) -> R.drawable.ic_file_miku
+        packageName.contains("setting", ignoreCase = true) -> R.drawable.ic_settings_miku
+        packageName.contains("camera", ignoreCase = true) -> R.drawable.ic_camera_miku
+        packageName.contains("browser", ignoreCase = true) || packageName.contains("chrome", ignoreCase = true) -> R.drawable.ic_browser_miku
+        packageName.contains("calculator", ignoreCase = true) -> R.drawable.ic_calculator_miku
+        packageName.contains("clock", ignoreCase = true) || packageName.contains("alarm", ignoreCase = true) -> R.drawable.ic_clock_miku
+        packageName.contains("record", ignoreCase = true) -> R.drawable.ic_fm_miku
+        packageName.contains("search", ignoreCase = true) -> R.drawable.ic_search_head_miku
+        else -> null
+    }
+}
+
+fun resolveAppCategory(packageName: String, label: String): String {
+    val text = "$packageName $label".lowercase()
+    return when {
+        text.contains("music") || text.contains("audio") || text.contains("radio") || text.contains("sound") -> "Audio"
+        text.contains("setting") || text.contains("config") -> "Settings"
+        text.contains("gallery") || text.contains("camera") || text.contains("video") || text.contains("media") -> "Media"
+        text.contains("file") || text.contains("clock") || text.contains("calc") || text.contains("record") -> "Tools"
+        else -> "All"
+    }
+}
+
+// ================================================================
+// BESPOKE DOMAIN-SPECIFIC CYBER SHAPES
+// ================================================================
+
+val WifiRadarShape = GenericShape { size, _ ->
+    val chamfer = 8f
+    moveTo(0f, chamfer)
+    lineTo(size.width * 0.25f, 0f)
+    lineTo(size.width - chamfer, 0f)
+    lineTo(size.width, chamfer)
+    lineTo(size.width, size.height - chamfer)
+    lineTo(size.width * 0.75f, size.height)
+    lineTo(chamfer, size.height)
+    lineTo(0f, size.height - chamfer)
+    close()
+}
+
+val BatteryCellShape = GenericShape { size, _ ->
+    val terminalW = 4f
+    val terminalTop = size.height * 0.25f
+    val terminalBottom = size.height * 0.75f
+    val chamfer = 6f
+    moveTo(chamfer, 0f)
+    lineTo(size.width - terminalW - chamfer, 0f)
+    lineTo(size.width - terminalW, chamfer)
+    lineTo(size.width - terminalW, terminalTop)
+    lineTo(size.width, terminalTop)
+    lineTo(size.width, terminalBottom)
+    lineTo(size.width - terminalW, terminalBottom)
+    lineTo(size.width - terminalW, size.height - chamfer)
+    lineTo(size.width - terminalW - chamfer, size.height)
+    lineTo(chamfer, size.height)
+    lineTo(0f, size.height - chamfer)
+    lineTo(0f, chamfer)
+    close()
+}
+
+val DacChipShape = GenericShape { size, _ ->
+    val c = 6f
+    val notch = 3f
+    moveTo(c, 0f)
+    lineTo(size.width * 0.38f, 0f)
+    lineTo(size.width * 0.44f, notch)
+    lineTo(size.width * 0.56f, notch)
+    lineTo(size.width * 0.62f, 0f)
+    lineTo(size.width - c, 0f)
+    lineTo(size.width, c)
+    lineTo(size.width, size.height - c)
+    lineTo(size.width - c, size.height)
+    lineTo(c, size.height)
+    lineTo(0f, size.height - c)
+    lineTo(0f, c)
+    close()
+}
+
+val BrainShieldShape = GenericShape { size, _ ->
+    val c = 8f
+    moveTo(c, 0f)
+    lineTo(size.width - c, 0f)
+    lineTo(size.width, size.height * 0.42f)
+    lineTo(size.width * 0.82f, size.height)
+    lineTo(size.width * 0.18f, size.height)
+    lineTo(0f, size.height * 0.42f)
+    close()
+}
+
+val IngressStreamShape = GenericShape { size, _ ->
+    val c = 10f
+    moveTo(c, 0f)
+    lineTo(size.width, 0f)
+    lineTo(size.width - (c * 0.6f), size.height * 0.5f)
+    lineTo(size.width, size.height)
+    lineTo(0f, size.height)
+    lineTo(c * 0.6f, size.height * 0.5f)
+    close()
+}
+
+val AtmosphereHorizonShape = GenericShape { size, _ ->
+    val c = 8f
+    moveTo(0f, c)
+    quadraticTo(size.width * 0.5f, -4f, size.width, c)
+    lineTo(size.width, size.height - c)
+    lineTo(size.width - c, size.height)
+    lineTo(c, size.height)
+    lineTo(0f, size.height - c)
+    close()
+}
+
+val SatelliteDiamondShape = GenericShape { size, _ ->
+    val c = 8f
+    moveTo(c, 0f)
+    lineTo(size.width - c, 0f)
+    lineTo(size.width, c)
+    lineTo(c, size.height)
+    lineTo(0f, size.height - c)
+    lineTo(0f, c)
+    close()
+}
+
+val SakuraBlossomShape = GenericShape { size, _ ->
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+    val rx = size.width / 2f
+    val ry = size.height / 2f
+    val steps = 60
+    for (i in 0..steps) {
+        val theta = (i.toFloat() / steps) * 2f * Math.PI.toFloat()
+        val rNorm = 0.84f + 0.16f * kotlin.math.cos(5f * theta) - 0.05f * kotlin.math.abs(kotlin.math.sin(5f * theta))
+        val x = cx + rx * rNorm * kotlin.math.cos(theta - Math.PI.toFloat() / 2f)
+        val y = cy + ry * rNorm * kotlin.math.sin(theta - Math.PI.toFloat() / 2f)
+        if (i == 0) moveTo(x, y) else lineTo(x, y)
+    }
+    close()
+}
+
+/**
+ * Artsy Chamfered Cyber Weather & GPS Telemetry Badge.
+ * Features a dynamic live weather art background tailored to the current weather condition
+ * (Rain, Thunderstorm, Snow, Cloud, Sunny Day, Starry Night) and high-density atmospheric metrics.
+ */
+@Composable
+fun MikuCyberWeatherGpsBadge(
+    weather: com.miku.launcher.weather.MikuWeatherService.WeatherCondition,
+    gps: com.miku.launcher.weather.MikuWeatherService.GpsTelemetry,
+    onWeatherClick: () -> Unit,
+    onGpsClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "TelemetryGlow")
+    val pulseGlow by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "TelemetryGlow"
+    )
+    val weatherAnimPhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "WeatherAnim"
+    )
+
+    // Classify weather condition for dynamic theme and art
+    val code = weather.code
+    val isNight = !weather.isDay
+    val isRain = code in listOf(51, 53, 55, 61, 63, 65, 80, 81, 82) || weather.summary.contains("Rain", ignoreCase = true) || weather.summary.contains("Drizzle", ignoreCase = true)
+    val isThunder = code in listOf(95, 96, 99) || weather.summary.contains("Thunder", ignoreCase = true) || weather.summary.contains("Storm", ignoreCase = true)
+    val isSnow = code in listOf(71, 73, 75, 77, 85, 86) || weather.summary.contains("Snow", ignoreCase = true)
+    val isCloudy = code in listOf(2, 3, 45, 48) || weather.summary.contains("Cloud", ignoreCase = true) || weather.summary.contains("Overcast", ignoreCase = true)
+
+    val badgeGradient = when {
+        isThunder -> listOf(Color(0xF020083B), Color(0xFA0B0218), Color(0xF02A042A))
+        isRain -> listOf(Color(0xF003202E), Color(0xFA02121A), Color(0xF0011C24))
+        isSnow -> listOf(Color(0xF006243A), Color(0xFA051726), Color(0xF00C2E42))
+        isNight -> listOf(Color(0xF0051120), Color(0xFA020912), Color(0xF00A1324))
+        isCloudy -> listOf(Color(0xF00C202B), Color(0xFA07151D), Color(0xF012222D))
+        else -> listOf(Color(0xF01A2412), Color(0xFA0A1810), Color(0xF0071C26)) // Sunny/Clear Day
+    }
+
+    val rimColor = when {
+        isThunder -> Color(0xFFE040FB)
+        isRain -> Color(0xFF00E5FF)
+        isSnow -> Color(0xFF80D8FF)
+        isNight -> Color(0xFF7C4DFF)
+        isCloudy -> Color(0xFF40C4FF)
+        else -> Color(0xFFFFD600) // Solar Gold
+    }
+
+    val badgeShape = remember {
+        CutCornerShape(topStart = 8.dp, bottomEnd = 8.dp, topEnd = 4.dp, bottomStart = 4.dp)
+    }
+
+    Box(
+        modifier = modifier
+            .height(38.dp)
+            .clip(badgeShape)
+            .background(Brush.horizontalGradient(badgeGradient))
+            .border(
+                BorderStroke(
+                    0.9.dp,
+                    Brush.linearGradient(
+                        listOf(
+                            rimColor.copy(alpha = pulseGlow),
+                            CyberGlassBorder.copy(alpha = 0.35f),
+                            MikuNeonPink.copy(alpha = pulseGlow * 0.75f)
+                        )
+                    )
+                ),
+                badgeShape
+            )
+    ) {
+        // ==========================================
+        // DYNAMIC PROCEDURAL WEATHER ART BACKGROUND CANVAS
+        // ==========================================
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            val w = size.width
+            val h = size.height
+
+            when {
+                isThunder -> {
+                    // Electric purple thunder glow + occasional flashing lightning bolt
+                    val flash = (kotlin.math.sin(weatherAnimPhase * 12.56f) > 0.88f)
+                    if (flash) {
+                        drawRect(Color(0x33E040FB))
+                        drawLine(
+                            color = Color.White.copy(alpha = 0.85f),
+                            start = Offset(w * 0.45f, 0f),
+                            end = Offset(w * 0.52f, h * 0.55f),
+                            strokeWidth = 1.5f
+                        )
+                        drawLine(
+                            color = Color(0xFF00E5FF),
+                            start = Offset(w * 0.52f, h * 0.55f),
+                            end = Offset(w * 0.48f, h),
+                            strokeWidth = 1.2f
+                        )
+                    }
+                }
+                isRain -> {
+                    // Slanted falling neon cyan rain streaks
+                    repeat(14) { idx ->
+                        val rx = (idx * 27f + weatherAnimPhase * 40f) % w
+                        val ry = (idx * 13f + weatherAnimPhase * h * 2.2f) % h
+                        drawLine(
+                            color = Color(0x6600E5FF),
+                            start = Offset(rx, ry),
+                            end = Offset(rx - 4f, ry + 7f),
+                            strokeWidth = 1.1f
+                        )
+                    }
+                }
+                isSnow -> {
+                    // Drifting soft snowflakes
+                    repeat(12) { idx ->
+                        val sx = (idx * 31f + kotlin.math.sin(weatherAnimPhase * 6.28f + idx) * 8f) % w
+                        val sy = (idx * 11f + weatherAnimPhase * h * 1.2f) % h
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.55f),
+                            radius = if (idx % 2 == 0) 1.5f else 1.0f,
+                            center = Offset(sx, sy)
+                        )
+                    }
+                }
+                isNight -> {
+                    // Night Starfield Twinkles
+                    val stars = listOf(
+                        Offset(w * 0.15f, h * 0.25f),
+                        Offset(w * 0.45f, h * 0.75f),
+                        Offset(w * 0.78f, h * 0.30f),
+                        Offset(w * 0.90f, h * 0.68f)
+                    )
+                    stars.forEachIndexed { i, pt ->
+                        val twAlpha = (kotlin.math.sin(weatherAnimPhase * 6.28f + i) * 0.4f + 0.6f).toFloat()
+                        drawCircle(
+                            color = Color(0xFFE1BEE7).copy(alpha = twAlpha),
+                            radius = 1.2f,
+                            center = pt
+                        )
+                    }
+                }
+                isCloudy -> {
+                    // Overcast Fog Bands
+                    drawCircle(
+                        color = Color(0x18FFFFFF),
+                        radius = h * 0.8f,
+                        center = Offset(w * 0.3f, h * 0.9f)
+                    )
+                    drawCircle(
+                        color = Color(0x14FFFFFF),
+                        radius = h * 0.65f,
+                        center = Offset(w * 0.7f, h * 0.85f)
+                    )
+                }
+                else -> {
+                    // Sunny Solar Corona Flare (Top-Right)
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            listOf(Color(0x33FFD600), Color(0x11FF6D00), Color.Transparent),
+                            center = Offset(w * 0.88f, h * 0.2f),
+                            radius = h * 1.1f
+                        ),
+                        radius = h * 1.1f,
+                        center = Offset(w * 0.88f, h * 0.2f)
+                    )
+                }
+            }
+        }
+
+        // ==========================================
+        // HIGH-DENSITY ATMOSPHERIC METRICS CONTENT
+        // ==========================================
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 7.dp, vertical = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Row 1: Weather Icon + Live Temp + High/Low Range + Condition Summary
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onWeatherClick() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        weather.icon.ifEmpty { if (isNight) "🌙" else "☀️" },
+                        fontSize = 15.sp
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "${weather.tempF.toInt()}°F",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                }
+
+                // High / Low Micro Capsule
+                if (weather.highTempF != 0f && weather.lowTempF != 0f) {
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x66000000))
+                            .padding(horizontal = 5.dp, vertical = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("▲${weather.highTempF.toInt()}°", color = Color(0xFFFF5252), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.width(3.dp))
+                        Text("▼${weather.lowTempF.toInt()}°", color = Color(0xFF00E5FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Summary
+                Text(
+                    if (weather.summary.isNotEmpty()) weather.summary else "Clear Sky",
+                    color = rimColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(Modifier.height(3.dp))
+
+            // Row 2: Atmospheric Telemetry (Humidity, Wind, Precip, GPS Location)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onGpsClick() },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                // Left Metrics: Humidity & Wind
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("💧${weather.humidityPct}%", color = MikuCyan, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(5.dp))
+                    Text("💨${weather.windSpeedMph.toInt()}m", color = MikuTextSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    if (weather.precipitationProbPct > 0) {
+                        Spacer(Modifier.width(4.dp))
+                        Text("☔${weather.precipitationProbPct}%", color = Color(0xFFFF80AB), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                // Right: Active City / Tactical Coordinate Lock
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    val locText = when {
+                        gps.city.isNotEmpty() && !gps.city.startsWith("Detecting") -> gps.city
+                        gps.fuzzyLocation.isNotEmpty() && !gps.fuzzyLocation.startsWith("Detecting") -> gps.fuzzyLocation.split(",").firstOrNull() ?: "Locating..."
+                        gps.isLocked -> "GPS Lock"
+                        else -> "Locating..."
+                    }
+                    Box(
+                        Modifier
+                            .size(5.dp)
+                            .clip(CircleShape)
+                            .background(if (gps.isLocked) Color(0xFF00FF7F) else Color(0xFFFFD600))
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = locText,
+                        color = if (gps.isLocked) Color(0xFF00FF7F) else Color.White.copy(alpha = 0.9f),
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Connected Dual-RF Network Capsule (Wi-Fi & Cellular/LTE Dual Pod).
+ * Interlocks live high-granularity Wi-Fi and Cellular/LTE radio status into
+ * a single unified, connected dual-pod cyber badge with individual status pods
+ * joined seamlessly by an illuminated tech-seam.
+ */
+@Composable
+fun ConnectedRfNetworkCapsule(
+    wifi: com.miku.launcher.network.MikuNetworkService.WifiGranularState,
+    cell: com.miku.launcher.network.MikuNetworkService.CellularGranularState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val capsuleShape = remember {
+        CutCornerShape(
+            topStart = 6.dp,
+            bottomStart = 6.dp,
+            topEnd = 6.dp,
+            bottomEnd = 6.dp
+        )
+    }
+
+    val wifiColor = when {
+        !wifi.isConnected -> Color.White.copy(alpha = 0.5f)
+        wifi.rssiDbm >= -65 -> MikuCyan
+        wifi.rssiDbm >= -80 -> Color(0xFFFFD600)
+        else -> Color(0xFFFF5252)
+    }
+    val cellColor = when {
+        !cell.isConnected -> Color.White.copy(alpha = 0.5f)
+        // Signal present but no data PDN (the AOSP "!" case) → red warning regardless of bars.
+        cell.hasSignal && !cell.dataConnected -> Color(0xFFFF5252)
+        cell.signalLevel5 >= 3 -> Color(0xFF00E676)
+        cell.signalLevel5 == 2 -> Color(0xFFFFD600)
+        else -> Color(0xFFFF5252)
+    }
+    // Shown as a small overlay glyph on the signal badge when registered-but-no-data.
+    val cellNoData = cell.hasSignal && !cell.dataConnected
+
+    Box(
+        modifier = modifier
+            .clip(capsuleShape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.16f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.55f)
+                    )
+                )
+            )
+            .clickable { onClick() }
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(1.dp)
+                .clip(capsuleShape)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color(0xEE08202A),
+                            Color(0xFF041218),
+                            Color(0xEE061C14)
+                        )
+                    )
+                )
+                .border(
+                    BorderStroke(
+                        1.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                wifiColor.copy(alpha = 0.9f),
+                                CyberGlassBorder.copy(alpha = 0.35f),
+                                cellColor.copy(alpha = 0.9f)
+                            )
+                        )
+                    ),
+                    capsuleShape
+                )
+                .padding(horizontal = 6.dp, vertical = 3.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                // ==================== POD 1: WI-FI ====================
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    if (wifi.isConnected) {
+                        Icon(
+                            Icons.Default.Wifi,
+                            contentDescription = "Wi-Fi Connected",
+                            tint = wifiColor,
+                            modifier = Modifier.size(11.dp)
+                        )
+                        Text(
+                            text = "WIFI ${wifi.rssiDbm}d",
+                            color = wifiColor,
+                            fontSize = 7.5.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.WifiOff,
+                            contentDescription = "Wi-Fi Off",
+                            tint = Color.White.copy(alpha = 0.45f),
+                            modifier = Modifier.size(10.dp)
+                        )
+                        Text(
+                            text = if (wifi.isEnabled) "WIFI" else "OFF",
+                            color = Color.White.copy(alpha = 0.5f),
+                            fontSize = 7.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                }
+
+                // ==================== CENTRAL SEAM (if Cellular Active) ====================
+                if (cell.isConnected) {
+                    Box(
+                        Modifier
+                            .padding(horizontal = 4.dp)
+                            .width(1.dp)
+                            .height(14.dp)
+                            .background(
+                                Brush.verticalGradient(
+                                    listOf(
+                                        wifiColor.copy(alpha = 0.8f),
+                                        cellColor.copy(alpha = 0.8f)
+                                    )
+                                )
+                            )
+                    )
+
+                    // ==================== POD 2: CELLULAR / LTE ====================
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.5.dp)
+                    ) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(1.2.dp),
+                            verticalAlignment = Alignment.Bottom,
+                            modifier = Modifier.height(9.dp)
+                        ) {
+                            repeat(4) { i ->
+                                val active = (i + 1) <= cell.signalLevel5
+                                Box(
+                                    Modifier
+                                        .width(1.8.dp)
+                                        .height(((i + 1) * 2.2).dp)
+                                        .clip(RoundedCornerShape(0.5.dp))
+                                        .background(if (active) cellColor else Color.White.copy(alpha = 0.2f))
+                                )
+                            }
+                        }
+                        Text(
+                            text = if (cellNoData) "! NO DATA" else "LTE ${cell.signalDbm}d",
+                            color = cellColor,
+                            fontSize = 7.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Unified Joined Weather & Geodesic GPS Cyber Capsule.
+ * Seamlessly bonds the real-time atmospheric observatory pod and the
+ * high-precision GPS geodesic fix pod into a single interlocking cyber capsule
+ * with live fuzzy location (County, City, State), altitude, and radar link.
+ */
+@Composable
+fun UnifiedWeatherGpsCapsule(
+    weather: com.miku.launcher.weather.MikuWeatherService.WeatherCondition,
+    gps: com.miku.launcher.weather.MikuWeatherService.GpsTelemetry,
+    onWeatherClick: () -> Unit,
+    onGpsClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "UnifiedCapsuleShimmer")
+    val pulseGlow by infiniteTransition.animateFloat(
+        initialValue = 0.65f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "UnifiedPulse"
+    )
+
+    val capsuleShape = remember {
+        CutCornerShape(
+            topStart = 8.dp,
+            bottomStart = 8.dp,
+            topEnd = 8.dp,
+            bottomEnd = 8.dp
+        )
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth(0.92f)
+            .clip(capsuleShape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.16f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.55f)
+                    )
+                )
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(1.dp)
+                .clip(capsuleShape)
+                .background(
+                    Brush.horizontalGradient(
+                        listOf(
+                            Color(0xEE08202A),
+                            Color(0xFF041218),
+                            Color(0xEE061C14)
+                        )
+                    )
+                )
+                .border(
+                    BorderStroke(
+                        1.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                Color(0xFF00B0FF).copy(alpha = pulseGlow),
+                                CyberGlassBorder.copy(alpha = 0.4f),
+                                if (gps.isLocked) Color(0xFF76FF03).copy(alpha = pulseGlow) else Color(0xFFFFB300).copy(alpha = pulseGlow)
+                            )
+                        )
+                    ),
+                    capsuleShape
+                )
+                .padding(horizontal = 7.dp, vertical = 3.5.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // LEFT SECTION: Atmospheric Weather Pod (Click -> Weather Observatory Modal)
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { onWeatherClick() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        weather.icon,
+                        fontSize = 16.sp
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "${weather.tempF.toInt()}°F",
+                                color = Color.White,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = AudiowideFont
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                "(${weather.summary})",
+                                color = Color(0xFF00B0FF),
+                                fontSize = 9.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        val statusLine = if (weather.nextPrecipLabel.isNotEmpty()) {
+                            "💧${weather.humidityPct}% 💨${weather.windSpeedMph.toInt()}mph · ⏱️${weather.nextPrecipLabel}"
+                        } else {
+                            "💧${weather.humidityPct}% 💨${weather.windSpeedMph.toInt()}mph ${weather.windDirectionCompass} ☔${weather.precipitationProbPct}%"
+                        }
+                        Text(
+                            statusLine,
+                            color = if (weather.nextPrecipLabel.isNotEmpty()) Color(0xFFFFD600) else MikuTextSecondary,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Central Tech-Seam Link Divider
+                Box(
+                    Modifier
+                        .padding(horizontal = 5.dp)
+                        .width(1.dp)
+                        .height(24.dp)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    Color(0xFF00B0FF).copy(alpha = 0.8f),
+                                    Color(0xFF76FF03).copy(alpha = 0.8f)
+                                )
+                            )
+                        )
+                )
+
+                // RIGHT SECTION: Linked Geodesic GPS & Fuzzy Location Pod (Click -> Tactical GPS Map Modal)
+                Row(
+                    modifier = Modifier
+                        .weight(1.18f)
+                        .clickable { onGpsClick() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (gps.isLocked) Color(0xFF76FF03) else Color(0xFFFFB300))
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                if (gps.isLocked) "GPS 🔒 FIX" else "GPS 🛰️",
+                                color = if (gps.isLocked) Color(0xFF76FF03) else Color(0xFFFFB300),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = AudiowideFont
+                            )
+                            if (gps.isLocked && gps.altitudeM != 0.0) {
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    "⛰️${gps.altitudeM.toInt()}m",
+                                    color = Color.White,
+                                    fontSize = 9.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (gps.accuracyM > 0f) {
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    "±${gps.accuracyM.toInt()}m",
+                                    color = MikuCyan,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        // Fuzzy Location display: County, City, State
+                        Text(
+                            text = if (gps.fuzzyLocation.isNotEmpty()) gps.fuzzyLocation else if (gps.city.isNotEmpty()) gps.city else "Detecting Location...",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Dynamic Cyber Thermal Telemetry Badge.
+ * Dynamically displays CPU core temp and Battery cell temp with thermocline coloring.
+ */
+@Composable
+fun MikuThermalBadge(
+    cpuTempC: Float,
+    batteryTempC: Float,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val maxTemp = maxOf(cpuTempC, batteryTempC)
+    val tempColor = when {
+        maxTemp >= 55f -> Color(0xFFFF1744) // Hot / Throttle Warning: Red
+        maxTemp >= 45f -> Color(0xFFFF9100) // Warm: Amber Orange
+        maxTemp >= 38f -> Color(0xFFFFD600) // Nominal Warm: Gold
+        maxTemp >= 30f -> Color(0xFF00E5FF) // Cool Nominal: Cyan
+        else -> Color(0xFF00E676)           // Low Ambient: Mint Green
+    }
+
+    val displayTemp = if (cpuTempC > 0f) "${cpuTempC.toInt()}°C" else "${batteryTempC.toInt()}°C"
+
+    CyberBespokeBadge(
+        onClick = onClick,
+        accentColor = tempColor,
+        gradient = listOf(tempColor.copy(alpha = 0.28f), Color(0xFF030D14)),
+        shape = CutCornerShape(topStart = 3.dp, bottomEnd = 3.dp, topEnd = 3.dp, bottomStart = 3.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "🔥",
+                fontSize = 7.5.sp,
+                modifier = Modifier.padding(end = 1.5.dp)
+            )
+            Text(
+                text = displayTemp,
+                color = tempColor,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = AudiowideFont,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Real-Time BPM Engine Telemetry Badge.
+ */
+@Composable
+fun MikuBpmEngineBadge(
+    bpm: Float,
+    isPlaying: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 128
+    val bpmColor = when {
+        !isPlaying -> Color(0xFF8BA6A9)
+        liveBpm >= 150 -> Color(0xFFFF1744) // Hardcore / Fast: Red
+        liveBpm >= 126 -> Color(0xFFFF4081) // Diva / Vocaloid Dance: Pink
+        liveBpm >= 100 -> Color(0xFF00E5FF) // Pop / Groove: Cyan
+        else -> Color(0xFF00FF7F)           // Lo-Fi / Chill: Mint Green
+    }
+
+    CyberBespokeBadge(
+        onClick = onClick,
+        accentColor = bpmColor,
+        gradient = listOf(bpmColor.copy(alpha = if (isPlaying) 0.35f else 0.15f), Color(0xFF030D14)),
+        shape = CutCornerShape(topStart = 3.dp, bottomEnd = 3.dp, topEnd = 3.dp, bottomStart = 3.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = if (isPlaying) "⚡" else "♩",
+                fontSize = 7.5.sp,
+                color = bpmColor,
+                modifier = Modifier.padding(end = 1.5.dp)
+            )
+            Text(
+                text = if (isPlaying) "$liveBpm" else "BPM",
+                color = if (isPlaying) Color.White else bpmColor,
+                fontSize = 8.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = AudiowideFont,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Intricate Quantum Power Core Battery Badge.
+ * Features 3D beveled housing, 3 discrete energy core segments, electron sparks, and thermocline colors.
+ */
+@Composable
+fun MikuQuantumBatteryBadge(
+    batteryPct: Int,
+    isCharging: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val batteryColor = when {
+        isCharging -> Color(0xFF00E676)
+        batteryPct > 50 -> Color(0xFF00E5FF)
+        batteryPct > 20 -> Color(0xFFFFD600)
+        else -> Color(0xFFFF1744)
+    }
+
+    val infiniteTransition = rememberInfiniteTransition(label = "ChargeSparkle")
+    val sparkAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "spark"
+    )
+
+    Box(
+        modifier = modifier
+            .height(20.dp)
+            .clip(CutCornerShape(topStart = 4.dp, bottomEnd = 4.dp, topEnd = 2.dp, bottomStart = 2.dp))
+            .background(
+                Brush.horizontalGradient(
+                    listOf(
+                        batteryColor.copy(alpha = if (isCharging) 0.35f else 0.20f),
+                        Color(0xFF030D14)
+                    )
+                )
+            )
+            .border(
+                BorderStroke(
+                    0.9.dp,
+                    if (batteryPct <= 20 && !isCharging) batteryColor.copy(alpha = sparkAlpha)
+                    else batteryColor.copy(alpha = 0.85f)
+                ),
+                CutCornerShape(topStart = 4.dp, bottomEnd = 4.dp, topEnd = 2.dp, bottomStart = 2.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 5.dp, vertical = 1.5.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            // Micro 4-bar level indicator
+            Row(
+                modifier = Modifier
+                    .width(14.dp)
+                    .height(7.dp)
+                    .clip(RoundedCornerShape(1.dp))
+                    .background(Color(0xFF02090D))
+                    .border(0.5.dp, batteryColor.copy(alpha = 0.5f), RoundedCornerShape(1.dp))
+                    .padding(0.8.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val filledBars = when {
+                    batteryPct >= 75 -> 4
+                    batteryPct >= 50 -> 3
+                    batteryPct >= 25 -> 2
+                    batteryPct >= 8 -> 1
+                    else -> 0
+                }
+                repeat(4) { idx ->
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(0.4.dp))
+                            .background(if (idx < filledBars) batteryColor else Color(0x18FFFFFF))
+                    )
+                }
+            }
+
+            Spacer(Modifier.width(3.dp))
+
+            if (isCharging) {
+                // Vector bolt (not an emoji) — the emoji rendered as tofu on the device font,
+                // which was a big part of the "battery icon broken on home" symptom.
+                Icon(
+                    imageVector = Icons.Default.Bolt,
+                    contentDescription = "charging",
+                    tint = Color(0xFF00FFCC),
+                    modifier = Modifier.size(9.dp).padding(end = 1.dp)
+                )
+            }
+
+            Text(
+                text = "$batteryPct%",
+                // High-contrast white like the working lockscreen badge — colouring the % the
+                // same hue as the badge tint made it near-invisible on home.
+                color = Color.White,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Black,
+                fontFamily = AudiowideFont,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Bespoke Chamfered Cyber Badge.
+ * High-tech domain-inspired geometry, custom shape, holographic rim lighting,
+ * and individual color theming.
+ */
+@Composable
+fun CyberBespokeBadge(
+    onClick: (() -> Unit)? = null,
+    accentColor: Color,
+    shape: Shape = CutCornerShape(5.dp),
+    gradient: List<Color> = listOf(Color(0xEE0A222C), Color(0xFF041218)),
+    content: @Composable RowScope.() -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .height(20.dp)
+            .clip(shape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.16f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.55f)
+                    )
+                )
+            )
+            .then(
+                if (onClick != null) Modifier.clickable { onClick() } else Modifier
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxHeight()
+                .padding(0.8.dp)
+                .clip(shape)
+                .background(Brush.verticalGradient(gradient))
+                .border(
+                    BorderStroke(
+                        0.9.dp,
+                        Brush.linearGradient(
+                            listOf(
+                                accentColor.copy(alpha = 0.95f),
+                                CyberGlassBorder.copy(alpha = 0.35f),
+                                accentColor.copy(alpha = 0.7f)
+                            )
+                        )
+                    ),
+                    shape
+                )
+                .padding(horizontal = 4.5.dp, vertical = 1.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+@Composable
+fun MikuNowPlayingBadge(
+    bpm: Float,
+    isPlaying: Boolean,
+    beatIntervalMs: Long,
+    onClick: () -> Unit
+) {
+    // Combined now-playing + BPM badge with a realistic, BPM-driven equalizer.
+    // Each bar is a frequency band that oscillates continuously; a beat envelope
+    // (sharp attack at beat start, quadratic decay) punches the bars on every
+    // beat, with the bass bars (left) reacting hardest — synced to the live tempo
+    // from the OS BPM engine so it pulses to whatever is actually playing.
+    val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 128
+    val tierColor = when {
+        !isPlaying -> Color(0xFF8BA6A9)
+        liveBpm >= 150 -> Color(0xFFFF1744)
+        liveBpm >= 126 -> MikuNeonPink
+        liveBpm >= 100 -> MikuCyan
+        else -> Color(0xFF00FF7F)
+    }
+    val bandColors = listOf(Color(0xFF00FF7F), MikuCyan, Color(0xFF7FE6DE), MikuNeonPink, Color(0xFFFF1744))
+    val nBars = bandColors.size
+    val interval = beatIntervalMs.coerceIn(250L, 1500L).toInt()
+
+    val eq = rememberInfiniteTransition(label = "eqBadge")
+    // Beat phase restarts each beat interval; envelope = (1-phase)^2 → punch then decay.
+    val beatPhase by eq.animateFloat(
+        0f, 1f, infiniteRepeatable(tween(interval, easing = LinearEasing), RepeatMode.Restart), label = "beat"
+    )
+    val beatEnv = if (isPlaying) (1f - beatPhase) * (1f - beatPhase) else 0f
+    // Per-band continuous oscillation (each band a different frequency).
+    val osc = (0 until nBars).map { i ->
+        eq.animateFloat(
+            0f, 1f,
+            infiniteRepeatable(tween(200 + i * 85, easing = FastOutSlowInEasing), RepeatMode.Reverse),
+            label = "osc$i"
+        )
+    }
+
+    CyberBespokeBadge(
+        onClick = onClick,
+        accentColor = tierColor,
+        gradient = listOf(tierColor.copy(alpha = if (isPlaying) 0.32f else 0.14f), Color(0xFF120410)),
+        shape = CutCornerShape(4.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(1.dp),
+            modifier = Modifier.height(10.dp)
+        ) {
+            for (i in 0 until nBars) {
+                // Bass (left) punches on the beat; treble (right) oscillates more.
+                val bassBias = 1f - i.toFloat() / nBars
+                val base = if (isPlaying) 0.22f + osc[i].value * (0.30f + 0.25f * (1f - bassBias)) else 0.14f
+                val h = (base + beatEnv * (0.20f + 0.60f * bassBias)).coerceIn(0.10f, 1f)
+                Box(
+                    Modifier.width(2.dp).height((10 * h).dp)
+                        .clip(RoundedCornerShape(0.5.dp))
+                        .background(if (isPlaying) bandColors[i] else bandColors[i].copy(alpha = 0.4f))
+                )
+            }
+        }
+        Spacer(Modifier.width(3.dp))
+        Text(
+            text = if (isPlaying) "$liveBpm" else "BPM",
+            color = if (isPlaying) Color.White else tierColor,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Black,
+            fontFamily = AudiowideFont,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * Ultra-Modern 3D Embossed Cyber Glass Capsule Pill.
+ * Features animated shimmering holographic plasma edges and specular lighting.
+ */
+@Composable
+fun Cyber3dEmbossedPill(
+    onClick: (() -> Unit)? = null,
+    borderColor: Color = CyberGlassBorder,
+    glowGradient: List<Color> = listOf(Color(0xEE0E242C), Color(0xFF041015)),
+    content: @Composable RowScope.() -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "PillShimmer")
+    val shimmerAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1800, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ShimmerAlpha"
+    )
+
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.18f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.55f)
+                    )
+                )
+            )
+            .then(
+                if (onClick != null) Modifier.clickable { onClick() } else Modifier
+            )
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(1.dp)
+                .clip(RoundedCornerShape(15.dp))
+                .background(Brush.verticalGradient(glowGradient))
+                .border(
+                    BorderStroke(
+                        1.dp,
+                        Brush.linearGradient(
+                            listOf(
+                                borderColor.copy(alpha = shimmerAlpha),
+                                Color(0x2200E5FF),
+                                borderColor.copy(alpha = shimmerAlpha * 0.8f)
+                            )
+                        )
+                    ),
+                    RoundedCornerShape(15.dp)
+                )
+                .padding(horizontal = 8.dp, vertical = 5.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                content()
+            }
+        }
+    }
+}
+
+/**
+ * Adorable Kawaii Rolling Bounce Number Transition for Clock Digits.
+ * Implements smooth spring-damped vertical roll with playful scale pop overshoot.
+ */
+@Composable
+fun KawaiiAnimatedDigitPair(
+    digits: String,
+    color: Color,
+    fontSize: androidx.compose.ui.unit.TextUnit = 32.sp,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
+        digits.forEachIndexed { idx, char ->
+            AnimatedContent(
+                targetState = char,
+                transitionSpec = {
+                    (slideInVertically(
+                        animationSpec = spring(
+                            dampingRatio = Spring.DampingRatioMediumBouncy,
+                            stiffness = Spring.StiffnessLow
+                        )
+                    ) { height -> -height } + fadeIn(tween(180)) + scaleIn(
+                        initialScale = 0.65f,
+                        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy)
+                    )) togetherWith (slideOutVertically(
+                        animationSpec = tween(220, easing = FastOutSlowInEasing)
+                    ) { height -> height } + fadeOut(tween(160)) + scaleOut(
+                        targetScale = 1.18f,
+                        animationSpec = tween(220)
+                    ))
+                },
+                label = "KawaiiDigit_${idx}_$char"
+            ) { targetChar ->
+                Text(
+                    text = targetChar.toString(),
+                    color = color,
+                    fontSize = fontSize,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = AudiowideFont,
+                    letterSpacing = 1.sp
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Computes ultra-smooth 24-bit Truecolor spectrum shifting using 360-degree HSV space.
+ */
+fun cyber24BitColorShift(phaseDeg: Float, saturation: Float = 0.88f, brightness: Float = 1.0f, alpha: Float = 1.0f): Color {
+    val normHue = (phaseDeg % 360f + 360f) % 360f
+    val hsv = floatArrayOf(normHue, saturation.coerceIn(0f, 1f), brightness.coerceIn(0f, 1f))
+    val argb = android.graphics.Color.HSVToColor((alpha.coerceIn(0f, 1f) * 255).toInt(), hsv)
+    return Color(argb)
+}
+
+@Composable
+fun KawaiiHeartColon(
+    color: Color,
+    scale: Float,
+    size: androidx.compose.ui.unit.Dp = 9.5.dp,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        modifier = modifier
+            .padding(horizontal = 3.dp)
+            .scale(scale)
+    ) {
+        CyberHeartGlyph(color = color, size = size)
+        CyberHeartGlyph(color = color, size = size)
+    }
+}
+
+@Composable
+fun CyberHeartGlyph(
+    color: Color,
+    size: androidx.compose.ui.unit.Dp = 9.5.dp
+) {
+    Canvas(modifier = Modifier.size(size)) {
+        val w = this.size.width
+        val h = this.size.height
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(w * 0.5f, h * 0.88f)
+            cubicTo(w * 0.08f, h * 0.58f, 0f, h * 0.38f, 0f, h * 0.24f)
+            cubicTo(0f, h * 0.08f, w * 0.18f, 0f, w * 0.36f, 0f)
+            cubicTo(w * 0.44f, 0f, w * 0.5f, h * 0.08f, w * 0.5f, h * 0.16f)
+            cubicTo(w * 0.5f, h * 0.08f, w * 0.56f, 0f, w * 0.64f, 0f)
+            cubicTo(w * 0.82f, 0f, w, h * 0.08f, w, h * 0.24f)
+            cubicTo(w, h * 0.38f, w * 0.92f, h * 0.58f, w * 0.5f, h * 0.88f)
+            close()
+        }
+        drawPath(path = path, color = color)
+    }
+}
+
+/**
+ * Hatsune Miku Ephemeral Cyber Plasma Glow Clock.
+ * Features 24-bit continuous Truecolor spectrum shifting across digits and colon,
+ * kawaii rolling-bounce number transitions, animated floating cyber stardust particles,
+ * sweeping holographic laser scanlines, 5-layer volumetric bloom, chromatic aberration fringe,
+ * 1-second cadence heartbeat colon, and 6-channel reactive phosphor spectrum bars.
+ */
+@Composable
+fun CyberPlasmaGlowClock(
+    time: String,
+    date: String
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "ClockPlasmaPulse")
+
+    // Continuous 24-Bit Truecolor Spectrum Shift Engine (Rotates 360 degrees smoothly)
+    val colorShiftPhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(8000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "24BitColorShift"
+    )
+
+    // Real system wall-clock second tick (0 or 1)
+    val secondTick by produceState(initialValue = (System.currentTimeMillis() / 1000) % 2) {
+        while (true) {
+            val sec = (System.currentTimeMillis() / 1000)
+            value = sec % 2
+            val msToNextSec = 1000L - (System.currentTimeMillis() % 1000L)
+            delay(msToNextSec.coerceIn(50L, 1000L))
+        }
+    }
+
+    // Snappy tactile heartbeat scale bounce on every single second tick
+    val heartbeatScale = remember { Animatable(1.0f) }
+    LaunchedEffect(secondTick) {
+        heartbeatScale.snapTo(1.32f)
+        heartbeatScale.animateTo(
+            targetValue = 1.0f,
+            animationSpec = tween(durationMillis = 380, easing = FastOutSlowInEasing)
+        )
+    }
+
+    // 24-Bit Smooth Gradient Colors for Numbers and Integrated Colon Shift:
+    val hoursShiftColor = cyber24BitColorShift(colorShiftPhase, saturation = 0.85f, brightness = 1.0f)
+    val hoursCoreColor = cyber24BitColorShift(colorShiftPhase, saturation = 0.12f, brightness = 1.0f)
+
+    // Integrated Colon: Seamlessly flowing with dynamic harmonic offset on second tick
+    val colonHarmonicOffset = if (secondTick == 0L) 25f else 165f
+    val colonHue = colorShiftPhase + colonHarmonicOffset
+    val colonColor = cyber24BitColorShift(colonHue, saturation = 0.95f, brightness = 1.0f)
+    val colonHaloColor = cyber24BitColorShift(colonHue + 20f, saturation = 0.85f, brightness = 0.95f)
+
+    // Minutes digit: Phase offset for continuous flowing gradient across the face
+    val minutesShiftColor = cyber24BitColorShift(colorShiftPhase + 50f, saturation = 0.85f, brightness = 1.0f)
+    val minutesCoreColor = cyber24BitColorShift(colorShiftPhase + 50f, saturation = 0.12f, brightness = 1.0f)
+
+    // Breathing plasma halo alpha
+    val glowAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.40f,
+        targetValue = 0.95f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2200, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "PlasmaAlpha"
+    )
+
+    // Chromatic aberration fringe phase
+    val shimmerPhase by infiniteTransition.animateFloat(
+        initialValue = -2.8f,
+        targetValue = 2.8f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(3200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "ChromaticPhase"
+    )
+
+    // Particle drift animation phase (0..1 continuous)
+    val particlePhase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(4000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ParticlePhase"
+    )
+
+    // Sweeping holographic scanline Y position
+    val scanlineY by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2800, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "ScanlineY"
+    )
+
+    // 6-Band animated micro equalizer
+    val bar1 by infiniteTransition.animateFloat(initialValue = 0.25f, targetValue = 0.95f, animationSpec = infiniteRepeatable(tween(420), RepeatMode.Reverse), label = "b1")
+    val bar2 by infiniteTransition.animateFloat(initialValue = 0.85f, targetValue = 0.20f, animationSpec = infiniteRepeatable(tween(580), RepeatMode.Reverse), label = "b2")
+    val bar3 by infiniteTransition.animateFloat(initialValue = 0.35f, targetValue = 1.0f, animationSpec = infiniteRepeatable(tween(340), RepeatMode.Reverse), label = "b3")
+    val bar4 by infiniteTransition.animateFloat(initialValue = 0.90f, targetValue = 0.45f, animationSpec = infiniteRepeatable(tween(510), RepeatMode.Reverse), label = "b4")
+    val bar5 by infiniteTransition.animateFloat(initialValue = 0.20f, targetValue = 0.80f, animationSpec = infiniteRepeatable(tween(390), RepeatMode.Reverse), label = "b5")
+    val bar6 by infiniteTransition.animateFloat(initialValue = 0.70f, targetValue = 0.30f, animationSpec = infiniteRepeatable(tween(620), RepeatMode.Reverse), label = "b6")
+
+    val timeParts = remember(time) {
+        if (time.contains(":")) {
+            val idx = time.indexOf(":")
+            Pair(time.substring(0, idx), time.substring(idx + 1))
+        } else {
+            Pair(time, "")
+        }
+    }
+
+    Column {
+        Box(contentAlignment = Alignment.CenterStart) {
+            // Layer 1: Ambient Floating Cyber Particles & Stardust Canvas
+            Canvas(
+                modifier = Modifier
+                    .size(width = 135.dp, height = 40.dp)
+            ) {
+                val particles = listOf(
+                    Triple(0.12f, 0.25f, Color(0xFF00E5FF)),
+                    Triple(0.28f, 0.65f, Color(0xFFFF007F)),
+                    Triple(0.45f, 0.15f, Color(0xFF00FFCC)),
+                    Triple(0.58f, 0.80f, Color(0xFFFFFFFF)),
+                    Triple(0.72f, 0.35f, Color(0xFF00E5FF)),
+                    Triple(0.85f, 0.70f, Color(0xFFFF007F)),
+                    Triple(0.92f, 0.20f, Color(0xFF76FF03)),
+                    Triple(0.38f, 0.90f, Color(0xFF00E5FF)),
+                    Triple(0.65f, 0.45f, Color(0xFFFFD600))
+                )
+
+                particles.forEachIndexed { i, p ->
+                    val baseX = p.first * size.width
+                    val baseY = p.second * size.height
+                    val driftY = (baseY - (particlePhase * size.height) + (i * 12f)) % size.height
+                    val wobbleX = baseX + (kotlin.math.sin((particlePhase * 6.28f) + i) * 6f).toFloat()
+                    val pAlpha = (kotlin.math.sin((particlePhase * 3.14f) + (i * 0.7f)).toFloat().coerceIn(0.15f, 0.9f)) * glowAlpha
+                    val radius = if (i % 2 == 0) 2.2f else 1.5f
+
+                    drawCircle(
+                        color = p.third.copy(alpha = pAlpha),
+                        radius = radius,
+                        center = Offset(wobbleX, driftY)
+                    )
+                }
+
+                // Sweeping Holographic Cyber Laser Scanline
+                val scanY = scanlineY * size.height
+                drawLine(
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            hoursShiftColor.copy(alpha = 0.45f),
+                            Color.White.copy(alpha = 0.75f),
+                            minutesShiftColor.copy(alpha = 0.45f),
+                            Color.Transparent
+                        )
+                    ),
+                    start = Offset(0f, scanY),
+                    end = Offset(size.width, scanY),
+                    strokeWidth = 1.2f
+                )
+            }
+
+            // Layer 2: Radiant Volumetric 24-Bit Plasma Halo
+            Box(
+                Modifier
+                    .offset(x = 1.dp, y = 2.dp)
+                    .size(width = 135.dp, height = 40.dp)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                hoursShiftColor.copy(alpha = glowAlpha * 0.65f),
+                                minutesShiftColor.copy(alpha = glowAlpha * 0.30f),
+                                Color.Transparent
+                            )
+                        )
+                    )
+            )
+
+            // Layer 3: Chromatic Aberration Fringe (24-Bit Spectrum Offset 1)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.offset(x = (-1.2).dp + (shimmerPhase * 0.25f).dp, y = (-0.7).dp)
+            ) {
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.first,
+                    color = cyber24BitColorShift(colorShiftPhase + 180f, saturation = 0.9f, brightness = 0.95f, alpha = glowAlpha * 0.80f),
+                    fontSize = 36.sp
+                )
+                KawaiiHeartColon(
+                    color = colonHaloColor.copy(alpha = 0.9f),
+                    scale = heartbeatScale.value
+                )
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.second,
+                    color = cyber24BitColorShift(colorShiftPhase + 230f, saturation = 0.9f, brightness = 0.95f, alpha = glowAlpha * 0.80f),
+                    fontSize = 36.sp
+                )
+            }
+
+            // Layer 4: Chromatic Aberration Fringe (24-Bit Spectrum Offset 2)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.offset(x = (1.2).dp - (shimmerPhase * 0.25f).dp, y = (0.9).dp)
+            ) {
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.first,
+                    color = cyber24BitColorShift(colorShiftPhase + 290f, saturation = 0.9f, brightness = 0.95f, alpha = glowAlpha * 0.70f),
+                    fontSize = 36.sp
+                )
+                KawaiiHeartColon(
+                    color = colonHaloColor.copy(alpha = 0.85f),
+                    scale = heartbeatScale.value
+                )
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.second,
+                    color = cyber24BitColorShift(colorShiftPhase + 340f, saturation = 0.9f, brightness = 0.95f, alpha = glowAlpha * 0.70f),
+                    fontSize = 36.sp
+                )
+            }
+
+            // Layer 5: Intense 24-Bit Neon Under-Glow
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.offset(x = 0.6.dp, y = 0.6.dp)
+            ) {
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.first,
+                    color = hoursShiftColor.copy(alpha = 0.95f),
+                    fontSize = 36.sp
+                )
+                KawaiiHeartColon(
+                    color = colonColor,
+                    scale = heartbeatScale.value
+                )
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.second,
+                    color = minutesShiftColor.copy(alpha = 0.95f),
+                    fontSize = 36.sp
+                )
+            }
+
+            // Layer 6: Brilliant 24-Bit Holographic Luminous Core with Heartbeat Colon
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.first,
+                    color = hoursCoreColor,
+                    fontSize = 36.sp
+                )
+                KawaiiHeartColon(
+                    color = colonColor,
+                    scale = heartbeatScale.value
+                )
+                KawaiiAnimatedDigitPair(
+                    digits = timeParts.second,
+                    color = minutesCoreColor,
+                    fontSize = 36.sp
+                )
+            }
+        }
+
+        Spacer(Modifier.height(2.dp))
+
+        // Date & Holographic Spectrum Wave Sub-header with Multi-Layer Volumetric Drop-Glow
+        Box(contentAlignment = Alignment.CenterStart) {
+            // Layer 1: Radiant Neon Drop-Glow Shadow
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.offset(x = 0.8.dp, y = 0.8.dp)
+            ) {
+                val dateParts = date.split("/")
+                if (dateParts.size == 3) {
+                    Text(
+                        text = dateParts[0],
+                        color = MikuCyan.copy(alpha = glowAlpha * 0.7f),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.6.sp
+                    )
+                    Text(
+                        text = " / ",
+                        color = MikuNeonPink.copy(alpha = glowAlpha * 0.75f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                    Text(
+                        text = dateParts[1],
+                        color = Color(0xFF56F0E0).copy(alpha = glowAlpha * 0.7f),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.6.sp
+                    )
+                    Text(
+                        text = " / ",
+                        color = MikuNeonPink.copy(alpha = glowAlpha * 0.75f),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                    Text(
+                        text = dateParts[2],
+                        color = Color(0xFFB388FF).copy(alpha = glowAlpha * 0.7f),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.6.sp
+                    )
+                }
+            }
+
+            // Layer 2: Vivid Luminous Core Surface
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                val dateParts = date.split("/")
+                if (dateParts.size == 3) {
+                    Text(
+                        text = dateParts[0],
+                        color = Color(0xFF80FFFF),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.6.sp
+                    )
+                    Text(
+                        text = " / ",
+                        color = Color(0xFFFF69B4),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                    Text(
+                        text = dateParts[1],
+                        color = Color(0xFF70FFF0),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.6.sp
+                    )
+                    Text(
+                        text = " / ",
+                        color = Color(0xFFFF69B4),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                    Text(
+                        text = dateParts[2],
+                        color = Color(0xFFD1B3FF),
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 0.6.sp
+                    )
+                } else {
+                    Text(
+                        text = date,
+                        color = MikuCyan,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                // 6-Channel Mini Audio Spectrum Phosphor Bars
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(1.5.dp),
+                    modifier = Modifier.height(11.dp)
+                ) {
+                    Box(Modifier.width(2.dp).height((11 * bar1).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuCyan, Color(0xFF00FFCC)))))
+                    Box(Modifier.width(2.dp).height((11 * bar2).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuNeonPink, Color(0xFFFF4081)))))
+                    Box(Modifier.width(2.dp).height((11 * bar3).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(Color(0xFF00FF7F), Color(0xFF76FF03)))))
+                    Box(Modifier.width(2.dp).height((11 * bar4).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuCyan, Color(0xFF00B0FF)))))
+                    Box(Modifier.width(2.dp).height((11 * bar5).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuNeonPink, Color(0xFFFF007F)))))
+                    Box(Modifier.width(2.dp).height((11 * bar6).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(Color(0xFF00FFCC), MikuCyan))))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Hatsune Miku Full Cyber Notification Shade & Quick Settings Modal.
+ * Features 3D embossed quick hardware tiles, Now Playing telemetry,
+ * Ingress sync stream card, and Data-Only SIM Shield indicator.
+ */
+@Composable
+fun CyberNotificationShadeModal(
+    onClose: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenAudioSettings: () -> Unit,
+    batteryPct: Int,
+    isCharging: Boolean,
+    isWifiConnected: Boolean,
+    currentTime: String,
+    currentDate: String
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Hardware Audio States
+    var gainMode by remember { mutableStateOf(CirrusLogicManager.getGainMode(ctx)) }
+    var filterMode by remember { mutableStateOf(CirrusLogicManager.getDigitalFilter(ctx)) }
+    var dreEnabled by remember { mutableStateOf(CirrusLogicManager.isDreEnabled(ctx)) }
+    var isPulsarActive by remember { mutableStateOf(true) }
+
+    // Telemetry & Weather
+    val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
+
+    // Brightness Controller
+    val cr = ctx.contentResolver
+    var brightness by remember {
+        mutableStateOf(
+            try {
+                android.provider.Settings.System.getInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+            } catch (_: Throwable) { 128 }
+        )
+    }
+
+    // Volume Controller
+    val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager }
+    var streamVol by remember {
+        mutableStateOf(am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: 8)
+    }
+    val maxVol = remember { am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 15 }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0xE6040D12))
+            .clickable { onClose() }
+    ) {
+        // High-Tech Cyber Glass Container (Safe screen inset with smooth corners)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.94f)
+                .align(Alignment.TopCenter)
+                .padding(top = 16.dp, start = 8.dp, end = 8.dp, bottom = 6.dp)
+                .clickable(enabled = false) {}
+                .clip(RoundedCornerShape(22.dp))
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            Color(0xFF071922),
+                            Color(0xFF041017),
+                            Color(0xFA020A0E)
+                        )
+                    )
+                )
+                .border(
+                    BorderStroke(
+                        1.2.dp,
+                        Brush.linearGradient(
+                            listOf(
+                                MikuCyan.copy(alpha = 0.85f),
+                                CyberGlassBorder.copy(alpha = 0.4f),
+                                MikuNeonPink.copy(alpha = 0.65f)
+                            )
+                        )
+                    ),
+                    RoundedCornerShape(22.dp)
+                )
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+        ) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Grabber handle — swipe UP or tap to dismiss the shade. This is the fix for the
+                // "soundboard can't be dismissed at all" trap: the scrim tap was swallowed by the
+                // container's disabled-clickable, there was no drag-to-dismiss, and the ✕ CLOSE
+                // button sat scrolled off the bottom. A fixed grabber at the top gives a reliable,
+                // discoverable close that never scrolls away.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .pointerInput(Unit) {
+                            detectVerticalDragGestures { _, dragAmount ->
+                                if (dragAmount < -4f) onClose()
+                            }
+                        },
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Box(
+                        Modifier
+                            .padding(bottom = 8.dp)
+                            .width(46.dp)
+                            .height(5.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(MikuCyan.copy(alpha = 0.7f))
+                            .clickable { onClose() }
+                    )
+                }
+
+                // Top Control Header: Clock, Battery Pill & Settings
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CyberPlasmaGlowClock(time = currentTime, date = currentDate)
+
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Battery Chip
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(Color(0xFF061820))
+                                .border(0.8.dp, MikuCyan.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                                .padding(horizontal = 8.dp, vertical = 5.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
+                                    contentDescription = null,
+                                    tint = if (isCharging) Color(0xFF00E676) else MikuCyan,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    "$batteryPct%",
+                                    color = Color.White,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = AudiowideFont
+                                )
+                            }
+                        }
+
+                        // Open Miku Cyber Settings Gear Button
+                        IconButton(
+                            onClick = onOpenSettings,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x3300E5FF))
+                                .border(1.dp, MikuCyan, CircleShape)
+                        ) {
+                            Icon(Icons.Default.Settings, contentDescription = "Cyber Settings", tint = MikuCyan, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Pixel-Style Large Dual Network / Bluetooth Connectivity Pills
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Internet Card (Wi-Fi + 4G LTE)
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(if (isWifiConnected) MikuCyan.copy(alpha = 0.2f) else Color(0xFF081820))
+                            .border(1.dp, if (isWifiConnected) MikuCyan else Color(0xFF1E3A45), RoundedCornerShape(14.dp))
+                            .clickable {
+                                try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) } catch (_: Throwable) {}
+                            }
+                            .padding(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                if (isWifiConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
+                                contentDescription = null,
+                                tint = if (isWifiConnected) MikuCyan else Color.Gray,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("Internet", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                Text(if (isWifiConnected) "5GHz Wi-Fi + LTE" else "LTE Connected", color = MikuCyan, fontSize = 9.sp)
+                            }
+                        }
+                    }
+
+                    // Bluetooth Card (LDAC Hi-Res)
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(Color(0xFF0A1828))
+                            .border(1.dp, Color(0xFF2979FF).copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                            .clickable {
+                                try { ctx.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)) } catch (_: Throwable) {}
+                            }
+                            .padding(10.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Default.Bluetooth,
+                                contentDescription = null,
+                                tint = Color(0xFF2979FF),
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("Bluetooth", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                Text("LDAC Hi-Res 990k", color = Color(0xFF82B1FF), fontSize = 9.sp)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Interactive Haptic Brightness Slider (Pixel-Style AOSP Bar)
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF081C24))
+                        .border(1.dp, MikuCyan.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.BrightnessMedium, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Slider(
+                            value = brightness.toFloat(),
+                            onValueChange = { newB ->
+                                brightness = newB.toInt()
+                                try {
+                                    android.provider.Settings.System.putInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS, brightness)
+                                } catch (_: Throwable) {}
+                            },
+                            valueRange = 10f..255f,
+                            colors = SliderDefaults.colors(
+                                thumbColor = MikuCyan,
+                                activeTrackColor = MikuCyan,
+                                inactiveTrackColor = Color(0xFF0D2C35)
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Master Audio Output & Volume Slider
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFF0A1420))
+                        .border(1.dp, Color(0xFF7C4DFF).copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFFB388FF), modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Slider(
+                            value = streamVol.toFloat(),
+                            onValueChange = { newV ->
+                                streamVol = newV.toInt()
+                                try {
+                                    am?.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, streamVol, 0)
+                                } catch (_: Throwable) {}
+                            },
+                            valueRange = 0f..maxVol.toFloat(),
+                            colors = SliderDefaults.colors(
+                                thumbColor = Color(0xFFB388FF),
+                                activeTrackColor = Color(0xFF7C4DFF),
+                                inactiveTrackColor = Color(0xFF140D26)
+                            ),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("${((streamVol.toFloat() / maxVol.toFloat()) * 100).toInt()}%", color = Color(0xFFB388FF), fontSize = 10.sp, fontFamily = AudiowideFont)
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // 8 Cyber Quick Hardware Tiles (2x4 Grid)
+                Text(
+                    text = "MAGICAL MIRAI SOUNDBOARD",
+                    color = MikuCyan,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = AudiowideFont,
+                    letterSpacing = 1.sp
+                )
+
+                Spacer(Modifier.height(6.dp))
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    // Row 1: CS43131 Gain + Filter Mode
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "MASTER DYN / GAIN",
+                            subtitle = if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH (+6dB)" else "LOW (0dB)",
+                            icon = Icons.Default.VolumeUp,
+                            accentColor = if (gainMode == CirrusLogicManager.GainMode.HIGH) MikuNeonPink else MikuCyan,
+                            isActive = gainMode == CirrusLogicManager.GainMode.HIGH,
+                            onClick = {
+                                val next = if (gainMode == CirrusLogicManager.GainMode.LOW) CirrusLogicManager.GainMode.HIGH else CirrusLogicManager.GainMode.LOW
+                                gainMode = next
+                                scope.launch(Dispatchers.IO) {
+                                    CirrusLogicManager.setGainMode(ctx, next)
+                                }
+                            }
+                        )
+
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "VOCAL FILTER",
+                            subtitle = filterMode.label,
+                            icon = Icons.Default.Tune,
+                            accentColor = MikuCyan,
+                            isActive = true,
+                            onClick = {
+                                val all = CirrusLogicManager.DigitalFilter.values()
+                                val next = all[(filterMode.ordinal + 1) % all.size]
+                                filterMode = next
+                                scope.launch(Dispatchers.IO) {
+                                    CirrusLogicManager.setDigitalFilter(ctx, next)
+                                }
+                            }
+                        )
+                    }
+
+                    // Row 2: Pulsar RGB + Direct ALSA Bypass
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "PULSAR RGB",
+                            subtitle = if (isPulsarActive) "BPM SYNC (ON)" else "DISABLED",
+                            icon = Icons.Default.Lightbulb,
+                            accentColor = MikuNeonPink,
+                            isActive = isPulsarActive,
+                            onClick = {
+                                isPulsarActive = !isPulsarActive
+                                scope.launch(Dispatchers.IO) {
+                                    PulsarLight.setMode(ctx, if (isPulsarActive) PulsarLight.Mode.AUDIOPHILE_AUTO else PulsarLight.Mode.OFF)
+                                }
+                            }
+                        )
+
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "BIT-PERFECT ALSA",
+                            subtitle = if (dreEnabled) "DRE ENHANCED" else "STANDARD HAL",
+                            icon = Icons.Default.Headphones,
+                            accentColor = Color(0xFF00E676),
+                            isActive = dreEnabled,
+                            onClick = {
+                                dreEnabled = !dreEnabled
+                                scope.launch(Dispatchers.IO) {
+                                    CirrusLogicManager.setDreEnabled(ctx, dreEnabled)
+                                }
+                            }
+                        )
+                    }
+
+                    // Row 3: Wireless ADB + System Tools
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val adbIp = remember(isWifiConnected) {
+                            try {
+                                val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                                val ipInt = wm?.connectionInfo?.ipAddress ?: 0
+                                if (ipInt != 0) {
+                                    String.format(
+                                        Locale.US,
+                                        "%d.%d.%d.%d",
+                                        ipInt and 0xff,
+                                        ipInt shr 8 and 0xff,
+                                        ipInt shr 16 and 0xff,
+                                        ipInt shr 24 and 0xff
+                                    )
+                                } else ""
+                            } catch (_: Throwable) { "" }
+                        }
+                        var isAdbEnabled by remember {
+                            mutableStateOf(
+                                try {
+                                    val p = Runtime.getRuntime().exec("getprop service.adb.tcp.port")
+                                    p.inputStream.bufferedReader().readText().trim() == "5555"
+                                } catch (_: Throwable) { false }
+                            )
+                        }
+
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "WIRELESS ADB",
+                            subtitle = if (isAdbEnabled) "$adbIp:5555" else "PORT 5555",
+                            icon = Icons.Default.DeveloperMode,
+                            accentColor = if (isAdbEnabled) Color(0xFF00E676) else MikuNeonPink,
+                            isActive = isAdbEnabled,
+                            onClick = {
+                                val next = !isAdbEnabled
+                                isAdbEnabled = next
+                                scope.launch(Dispatchers.IO) {
+                                    // persist.adb.tcp.port, NOT service.adb.tcp.port — the service.
+                                    // prop flips adbd TCP-ONLY and kills USB adb (bit us hard once);
+                                    // persist. adds TCP alongside USB and survives reboots.
+                                    val cmd = if (next) {
+                                        "setprop persist.adb.tcp.port 5555 && stop adbd && start adbd"
+                                    } else {
+                                        "setprop persist.adb.tcp.port -1 && stop adbd && start adbd"
+                                    }
+                                    try {
+                                        Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
+                                    } catch (_: Throwable) {}
+                                }
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    if (next) "⚡ Wireless ADB Active on $adbIp:5555" else "Wireless ADB Disabled",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        )
+
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "DEV OPTIONS",
+                            subtitle = "SYSTEM & TOOLS",
+                            icon = Icons.Default.Build,
+                            accentColor = MikuCyan,
+                            isActive = true,
+                            onClick = {
+                                onClose()
+                                val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                if (intent != null) ctx.startActivity(intent)
+                            }
+                        )
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // Pause-on-unplug — mirrors the toggle in Miku Music's Sound Settings page
+                        // (quick settings + sound page only; deliberately NOT in the volume modal).
+                        // State lives in Settings.Global "miku_pause_on_unplug"; the broadcast lets
+                        // the player apply it live to the running ExoPlayer.
+                        var pauseOnUnplug by remember {
+                            mutableStateOf(
+                                android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_pause_on_unplug", 1) == 1
+                            )
+                        }
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "PAUSE ON UNPLUG",
+                            subtitle = if (pauseOnUnplug) "STOCK BEHAVIOR" else "KEEP PLAYING",
+                            icon = Icons.Default.HeadsetOff,
+                            accentColor = if (pauseOnUnplug) Color(0xFF00E676) else MikuNeonPink,
+                            isActive = pauseOnUnplug,
+                            onClick = {
+                                val next = !pauseOnUnplug
+                                pauseOnUnplug = next
+                                scope.launch(Dispatchers.IO) {
+                                    runCatching {
+                                        android.provider.Settings.Global.putInt(
+                                            ctx.contentResolver, "miku_pause_on_unplug", if (next) 1 else 0
+                                        )
+                                    }.getOrNull() ?: RootShell.execFast(
+                                        "settings put global miku_pause_on_unplug ${if (next) 1 else 0}"
+                                    )
+                                }
+                                ctx.sendBroadcast(
+                                    Intent("com.miku.player.SET_PAUSE_ON_UNPLUG")
+                                        .setPackage("com.miku.player")
+                                        .putExtra("enabled", next)
+                                )
+                            }
+                        )
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // Data-Only SIM Shield Banner
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0x3300E676))
+                        .border(1.dp, Color(0xFF00E676), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF00E676)))
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "🛡️ DATA-ONLY SIM SHIELD: GOOGLE FI & IMS NAGS SUPPRESSED",
+                            color = Color(0xFF00E676),
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                // Weather & Conditions Card
+                val w = weatherState.weather
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0x3300E5FF))
+                        .border(1.dp, MikuCyan, RoundedCornerShape(14.dp))
+                        .padding(10.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(w.icon, fontSize = 20.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = "${w.tempF.toInt()}°F · ${w.summary} (Feels ${w.feelsLikeF.toInt()}°F)",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = AudiowideFont
+                            )
+                            Text(
+                                text = "💧 Humidity: ${w.humidityPct}% · 💨 Wind: ${w.windSpeedMph.toInt()}mph ${w.windDirectionCompass} · ☔ Precip: ${w.precipitationProbPct}%",
+                                color = MikuTextSecondary,
+                                fontSize = 9.sp
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Footer Action Bar: Power Menu (Reboot / Power Off / Dismiss)
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot")).waitFor()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
+                        border = BorderStroke(1.dp, MikuCyan),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(38.dp)
+                    ) {
+                        Text("⚡ REBOOT", color = MikuCyan, fontSize = 10.sp, fontFamily = AudiowideFont)
+                    }
+
+                    Button(
+                        onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot -p")).waitFor()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
+                        border = BorderStroke(1.dp, MikuNeonPink),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(38.dp)
+                    ) {
+                        Text("💤 POWER OFF", color = MikuNeonPink, fontSize = 10.sp, fontFamily = AudiowideFont)
+                    }
+
+                    Button(
+                        onClick = onClose,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF)),
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.weight(1f).height(38.dp)
+                    ) {
+                        Text("✕ CLOSE", color = Color.White, fontSize = 10.sp, fontFamily = AudiowideFont)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun CyberQuickTile(
+    modifier: Modifier = Modifier,
+    title: String,
+    subtitle: String,
+    icon: ImageVector,
+    accentColor: Color,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    val tileShape = remember { RoundedCornerShape(14.dp) }
+
+    // Outer 3D Embossed Container with Specular Top Bevel
+    Box(
+        modifier = modifier
+            .clip(tileShape)
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = if (isActive) 0.25f else 0.12f),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = 0.6f)
+                    )
+                )
+            )
+            .clickable { onClick() }
+    ) {
+        // Inner Elevated Holographic Card Surface
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(0.9.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(
+                    Brush.verticalGradient(
+                        if (isActive) listOf(accentColor.copy(alpha = 0.35f), Color(0xFF071922), Color(0xFF030D12))
+                        else listOf(Color(0xEE0B222C), Color(0xFF05131A), Color(0xFF02090D))
+                    )
+                )
+                .border(
+                    BorderStroke(
+                        1.dp,
+                        Brush.linearGradient(
+                            if (isActive) listOf(
+                                accentColor.copy(alpha = 0.95f),
+                                Color(0xFFB388FF).copy(alpha = 0.6f),
+                                accentColor.copy(alpha = 0.8f)
+                            )
+                            else listOf(
+                                CyberGlassBorder.copy(alpha = 0.7f),
+                                Color.Transparent,
+                                CyberGlassBorder.copy(alpha = 0.4f)
+                            )
+                        )
+                    ),
+                    RoundedCornerShape(13.dp)
+                )
+                .padding(horizontal = 10.dp, vertical = 9.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 3D Glowing Icon Halo
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .clip(CircleShape)
+                        .background(if (isActive) accentColor.copy(alpha = 0.22f) else Color(0x18FFFFFF))
+                        .border(
+                            0.8.dp,
+                            if (isActive) accentColor.copy(alpha = 0.8f) else Color.White.copy(alpha = 0.2f),
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        icon,
+                        contentDescription = title,
+                        tint = if (isActive) accentColor else Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                Column {
+                    Text(
+                        text = title,
+                        color = Color.White,
+                        fontSize = 9.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = subtitle,
+                        color = if (isActive) accentColor else MikuTextSecondary,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+
+

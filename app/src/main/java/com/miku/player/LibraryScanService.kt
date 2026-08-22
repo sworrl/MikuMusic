@@ -1,0 +1,327 @@
+package com.miku.player
+
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.MediaStore
+import androidx.core.app.NotificationCompat
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.Semaphore
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Optimized foreground Library Scanner for 10k+ tracks:
+ * 1. Rapid directory walk to identify all new/unindexed media.
+ * 2. Sorts by lastModified descending so newest files and albums are ingested first.
+ * 3. Batched concurrent MediaScanner ingestion with immediate checkpointing and live UI streaming.
+ * 4. Defers old media housekeeping until all new tracks are fully processed.
+ */
+class LibraryScanService : Service() {
+    private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile private var underPressure = false
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        underPressure = level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (ScanProgress.active) return START_NOT_STICKY
+        startForeground(NOTIF_ID, buildNotification("Scanning for new audio files…"))
+        val wl = (getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "miku:libraryscan")
+        wl.acquire(30 * 60_000L)
+        wakeLock = wl
+        runScan()
+        return START_NOT_STICKY
+    }
+
+    private fun runScan() {
+        val app = applicationContext
+        val main = Handler(Looper.getMainLooper())
+        val roots = LinkedHashSet<String>()
+        android.os.Environment.getExternalStorageDirectory()?.absolutePath?.let { roots.add(it) }
+        externalCacheDirs.forEach { d -> d?.absolutePath?.substringBefore("/Android")?.let { roots.add(it) } }
+        ScanProgress.reset()
+        PulsarLight.startHddActivity()
+
+        Thread {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND + android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE)
+            val before = LibraryCounts.countTracks(app)
+
+            // 1. Load known tracks from MediaStore and crash checkpoint
+            val known = HashSet<String>()
+            try {
+                app.contentResolver.query(
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Audio.Media.DATA), null, null, null
+                )?.use { c ->
+                    val col = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                    while (c.moveToNext()) c.getString(col)?.let { known.add(it) }
+                }
+            } catch (_: Throwable) {}
+            known.addAll(ScanCheckpoint.load(app))
+            val checkpoint = ScanCheckpoint.Writer(app)
+
+            val audioExts = setOf("flac", "mp3", "wav", "m4a", "aac", "ogg", "opus", "dsf", "dff", "alac", "aif", "aiff", "wma", "ape", "cue", "iso")
+            val videoExts = setOf("mp4", "mkv", "webm", "avi", "mov", "ts", "m4v", "3gp")
+            val mediaExts = audioExts + videoExts
+
+            val visited = ScanProgress.visited
+            val newFound = ScanProgress.newFound
+            val done = AtomicBoolean(false)
+            val lastRefreshAt = AtomicLong(0L)
+            val lastNotifyAt = AtomicLong(0L)
+
+            fun maybeRefreshUi() {
+                val now = System.currentTimeMillis()
+                if (now - lastRefreshAt.get() > 1500L) {
+                    lastRefreshAt.set(now)
+                    ScanProgress.bump()
+                    checkpoint.flush()
+                }
+                if (now - lastNotifyAt.get() > 3000L) {
+                    lastNotifyAt.set(now)
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    nm.notify(NOTIF_ID, buildNotification("${ScanProgress.tagsScanned.get()}/${ScanProgress.tagsTotal} tracks indexed"))
+                }
+            }
+
+            fun reportFinish(completed: Boolean) {
+                if (!done.compareAndSet(false, true)) return
+                try {
+                    ScanProgress.phase = "Finalizing library…"
+                    val after = runCatching { LibraryCounts.countTracks(app) }.getOrDefault(before)
+                    val delta = after - before
+                    val msg = if (delta > 0) "✓ Found $delta new track${if (delta == 1) "" else "s"}"
+                              else "✓ Library up to date · $after tracks"
+                    val albums = runCatching { LibraryCounts.countDistinct(app, MediaStore.Audio.Media.ALBUM) }.getOrDefault(0)
+                    val artists = runCatching { LibraryCounts.countDistinct(app, MediaStore.Audio.Media.ARTIST) }.getOrDefault(0)
+                    ScanProgress.finish(delta, after, albums, artists)
+                    main.post { android.widget.Toast.makeText(app, msg, android.widget.Toast.LENGTH_SHORT).show() }
+                } finally {
+                    checkpoint.flush(); checkpoint.close()
+                    if (completed) ScanCheckpoint.clear(app)
+                    ScanProgress.bump()
+                    wakeLock?.let { if (it.isHeld) it.release() }
+                    wakeLock = null
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                    stopSelf()
+                }
+            }
+
+            ScanProgress.phase = "Discovering audio & video files…"
+            val newFiles = mutableListOf<DiscoveredItem>()
+            val jobDirs = mutableListOf<File>()
+            try {
+                roots.forEach { r ->
+                    val rootFile = File(r)
+                    rootFile.listFiles()?.forEach { entry ->
+                        if (entry.isDirectory) jobDirs.add(entry)
+                        else if (entry.isFile) {
+                            val ext = entry.extension.lowercase()
+                            if (ext in mediaExts) {
+                                visited.incrementAndGet()
+                                if (entry.absolutePath !in known) {
+                                    newFiles.add(DiscoveredItem(entry.absolutePath, entry.lastModified()))
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Throwable) {}
+
+            // Walk folders in parallel with background thread priority
+            val cores = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 3)
+            val walkPool = Executors.newFixedThreadPool(cores) { r ->
+                Thread(r, "MikuScanWalker").apply {
+                    priority = Thread.MIN_PRIORITY
+                }
+            }
+            val discoveredNew = java.util.Collections.synchronizedList(newFiles)
+            try {
+                jobDirs.map { dir ->
+                    walkPool.submit {
+                        try {
+                            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND + android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE)
+                            for (f in dir.walkTopDown().maxDepth(12)) {
+                                if (f.isFile) {
+                                    val ext = f.extension.lowercase()
+                                    // ONLY count and process genuine Audio & Video files (ignore all images/artwork)
+                                    if (ext in mediaExts) {
+                                        visited.incrementAndGet()
+                                        val path = f.absolutePath
+                                        if (path !in known) {
+                                            discoveredNew.add(DiscoveredItem(path, f.lastModified()))
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (_: Throwable) {}
+                    }
+                }.forEach { try { it.get() } catch (_: Throwable) {} }
+            } finally { walkPool.shutdown() }
+
+            if (discoveredNew.isEmpty()) {
+                reportFinish(completed = true)
+                return@Thread
+            }
+
+            // Sort by pre-cached lastModified descending
+            discoveredNew.sortByDescending { it.lastMod }
+            val totalNew = discoveredNew.size
+            newFound.set(totalNew)
+            ScanProgress.tagsTotal = totalNew
+            ScanProgress.phase = "Indexing $totalNew new files…"
+
+            // Crash-proof sequential batching with background priority and gentle pacing (zero audio underruns)
+            val scanGate = Semaphore(2)
+            val batches = discoveredNew.map { it.path }.chunked(64)
+            val batchPool = Executors.newFixedThreadPool(2) { r ->
+                Thread(r, "MikuScanBatcher").apply {
+                    priority = Thread.MIN_PRIORITY
+                }
+            }
+
+            try {
+                batches.forEach { batch ->
+                    scanGate.acquire()
+                    batchPool.submit {
+                        try {
+                            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND + android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE)
+                            android.media.MediaScannerConnection.scanFile(
+                                app,
+                                batch.toTypedArray(),
+                                null
+                            ) { path, _ ->
+                                if (path != null) {
+                                    checkpoint.record(path)
+                                    ScanProgress.tagsScanned.incrementAndGet()
+                                    maybeRefreshUi()
+                                }
+                            }
+                            // Yield CPU time to audio playback decoder & ALSA buffer threads
+                            Thread.sleep(12)
+                        } catch (_: Throwable) {
+                            ScanProgress.tagsScanned.addAndGet(batch.size)
+                            maybeRefreshUi()
+                        } finally {
+                            scanGate.release()
+                        }
+                    }
+                }
+            } finally {
+                batchPool.shutdown()
+            }
+
+            // Wait for in-flight batches to finish
+            while (ScanProgress.tagsScanned.get() < totalNew && !done.get()) {
+                MikuBrain.heartbeat(
+                    MikuBrain.BoneType.LIBRARY_SCANNER,
+                    MikuBrain.BoneState.ACTIVE,
+                    "Indexed ${ScanProgress.tagsScanned.get()}/$totalNew files",
+                    totalNew - ScanProgress.tagsScanned.get()
+                )
+                try { Thread.sleep(200) } catch (_: InterruptedException) { break }
+            }
+
+            MikuBrain.heartbeat(MikuBrain.BoneType.LIBRARY_SCANNER, MikuBrain.BoneState.IDLE, "Scan Complete")
+            PulsarLight.stopHddActivity(app)
+            reportFinish(completed = true)
+            main.postDelayed({ reportFinish(completed = false) }, 30 * 60_000L)
+        }.start()
+    }
+
+    private fun buildNotification(status: String): android.app.Notification {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel(CHANNEL_ID) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "Library Scan", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Miku Music is indexing your library"
+                }
+            )
+        }
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_popup_sync)
+            .setContentTitle("Miku Music — Scanning library")
+            .setContentText(status)
+            .setOngoing(true)
+            .setSilent(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .build()
+    }
+
+    override fun onDestroy() {
+        PulsarLight.stopHddActivity(this)
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        super.onDestroy()
+    }
+
+    companion object {
+        private const val CHANNEL_ID = "miku_library_scan"
+        private const val NOTIF_ID = 7200
+    }
+}
+
+data class DiscoveredItem(val path: String, val lastMod: Long)
+
+object ScanCheckpoint {
+    private const val FILE_NAME = "scan_checkpoint.txt"
+
+    fun load(ctx: Context): Set<String> {
+        val f = File(ctx.filesDir, FILE_NAME)
+        if (!f.exists()) return emptySet()
+        return try { f.readLines().toHashSet() } catch (_: Throwable) { emptySet() }
+    }
+
+    fun clear(ctx: Context) {
+        runCatching { File(ctx.filesDir, FILE_NAME).delete() }
+    }
+
+    class Writer(ctx: Context) {
+        private val file = File(ctx.filesDir, FILE_NAME)
+        private val writer = try { java.io.BufferedWriter(java.io.FileWriter(file, true)) } catch (_: Throwable) { null }
+
+        @Synchronized fun record(path: String) {
+            try { writer?.write(path); writer?.newLine() } catch (_: Throwable) {}
+        }
+        @Synchronized fun flush() { try { writer?.flush() } catch (_: Throwable) {} }
+        @Synchronized fun close() { try { writer?.close() } catch (_: Throwable) {} }
+    }
+}
+
+object LibraryCounts {
+    fun countTracks(ctx: Context): Int {
+        var n = 0
+        ctx.contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Media._ID),
+            "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
+        )?.use { n = it.count }
+        return n
+    }
+
+    fun countDistinct(ctx: Context, column: String): Int {
+        val set = HashSet<String>()
+        ctx.contentResolver.query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(column),
+            "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
+        )?.use { c ->
+            val col = c.getColumnIndexOrThrow(column)
+            while (c.moveToNext()) c.getString(col)?.takeIf { it.isNotBlank() }?.let { set.add(it) }
+        }
+        return set.size
+    }
+}

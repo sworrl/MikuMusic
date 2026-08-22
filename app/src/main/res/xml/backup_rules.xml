@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pre-Android-12 backup rules (android:fullBackupContent). The Last.fm session key is already
+     Keystore-backed (see LastFmPreferences — EncryptedSharedPreferences, AES256-GCM, key material
+     never leaves the device's Keystore), so it wouldn't be usable if it somehow ended up in a
+     backup anyway — this exclusion is defense in depth, not the only thing standing between it
+     and extraction. -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="lastfm_secure_prefs.xml" />
+</full-backup-content>

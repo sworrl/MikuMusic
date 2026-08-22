@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">M500 Hardware &amp; DAC</string>
+    <string name="hardware_settings_title">M500 Hardware &amp; DAC Settings</string>
+    <string name="hardware_settings_summary">Cirrus Logic CS43198 DAC, Filters, Gain, Fn Pocket Lock, Pulsar RGB &amp; USB DAC</string>
+    <string name="pulsar_settings_title">Pulsar RGB LED Engine</string>
+    <string name="pulsar_settings_summary">TrueColor PWM, Chroma Spectrum Wave, BPM rhythm pulses &amp; battery gauge</string>
+    <string name="fn_settings_title">Hardware Fn Switch &amp; Pocket Lock</string>
+    <string name="fn_settings_summary">Digitizer hardware inhibit, volume wheel retention, physical key lock</string>
+</resources>

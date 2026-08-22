@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <!-- Real, raw filesystem access to EVERY storage volume (SD cards included), not just the
+         primary one MediaStore/scoped-storage otherwise limits third-party apps to. Confirmed
+         live (2026-08-17) that without this, java.io.File can't even list/stat SD-card paths from
+         this app's process (SELinux denies it — see mediaStoreRowLikelyValid()'s doc comment in
+         Model.kt), which was the root cause of both the library undercounting real tracks AND the
+         scan's own directory walk being structurally blind to the SD card. Play Store restricts
+         this permission to core file-manager-type apps; that policy doesn't apply here since this
+         app is sideloaded directly, never distributed through the Store — same reasoning already
+         used for USE_EXACT_ALARM. Unlike a normal runtime permission, Android forces this through
+         a dedicated system Settings toggle (Special app access → All files access) that can't be
+         silently auto-granted even for a sideloaded app — see requestAllFilesAccessIfNeeded() in
+         MainActivity and the Settings banner in AlarmsCard's sibling (LibraryAccessCard). -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:ignore="ScopedStorage" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Special "Modify system settings" access — special app access, same family as
+         MANAGE_EXTERNAL_STORAGE above, requested via a Settings intent, never silently granted.
+         Sole use: ScreenOffHelper briefly shrinks the SYSTEM screen-off timeout to make the AOD ->
+         real-sleep idle stage happen close to on-demand, then restores the user's real value.
+         There's no public Android API for a normal app to just turn the screen off directly
+         (that's deliberate OS policy, not an oversight) — this is the standard, App-Store-legal
+         mechanism real "quick screen off" utility apps use for the same effect. -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- LibraryScanService: the media-library rescan needs to keep running reliably even with the
+         screen off / app backgrounded (confirmed live this wasn't happening as a plain Thread) —
+         "dataSync" is the correct foregroundServiceType for background file-indexing work. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Alarm Mode: exact, Doze-exempt wake-ups via AlarmManager.setAlarmClock. USE_EXACT_ALARM is
+         auto-granted at install (no runtime prompt) for a sideloaded app like this one — Play
+         Store's "alarm-clock apps only" restriction on that permission is a store-review policy,
+         not an OS restriction, and this app is never distributed through the Store. SCHEDULE_EXACT_ALARM
+         is declared alongside it as a fallback the app can still request via Settings if a future
+         OS build ever treats USE_EXACT_ALARM differently for a non-Store install. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" tools:targetApi="33" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Without this, the alarm notification's setFullScreenIntent silently downgrades to a normal
+         heads-up notification on API 29+ (enforced harder on 34+) — AlarmRingActivity would never
+         auto-launch over a locked/asleep screen, defeating the whole "wakes the device" feature. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- Vibration fallback for AlarmRingService — fires even if the library is empty/not yet
+         scanned, so an alarm is never completely silent+motionless. -->
+    <!-- Complete package query permission for launcher app drawer -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Camera-based ambient light sensor (M500 has no hardware ALS) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Platform-signed (re-keyed image) auto-grants this signature|privileged permission,
+         unblocking the DAC/Fn/USB-DAC Settings.Global writes. Declaration only. -->
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Expand notification shade permission for launcher -->
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+
+    <application
+        android:allowBackup="true"
+        android:usesCleartextTraffic="true"
+        android:networkSecurityConfig="@xml/network_security_config"
+        android:icon="@mipmap/ic_launcher"
+        android:label="Miku Music"
+        android:description="@string/app_description"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:theme="@style/Theme.MikuLauncher">
+
+        <!-- Android Auto: declares MikuMusic as a media app (browse + play from the car head unit).
+             The descriptor (@xml/automotive_app_desc) lists <uses name="media"/>; the browsable tree
+             and playback are served by PlaybackService (a Media3 MediaLibraryService) via
+             MikuLibraryCallback. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:theme="@style/Theme.MikuLauncher">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+
+
+        <activity
+            android:name=".HardwareSettingsActivity"
+            android:exported="true"
+            android:label="Miku Cyber Audio Controller"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.settings.AUDIO_SETTINGS" />
+                <action android:name="android.settings.SOUND_SETTINGS" />
+                <action android:name="android.settings.WORK_MODE" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.AUDIO_LAUNCH" />
+            </intent-filter>
+            <intent-filter android:priority="999">
+                <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+                <action android:name="com.android.settings.action.IA_SETTINGS" />
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="com.android.settings.category.ia.sound" />
+            </intent-filter>
+            <meta-data
+                android:name="com.android.settings.category"
+                android:value="com.android.settings.category.ia.sound" />
+            <meta-data
+                android:name="com.android.settings.title"
+                android:value="M500 Hardware &amp; DAC Settings" />
+            <meta-data
+                android:name="com.android.settings.summary"
+                android:value="Cirrus Logic CS43131 DAC, NOS filter mode, Gain stages &amp; UAC2 USB DAC" />
+        </activity>
+
+        <activity
+            android:name=".PulsarSettingsActivity"
+            android:exported="true"
+            android:label="Miku Pulsar RGB Lighting"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="com.miku.player.action.PULSAR_SETTINGS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".FnLockSettingsActivity"
+            android:exported="true"
+            android:label="Miku Fn Key &amp; Pocket Guard"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="com.miku.player.action.FN_SETTINGS" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MikuSettingsActivity"
+            android:exported="true"
+            android:label="Miku Settings"
+            android:icon="@drawable/ic_settings_miku"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.PREFERENCE" />
+            </intent-filter>
+        </activity>
+
+
+        <receiver
+            android:name=".MikuFnLockReceiver"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="FN_BUTTON_STATE_CHANGE" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".sentinel.MikuNotificationSentinelService"
+            android:exported="true"
+            android:label="Miku Notification Sentinel"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <activity
+            android:name=".UsbDacActivity"
+            android:exported="true"
+            android:label="Miku USB DAC Mode"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <action android:name="android.settings.WORK_MODE_VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".radio.MikuFMRadioActivity"
+            android:exported="true"
+            android:label="Miku FM Radio"
+            android:icon="@drawable/ic_fm_miku"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.caf.fmradio.FMRADIO_ACTIVITY" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <!-- MediaLibraryService: serves the Media3 session AND the Android Auto browsable media
+                 tree. Android Auto discovers a media app via the legacy
+                 android.media.browse.MediaBrowserService action (Media3 provides the compat bridge);
+                 the MediaLibraryService/MediaSessionService actions are how Media3's own
+                 SessionToken resolution finds this service. All three kept so both paths work. -->
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="androidx.media3.session.MediaSessionService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".UsbDacTileService"
+            android:icon="@drawable/ic_miku_monitor_status"
+            android:label="USB DAC"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".LibraryScanService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".launcher.MikuLiveWallpaperService"
+            android:label="Miku Cyber Hologram Live Wallpaper"
+            android:icon="@drawable/ic_search_head_miku"
+            android:permission="android.permission.BIND_WALLPAPER"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/miku_wallpaper_info" />
+        </service>
+        <receiver
+            android:name=".MikuMusicWidget"
+            android:exported="true"
+            android:label="Miku Music — Now Playing">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_now_playing_info" />
+        </receiver>
+
+        <receiver
+            android:name=".MikuTapeWidget"
+            android:exported="true"
+            android:label="Miku Music — Tape Deck">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_tape_info" />
+        </receiver>
+
+        <receiver
+            android:name=".AlarmReceiver"
+            android:exported="false" />
+
+        <!-- Cross-app preference bridge: the MikuOS launcher's quick-settings shade flips
+             playback behavior (pause-on-unplug) live via this broadcast. -->
+        <receiver
+            android:name=".MikuPrefsReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.miku.player.SET_PAUSE_ON_UNPLUG" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Graceful-swap update handling (UpdateHandler.kt): the system delivers this to the
+             app's own package right after a replacement APK finishes installing — guaranteed even
+             for a freshly-updated "stopped" app, no special permission needed. Lets us auto-relaunch
+             straight back into the same queue/position if playback was live when the update
+             started, instead of leaving the user to notice the app just silently vanished. -->
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+        <receiver
+            android:name=".AlarmBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".AlarmRingService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <activity
+            android:name=".AlarmRingActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:showOnLockScreen="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.MikuPlayer" />
+
+        <receiver
+            android:name=".MikuClockWidget"
+            android:exported="true"
+            android:label="Miku Music — Clock">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_clock_info" />
+        </receiver>
+
+        <!-- Quick Settings Tile: Pocket Lock -->
+        <service
+            android:name=".PocketLockTileService"
+            android:label="Pocket Lock"
+            android:icon="@mipmap/ic_launcher"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+        <!-- Fullscreen Miku Cyber HUD Modal for Hardware Fn Switch events -->
+        <activity
+            android:name=".FnLockHudActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:showOnLockScreen="true"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.MikuPlayer" />
+
+        <!-- Standalone Background Media Library Daemon -->
+        <service
+            android:name=".LibraryDaemonService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+
+    </application>
+</manifest>

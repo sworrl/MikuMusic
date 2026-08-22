@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.EXPAND_STATUS_BAR" />
+    <!-- OS lockscreen: arm the SCREEN_ON/SCREEN_OFF state machine at boot via MikuLockscreenBootReceiver. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <!-- Native WireGuard VPN client (com.miku.launcher.vpn / GoBackend). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="MikuOS Launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.M500Hardware">
+
+        <activity
+            android:name=".MikuLauncherActivity"
+            android:exported="true"
+            android:label="MikuOS Launcher"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
+            android:stateNotNeeded="true"
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustPan">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".MikuLiveWallpaperService"
+            android:exported="true"
+            android:label="Miku Live Cyber Wallpaper"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/live_wallpaper" />
+        </service>
+
+        <activity
+            android:name=".crash.MikuCrashActivity"
+            android:exported="true"
+            android:label="MikuOS Recovery"
+            android:launchMode="singleInstance"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+
+        <service
+            android:name=".gesture.MikuSystemGestureService"
+            android:exported="false" />
+
+        <activity
+            android:name=".arco.MikuArcoSettingsActivity"
+            android:exported="false"
+            android:label="arcobocconotto RGB Fleet"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.M500Hardware"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- OS-level Hatsune Miku Custom Lockscreen (ported out of the music app). Shows over the
+             keyguard, fullscreen/no-title, excluded from recents, single instance. -->
+        <activity
+            android:name=".lockscreen.MikuLockscreenActivity"
+            android:exported="false"
+            android:label="Miku Lockscreen"
+            android:theme="@style/Theme.MikuLockscreen"
+            android:showWhenLocked="true"
+            android:inheritShowWhenLocked="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <!-- Always-On Display face (clock / weather / now-playing). Engaged by
+             MikuLockscreenManager per the AOD prefs; taps hand off to the lockscreen. -->
+        <activity
+            android:name=".lockscreen.MikuAodActivity"
+            android:exported="false"
+            android:label="Miku AOD"
+            android:theme="@style/Theme.MikuLockscreen"
+            android:showWhenLocked="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <!-- AOD options (mode + face content). -->
+        <activity
+            android:name=".lockscreen.MikuAodSettingsActivity"
+            android:exported="true"
+            android:label="AOD Settings"
+            android:theme="@style/Theme.MikuLockscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Bench/dev WiFi provisioning over adb (see MikuDevWifiReceiver). Gated behind
+             WRITE_SECURE_SETTINGS: only shell/system can send it. -->
+        <receiver
+            android:name=".network.MikuDevWifiReceiver"
+            android:exported="true"
+            android:permission="android.permission.WRITE_SECURE_SETTINGS">
+            <intent-filter>
+                <action android:name="com.miku.launcher.WIFI_JOIN" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Installs MikuLockscreenManager at boot so the power-button/screen state machine is
+             armed even before the launcher UI is opened. -->
+        <receiver
+            android:name=".lockscreen.MikuLockscreenBootReceiver"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Embeddable WireGuard tunnel service. The com.wireguard.android:tunnel lib does NOT
+             declare it, so the embedding app must, for the in-launcher VPN client. -->
+        <service
+            android:name="com.wireguard.android.backend.GoBackend$VpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false"
+            android:foregroundServiceType="systemExempted">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
+        <!-- KDE Compositing control menu (per-event transition picker + live preview).
+             Exposed as its own launcher entry so it's easy to open and test. -->
+        <activity
+            android:name=".MikuCompositingMenuActivity"
+            android:exported="true"
+            android:label="KDE Compositing"
+            android:theme="@style/Theme.MikuLockscreen">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
+            android:name=".MikuCompositingPreviewActivity"
+            android:exported="false"
+            android:theme="@style/Theme.MikuLockscreen" />
+    </application>
+</manifest>

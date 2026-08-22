@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- No background/padding on the root — the old teal-bordered rounded box behind the tape was
+     exactly the "not JUST a cassette" problem: a widget-chrome frame around the artwork instead of
+     the artwork just floating on the lockscreen by itself. The rendered bitmap now draws its OWN
+     shell with a transparent surround (see MiniTapeRenderer), so this container needs to add
+     nothing at all. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_tape_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Rendered Cassette Tape Bitmap — the whole widget IS this image now. -->
+    <ImageView
+        android:id="@+id/widget_tape_img"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:contentDescription="@string/app_name" />
+
+    <!-- Invisible tap targets ONLY — no icon, no background chrome. The actual transport glyphs
+         are drawn INTO the bitmap itself (bigger, crisper, Miku-teal, part of the cassette's own
+         artwork) instead of a separate floating Android button row on top of it; these three
+         regions just need to line up with where the bitmap draws them (see renderMiniTape's
+         control-cluster geometry) so they're still tappable.
+         NOTE: these must be FrameLayout, not a bare <View> — RemoteViews' inflater only allows a
+         fixed set of widget-safe classes (FrameLayout/LinearLayout/TextView/ImageView/etc.); a
+         plain android.view.View is explicitly rejected ("Class not allowed to be inflated"),
+         which is exactly what broke this widget this session — confirmed live via logcat
+         (AppWidgetHostView: "Error inflating AppWidget... Class not allowed to be inflated
+         android.view.View") the first time a `<View>` version of this layout was actually pinned
+         to a home screen and tested, rather than just compiled. -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="horizontal">
+
+        <FrameLayout
+            android:id="@+id/widget_tape_prev"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="Previous" />
+
+        <FrameLayout
+            android:id="@+id/widget_tape_toggle"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1.4"
+            android:contentDescription="Play/Pause" />
+
+        <FrameLayout
+            android:id="@+id/widget_tape_next"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:contentDescription="Next" />
+    </LinearLayout>
+</FrameLayout>

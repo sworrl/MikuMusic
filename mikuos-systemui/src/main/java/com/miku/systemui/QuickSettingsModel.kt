@@ -1,0 +1,273 @@
+package com.miku.systemui
+
+import android.content.Context
+import android.content.Intent
+import android.net.wifi.WifiManager
+import android.net.wifi.ScanResult
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.provider.Settings
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.ui.graphics.vector.ImageVector
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+
+data class QsTile(
+    val id: String,
+    val label: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val isActive: Boolean,
+    val onClick: () -> Unit,
+    val onLongClick: (() -> Unit)? = null
+)
+
+object QuickSettingsModel {
+
+    fun openMikuSettings(ctx: Context, section: String? = null) {
+        try {
+            val intent = Intent().setClassName("com.miku.settings", "com.miku.settings.MikuSettingsActivity").apply {
+                if (section != null) putExtra("extra_section", section)
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            ctx.startActivity(intent)
+        } catch (_: Throwable) {
+            try {
+                val fallback = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                    if (section != null) putExtra("extra_section", section)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                if (fallback != null) ctx.startActivity(fallback)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun getWifiInfo(ctx: Context): Triple<Boolean, String, Int> {
+        val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        val isEnabled = wm?.isWifiEnabled == true
+        val info = wm?.connectionInfo
+        val rawSsid = info?.ssid?.replace("\"", "") ?: ""
+        val ssid = if (rawSsid.isBlank() || rawSsid == "<unknown ssid>") "Wi-Fi" else rawSsid
+        val rssi = info?.rssi ?: -100
+        val level = WifiManager.calculateSignalLevel(rssi, 5)
+        return Triple(isEnabled, ssid, level)
+    }
+
+    fun toggleWifi(ctx: Context, enable: Boolean) {
+        val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        runCatching { wm?.isWifiEnabled = enable }
+        RootShell.execFast("svc wifi " + (if (enable) "enable" else "disable"))
+    }
+
+    fun getBluetoothInfo(ctx: Context): Pair<Boolean, String> {
+        val bt = try { BluetoothAdapter.getDefaultAdapter() } catch (_: Throwable) { null }
+        val isEnabled = bt?.isEnabled == true
+        var connectedName = ""
+        if (isEnabled && bt != null) {
+            try {
+                val bonded = bt.bondedDevices
+                val firstConnected = bonded?.firstOrNull() // Quick proxy or paired
+                if (firstConnected != null) {
+                    connectedName = firstConnected.name ?: "Paired Device"
+                }
+            } catch (_: Throwable) {}
+        }
+        val label = if (connectedName.isNotBlank()) connectedName else if (isEnabled) "Bluetooth On" else "Bluetooth Off"
+        return Pair(isEnabled, label)
+    }
+
+    fun toggleBluetooth(ctx: Context, enable: Boolean) {
+        val bt = try { BluetoothAdapter.getDefaultAdapter() } catch (_: Throwable) { null }
+        if (enable) bt?.enable() else bt?.disable()
+        RootShell.execFast("svc bluetooth " + (if (enable) "enable" else "disable"))
+    }
+
+    fun getTiles(ctx: Context, scope: CoroutineScope, onRefresh: () -> Unit): List<QsTile> {
+        val list = mutableListOf<QsTile>()
+
+        // 1. Wi-Fi (Internet)
+        val (isWifiOn, wifiSsid, _) = getWifiInfo(ctx)
+        list.add(
+            QsTile(
+                id = "wifi",
+                label = if (isWifiOn) wifiSsid else "Internet",
+                subtitle = if (isWifiOn) "Connected" else "Disconnected",
+                icon = if (isWifiOn) Icons.Default.Wifi else Icons.Default.WifiOff,
+                isActive = isWifiOn,
+                onClick = {
+                    val next = !isWifiOn
+                    toggleWifi(ctx, next)
+                    onRefresh()
+                },
+                onLongClick = { openMikuSettings(ctx, "wireless") }
+            )
+        )
+
+        // 2. Bluetooth
+        val (isBtOn, btLabel) = getBluetoothInfo(ctx)
+        list.add(
+            QsTile(
+                id = "bluetooth",
+                label = if (isBtOn) btLabel else "Bluetooth",
+                subtitle = if (isBtOn) "Active" else "Off",
+                icon = if (isBtOn) Icons.Default.Bluetooth else Icons.Default.BluetoothDisabled,
+                isActive = isBtOn,
+                onClick = {
+                    val next = !isBtOn
+                    toggleBluetooth(ctx, next)
+                    onRefresh()
+                },
+                onLongClick = { openMikuSettings(ctx, "bluetooth") }
+            )
+        )
+
+        // 3. Cirrus CS43198 Filter
+        val currentFilter = CirrusLogicManager.getDigitalFilter(ctx)
+        list.add(
+            QsTile(
+                id = "cs43198_filter",
+                label = "DAC Filter",
+                subtitle = when (currentFilter) {
+                    CirrusLogicManager.DigitalFilter.FAST_LINEAR -> "Fast Linear"
+                    CirrusLogicManager.DigitalFilter.FAST_MINIMUM -> "Fast Min"
+                    CirrusLogicManager.DigitalFilter.SLOW_LINEAR -> "Slow Linear"
+                    CirrusLogicManager.DigitalFilter.SLOW_MINIMUM -> "Slow Min"
+                    CirrusLogicManager.DigitalFilter.NOS -> "NOS (Raw)"
+                },
+                icon = Icons.Default.GraphicEq,
+                isActive = true,
+                onClick = {
+                    val all = CirrusLogicManager.DigitalFilter.values()
+                    val nextIdx = (currentFilter.ordinal + 1) % all.size
+                    val nextFilter = all[nextIdx]
+                    scope.launch {
+                        CirrusLogicManager.setDigitalFilter(ctx, nextFilter)
+                        onRefresh()
+                    }
+                },
+                onLongClick = { openMikuSettings(ctx, "audio_dac") }
+            )
+        )
+
+        // 4. Headphone Gain (PO Gain)
+        val currentGain = CirrusLogicManager.getGainMode(ctx)
+        val isHighGain = currentGain == CirrusLogicManager.GainMode.HIGH
+        list.add(
+            QsTile(
+                id = "cs43198_gain",
+                label = "PO Gain",
+                subtitle = if (isHighGain) "High (+6 dB)" else "Low (0 dB)",
+                icon = Icons.Default.VolumeUp,
+                isActive = isHighGain,
+                onClick = {
+                    val next = if (isHighGain) CirrusLogicManager.GainMode.LOW else CirrusLogicManager.GainMode.HIGH
+                    scope.launch {
+                        CirrusLogicManager.setGainMode(ctx, next)
+                        onRefresh()
+                    }
+                },
+                onLongClick = { openMikuSettings(ctx, "audio_dac") }
+            )
+        )
+
+        // 5. Audio Turbo High Power
+        val isTurbo = CirrusLogicManager.isHighPowerEnabled(ctx)
+        list.add(
+            QsTile(
+                id = "audio_turbo",
+                label = "Audio Turbo",
+                subtitle = if (isTurbo) "High Rails" else "Standard",
+                icon = Icons.Default.FlashOn,
+                isActive = isTurbo,
+                onClick = {
+                    scope.launch {
+                        CirrusLogicManager.setHighPowerEnabled(ctx, !isTurbo)
+                        onRefresh()
+                    }
+                },
+                onLongClick = { openMikuSettings(ctx, "audio_dac") }
+            )
+        )
+
+        // 6. Dynamic Range Enhancement (DRE)
+        val isDre = CirrusLogicManager.isDreEnabled(ctx)
+        list.add(
+            QsTile(
+                id = "dre_mode",
+                label = "DRE 130dB+",
+                subtitle = if (isDre) "Active" else "Off",
+                icon = Icons.Default.Tune,
+                isActive = isDre,
+                onClick = {
+                    scope.launch {
+                        CirrusLogicManager.setDreEnabled(ctx, !isDre)
+                        onRefresh()
+                    }
+                },
+                onLongClick = { openMikuSettings(ctx, "audio_dac") }
+            )
+        )
+
+        // 7. Pulsar Dual-Die RGB
+        val isPulsarActive = PulsarLight.getMode(ctx) != PulsarLight.Mode.OFF
+        list.add(
+            QsTile(
+                id = "pulsar_light",
+                label = "Pulsar RGB",
+                subtitle = PulsarLight.getMode(ctx).label,
+                icon = Icons.Default.Lightbulb,
+                isActive = isPulsarActive,
+                onClick = {
+                    val all = PulsarLight.Mode.values()
+                    val cur = PulsarLight.getMode(ctx)
+                    val next = all[(cur.ordinal + 1) % all.size]
+                    PulsarLight.setMode(ctx, next)
+                    onRefresh()
+                },
+                onLongClick = { openMikuSettings(ctx, "pulsar") }
+            )
+        )
+
+        // 8. Wireless ADB
+        val isAdb = WirelessAdbManager.isEnabled()
+        list.add(
+            QsTile(
+                id = "wireless_adb",
+                label = "Wireless ADB",
+                subtitle = if (isAdb) "Port 5555" else "Off",
+                icon = Icons.Default.Cable,
+                isActive = isAdb,
+                onClick = {
+                    scope.launch {
+                        WirelessAdbManager.setEnabled(!isAdb)
+                        onRefresh()
+                    }
+                },
+                onLongClick = { openMikuSettings(ctx, "system_about") }
+            )
+        )
+
+        // 9. Airplane Mode
+        val isAir = Settings.Global.getInt(ctx.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
+        list.add(
+            QsTile(
+                id = "airplane_mode",
+                label = "Airplane Mode",
+                subtitle = if (isAir) "On" else "Off",
+                icon = Icons.Default.Flight,
+                isActive = isAir,
+                onClick = {
+                    val next = if (isAir) 0 else 1
+                    Settings.Global.putInt(ctx.contentResolver, Settings.Global.AIRPLANE_MODE_ON, next)
+                    RootShell.execFast("settings put global airplane_mode_on $next; am broadcast -a android.intent.action.AIRPLANE_MODE --ez state " + (next == 1))
+                    onRefresh()
+                },
+                onLongClick = { openMikuSettings(ctx, "wireless") }
+            )
+        )
+
+        return list
+    }
+}

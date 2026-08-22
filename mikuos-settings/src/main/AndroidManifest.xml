@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Privileged & System Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.STATUS_BAR" />
+    <uses-permission android:name="android.permission.DEVICE_POWER" />
+    <uses-permission android:name="android.permission.REBOOT" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.MANAGE_USERS" />
+    <uses-permission android:name="android.permission.MANAGE_DEBUGGING" />
+    <uses-permission android:name="android.permission.INTERACT_ACROSS_USERS_FULL" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@drawable/ic_settings_miku"
+        android:label="MikuOS Settings"
+        android:roundIcon="@drawable/ic_settings_miku"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.M500Hardware">
+
+        <!-- ========================================================= -->
+        <!-- Main MikuOS System Settings Activity                      -->
+        <!-- ========================================================= -->
+        <activity
+            android:name="com.miku.settings.MikuSettingsActivity"
+            android:exported="true"
+            android:label="Settings"
+            android:screenOrientation="portrait"
+            android:theme="@style/Theme.M500Hardware">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.settings.SETTINGS" />
+                <action android:name="android.settings.SOUND_SETTINGS" />
+                <action android:name="android.settings.DISPLAY_SETTINGS" />
+                <action android:name="android.settings.WIFI_SETTINGS" />
+                <action android:name="android.settings.BLUETOOTH_SETTINGS" />
+                <action android:name="android.settings.APPLICATION_SETTINGS" />
+                <action android:name="android.settings.INTERNAL_STORAGE_SETTINGS" />
+                <action android:name="android.settings.BATTERY_SAVER_SETTINGS" />
+                <action android:name="android.settings.DEVICE_INFO_SETTINGS" />
+                <action android:name="android.settings.DEVELOPER_OPTIONS" />
+                <action android:name="android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" />
+                <action android:name="com.android.settings.action.IA_SETTINGS" />
+                <action android:name="com.m500.hardware.action.PULSAR_SETTINGS" />
+                <action android:name="com.m500.hardware.action.DAC_SETTINGS" />
+                <action android:name="com.m500.hardware.action.USB_DAC" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="com.android.settings.category.ia.sound" />
+                <category android:name="com.android.settings.category.ia.display" />
+                <category android:name="com.android.settings.category.ia.wireless" />
+                <category android:name="com.android.settings.category.ia.system" />
+                <category android:name="com.android.settings.category.ia.homepage" />
+            </intent-filter>
+        </activity>
+
+        <receiver
+            android:name="com.miku.settings.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

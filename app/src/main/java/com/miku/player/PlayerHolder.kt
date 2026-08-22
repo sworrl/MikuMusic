@@ -1,0 +1,308 @@
+package com.miku.player
+
+import android.app.PendingIntent
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import androidx.core.content.ContextCompat
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.MediaController
+import androidx.media3.session.MediaLibraryService.MediaLibrarySession
+import androidx.media3.session.SessionToken
+import com.google.common.util.concurrent.ListenableFuture
+
+/**
+ * Process-wide owner of the ExoPlayer + its Media3 MediaSession. The Activity drives the
+ * player directly (same process → audioSessionId stays reachable for the visualizer), while
+ * PlaybackService exposes the session so the system draws our branded lockscreen/notification
+ * media control instead of leaving the stage to Spotify.
+ */
+object PlayerHolder {
+    @Volatile var player: ExoPlayer? = null
+        private set
+    @Volatile var session: MediaLibrarySession? = null
+        private set
+
+    // A process-wide MediaController bound to PlaybackService. We drive the ExoPlayer directly for
+    // the in-app UI, but WITHOUT a connected controller Media3 never reliably promotes the service
+    // to foreground / posts its MediaStyle notification, so the session (and therefore hardware &
+    // Bluetooth media-button routing) died the moment the app was backgrounded or the screen went
+    // off — the reported "media keys only work inside the app with the screen on" bug. Holding this
+    // controller connection keeps the MediaLibraryService alive and foreground while playing, which
+    // is what lets the OS route media buttons to MikuLibraryCallback.onMediaButtonEvent everywhere.
+    @Volatile private var controllerFuture: ListenableFuture<MediaController>? = null
+    @Volatile var controller: MediaController? = null
+        private set
+
+    /** Immutable snapshot of the fields the widgets need — exists so widget rendering (which does
+     *  slow work: ContentResolver I/O + bitmap drawing, dispatched to a background thread via
+     *  WidgetUpdateExecutor for exactly that reason) never touches the live ExoPlayer itself off
+     *  its own application thread. Media3's Player contract requires every call to originate on
+     *  the thread the player was built on (main, here) — reading player.isPlaying/.duration/etc.
+     *  from a background thread is undefined behavior per that contract, confirmed via code audit
+     *  as a real bug once widget rendering moved off-thread. Call snapshot() ONLY from the main
+     *  thread (every current call site already is: Player.Listener callbacks, BroadcastReceiver.
+     *  onReceive, AppWidgetProvider.onUpdate all run there) — it's the safe, cheap field-read part;
+     *  everything slow happens afterward against this plain data snapshot instead. */
+    data class PlayerSnapshot(
+        val title: String?,
+        val artist: String?,
+        val album: String?,
+        val isPlaying: Boolean,
+        val durationMs: Long,
+        val positionMs: Long,
+        val trackId: Long?
+    )
+
+    fun snapshot(): PlayerSnapshot? {
+        val p = player ?: return null
+        val meta = p.mediaMetadata
+        return PlayerSnapshot(
+            title = meta.title?.toString(),
+            artist = meta.artist?.toString(),
+            album = meta.albumTitle?.toString(),
+            isPlaying = p.isPlaying,
+            durationMs = p.duration,
+            positionMs = p.currentPosition,
+            trackId = p.currentMediaItem?.mediaId?.toLongOrNull()
+        )
+    }
+
+    // "Restore last session's track/position on launch" must run exactly ONCE per process, ever
+    // — not once per Activity recomposition. It used to live as a plain composable var keyed on
+    // the track list, so a library rescan refreshing that list (even finding nothing new) could
+    // re-trigger the whole restore path and yank live playback back to a stale saved track/
+    // position — verified as the actual cause of "scan finished, it just started playing
+    // something random" mid-listen. Owning the flag here, on the process-wide player singleton
+    // rather than composable state, makes it immune to that regardless of what causes the
+    // Compose side to recompose or re-key.
+    @Volatile var sessionRestored: Boolean = false
+        private set
+    fun markSessionRestored() { sessionRestored = true }
+
+    @Synchronized
+    fun ensure(context: Context): ExoPlayer {
+        val existing = player
+        if (existing != null) return existing
+        val app = context.applicationContext
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 15_000,
+                /* maxBufferMs = */ 45_000,
+                /* bufferForPlaybackMs = */ 200,
+                /* bufferForPlaybackAfterRebufferMs = */ 400
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        // DTA: make sure we're in the platform's direct-output allow-list BEFORE the first
+        // AudioTrack is created — the framework checks it per-track at construction. This is what
+        // routes playback bit-perfect (native rate, no mixer/SRC) to the dual CS43198 DACs.
+        runCatching { MikuDirectAudio.ensureAllowListed(app) }
+
+        // Integer PCM output with bit-perfect DIRECT support for dual CS43198 DACs:
+        // Media3's stock DefaultAudioSink either downsamples 24/32-bit to 16-bit (float=false)
+        // or produces float AudioTracks (float=true) which the HiBy direct_pcm HAL rejects.
+        // MikuDirectAudioSink passes 16-bit, 24-bit packed, and 32-bit integer PCM directly to AudioTrack
+        // at native sample rate, matching the vendor direct_pcm profiles for true bit-perfect hardware output.
+        val renderers = object : androidx.media3.exoplayer.DefaultRenderersFactory(app) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): androidx.media3.exoplayer.audio.AudioSink {
+                return androidx.media3.exoplayer.audio.MikuDirectAudioSink.Builder(context)
+                    .setEnableFloatOutput(false)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .build()
+            }
+        }
+
+        val p = ExoPlayer.Builder(app, renderers)
+            .setLoadControl(loadControl)
+            .setAudioAttributes(
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .build(),
+                /* handleAudioFocus = */ true
+            )
+            .setWakeMode(androidx.media3.common.C.WAKE_MODE_LOCAL)
+            .build()
+        // Pause-on-unplug ("audio becoming noisy"): stock HiBy OS pauses when the headphone jack
+        // is pulled; we'd hard-disabled it over false-pause worries. Now a user preference
+        // (default ON to match stock) surfaced in the Sound Settings page and the quick-settings
+        // shade — deliberately NOT in the volume modal. Applied live via applyPauseOnUnplug().
+        p.setHandleAudioBecomingNoisy(PlayerPreferences.loadPauseOnUnplug(app))
+        // Keep home-screen widgets in lock-step with playback (track + play/pause state).
+        var lastErrorAtMs = 0L
+        var errorRetryStreak = 0
+        p.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                WidgetUpdateExecutor.push(app)
+                PlayerPreferences.saveWasPlaying(app, isPlaying)
+                com.miku.player.bpm.MikuBpmEngine.onPlaybackChanged(app, p.currentMediaItem, isPlaying)
+                val trackId = p.currentMediaItem?.mediaId?.toLongOrNull()
+                if (trackId != null) {
+                    PlayerPreferences.saveLastPlayback(app, trackId, p.currentPosition)
+                    PlayerPreferences.saveQueueIndex(app, p.currentMediaItemIndex)
+                    if (isPlaying) {
+                        val meta = p.mediaMetadata
+                        LocationLogger.logForTrack(
+                            ctx = app,
+                            trackId = trackId,
+                            title = meta.title?.toString() ?: "",
+                            artist = meta.artist?.toString() ?: "",
+                            album = meta.albumTitle?.toString() ?: ""
+                        )
+                    }
+                }
+            }
+            override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                WidgetUpdateExecutor.push(app)
+                com.miku.player.bpm.MikuBpmEngine.onPlaybackChanged(app, mediaItem, p.isPlaying)
+                val trackId = mediaItem?.mediaId?.toLongOrNull()
+                if (trackId != null) {
+                    PlayerPreferences.saveLastPlayback(app, trackId, p.currentPosition)
+                    PlayerPreferences.saveQueueIndex(app, p.currentMediaItemIndex)
+                    val meta = mediaItem.mediaMetadata
+                    LocationLogger.logForTrack(
+                        ctx = app,
+                        trackId = trackId,
+                        title = meta.title?.toString() ?: "",
+                        artist = meta.artist?.toString() ?: "",
+                        album = meta.albumTitle?.toString() ?: ""
+                    )
+                }
+            }
+            override fun onMediaMetadataChanged(m: androidx.media3.common.MediaMetadata) { WidgetUpdateExecutor.push(app) }
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                android.util.Log.d("MikuPlayer", "onPlayWhenReadyChanged: playWhenReady=$playWhenReady, reason=$reason")
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                android.util.Log.d("MikuPlayer", "onPlaybackStateChanged: state=$playbackState")
+            }
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                android.util.Log.e("MikuPlayer", "onPlayerError: ${error.errorCodeName} (${error.errorCode})", error)
+                // Auto-recover from ANY playback error, not just an allow-list of codes. Verified
+                // live 2026-08-16: a DAC/HAL hiccup surfaced as ERROR_CODE_FAILED_RUNTIME_CHECK
+                // (IllegalArgumentException in DefaultAudioSink.handleBuffer after a big-FLAC
+                // decoder buffer grow) — a code the old 3-item allow-list didn't cover — and the
+                // player just sat dead in STATE_IDLE forever with no way back short of force-
+                // killing the app. The M500 resets its audio HAL on sleep/wake and after other
+                // route churn, and that can surface as any number of different error codes, so no
+                // fixed allow-list is exhaustive; recover from all of them instead. prepare() from
+                // STATE_IDLE keeps the current MediaItem + position, so this reliably resumes
+                // exactly where playback died. Guarded by a rolling retry cap so a persistently
+                // broken track can't spin the player in an infinite crash loop.
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - lastErrorAtMs > 5_000) errorRetryStreak = 0
+                lastErrorAtMs = now
+                if (++errorRetryStreak <= 3) {
+                    p.prepare()
+                    p.play()
+                } else {
+                    android.util.Log.e("MikuPlayer", "onPlayerError: giving up after $errorRetryStreak errors within 5s")
+                }
+            }
+        })
+        player = p
+        LastFmScrobbler.attach(app, p)
+        // Redundant hardware gate (see MainActivity.isSupportedDevice) — deliberately different
+        // fields/logic so patching just the Activity's check doesn't also unlock playback here.
+        // Also screens out emulators/VMs (goldfish/ranchu kernel, generic build fingerprints) —
+        // this app leans on real M500 hardware (DAC/amp, side keys) an emulator can't provide.
+        if (!brandDeviceGateOk()) { p.playWhenReady = false; p.stop() }
+        return p
+    }
+
+    private fun brandDeviceGateOk(): Boolean {
+        val brandOk = android.os.Build.BRAND.equals("HiBy", ignoreCase = true) &&
+            android.os.Build.DEVICE.contains("M500", ignoreCase = true)
+        val hw = android.os.Build.HARDWARE.lowercase()
+        val fp = android.os.Build.FINGERPRINT.lowercase()
+        val looksVirtual = hw.contains("goldfish") || hw.contains("ranchu") ||
+            fp.startsWith("generic") || fp.startsWith("unknown")
+        return brandOk && !looksVirtual
+    }
+
+    @Synchronized
+    fun ensureSession(context: Context): MediaLibrarySession {
+        session?.let { return it }
+        val p = ensure(context)
+        val launch = Intent(context, MainActivity::class.java)
+            .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        val pi = PendingIntent.getActivity(
+            context, 0, launch,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        // A MediaLibrarySession (a superset of MediaSession) so Android Auto can BROWSE the on-device
+        // library and drive THIS SAME player — see MikuLibraryCallback for the browse tree, the
+        // play-resolution, the hands-free player-mode switches, and the analog-audio routing hook.
+        // The media-button handling that used to live in an inline MediaSession.Callback here now
+        // lives in that callback (identical logic), so hardware/BT transport keys behave the same.
+        val s = MediaLibrarySession.Builder(context.applicationContext, p, MikuLibraryCallback(context))
+            .setSessionActivity(pi)
+            .build()
+        session = s
+        return s
+    }
+
+    /** Live-apply the pause-on-unplug preference to the running player (and persist it).
+     *  Also mirrored to Settings.Global "miku_pause_on_unplug" so the launcher's quick-settings
+     *  tile can read/flip the same state cross-app (root fallback matches CirrusLogicManager). */
+    fun applyPauseOnUnplug(context: Context, enabled: Boolean) {
+        PlayerPreferences.savePauseOnUnplug(context, enabled)
+        player?.setHandleAudioBecomingNoisy(enabled)
+        val v = if (enabled) 1 else 0
+        val ok = runCatching {
+            android.provider.Settings.Global.putInt(context.contentResolver, "miku_pause_on_unplug", v)
+        }.getOrDefault(false)
+        if (!ok) RootShell.execFast("settings put global miku_pause_on_unplug $v")
+    }
+
+    /**
+     * Start PlaybackService as a FOREGROUND service and bind a MediaController to its session.
+     * Called from MainActivity when playback begins. The controller isn't used to drive transport
+     * (the Activity keeps direct ExoPlayer access for the visualizer's audioSessionId); its whole
+     * job is the connection itself — with a controller connected, Media3 posts the media
+     * notification, keeps the service foreground while playing, and routes system media-button
+     * events to the session when the app is backgrounded or the screen is off.
+     */
+    @Synchronized
+    fun ensureControllerConnected(context: Context) {
+        if (controller != null || controllerFuture != null) return
+        val app = context.applicationContext
+        try {
+            ContextCompat.startForegroundService(app, Intent(app, PlaybackService::class.java))
+        } catch (_: Throwable) {
+            // Fall through — the controller bind below also starts the service.
+        }
+        try {
+            val token = SessionToken(app, ComponentName(app, PlaybackService::class.java))
+            val future = MediaController.Builder(app, token).buildAsync()
+            controllerFuture = future
+            future.addListener({
+                try {
+                    controller = future.get()
+                } catch (t: Throwable) {
+                    android.util.Log.e("PlayerHolder", "MediaController connect failed", t)
+                    controllerFuture = null
+                }
+            }, ContextCompat.getMainExecutor(app))
+        } catch (t: Throwable) {
+            android.util.Log.e("PlayerHolder", "MediaController setup failed", t)
+            controllerFuture = null
+        }
+    }
+
+    @Synchronized
+    fun release() {
+        try { controller?.release() } catch (_: Throwable) {}
+        controller = null
+        controllerFuture = null
+        session?.release(); session = null
+        player?.release(); player = null
+        LastFmScrobbler.reset() // so a later ensure() re-attaches its Player.Listener to the NEW player instance
+    }
+}

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<set xmlns:android="http://schemas.android.com/apk/res/android" android:shareInterpolator="false" android:zAdjustment="top">
+    <scale android:fromXScale="1.0" android:toXScale="1.35" android:fromYScale="1.0" android:toYScale="1.35"
+        android:pivotX="50%p" android:pivotY="45%p" android:duration="300"
+        android:interpolator="@android:interpolator/accelerate_quint"/>
+    <translate android:fromYDelta="0" android:toYDelta="-55%p" android:duration="300"
+        android:interpolator="@android:interpolator/accelerate_quint"/>
+    <alpha android:fromAlpha="1.0" android:toAlpha="0.0" android:startOffset="60" android:duration="240"
+        android:interpolator="@android:interpolator/accelerate_cubic"/>
+</set>

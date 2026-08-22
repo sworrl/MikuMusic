@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 12+ backup/transfer rules — same exclusion as backup_rules.xml (that one covers pre-12
+     devices), required for both cloud backup and device-to-device transfer since Android 12
+     replaced android:fullBackupContent's cloud-backup role with this file. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="lastfm_secure_prefs.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="lastfm_secure_prefs.xml" />
+    </device-transfer>
+</data-extraction-rules>

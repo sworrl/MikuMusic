@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="250dp"
+    android:minHeight="70dp"
+    android:targetCellWidth="4"
+    android:targetCellHeight="1"
+    android:resizeMode="horizontal|vertical"
+    android:widgetCategory="home_screen|keyguard"
+    android:updatePeriodMillis="0"
+    android:initialLayout="@layout/widget_now_playing"
+    android:initialKeyguardLayout="@layout/widget_now_playing"
+    android:previewLayout="@layout/widget_now_playing"
+    android:description="@string/app_name" />

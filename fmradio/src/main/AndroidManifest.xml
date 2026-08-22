@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- AudioRecord(MediaRecorder.AudioSource.RADIO_TUNER=1998) needs this; it's a
+         privileged permission only granted to platform-signed system apps — which is
+         why this ships in /system_ext/app and is signed with the platform key. -->
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.Material.NoActionBar.Fullscreen">
+
+        <!-- The stock FM driver JNI (qcom.fmradio / FmReceiverJNI) lives in this shared
+             library; declare it so the classloader can reach /system/framework/qcom.fmradio.jar. -->
+        <uses-library android:name="qcom.fmradio" android:required="false" />
+
+        <activity
+            android:name="com.caf.fmradio.MikuFMRadioActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
