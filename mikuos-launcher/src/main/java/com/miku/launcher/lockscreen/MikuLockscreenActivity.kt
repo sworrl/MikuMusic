@@ -344,9 +344,7 @@ class MikuLockscreenActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (isMediaKey(keyCode)) {
-            return super.onKeyDown(keyCode, event)
-        }
+        // Media keys are handled in dispatchKeyEvent (forwarded to the session there); nothing to do here.
         if (keyCode == KeyEvent.KEYCODE_POWER) {
             turnScreenOff()
             return true
@@ -359,7 +357,17 @@ class MikuLockscreenActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (isMediaKey(event.keyCode)) {
-            return super.dispatchKeyEvent(event)
+            // When locked, THIS activity is the foreground window and receives the hardware
+            // transport keys first. Declining them (super) and trusting the framework to fall
+            // them through to the media session is unreliable with a custom always-on-top
+            // lockscreen — the physical Play/Next/Prev buttons then did nothing while locked.
+            // Forward the key explicitly to the active media session and consume it, so exactly
+            // one delivery reaches the player regardless of focus.
+            runCatching {
+                val am = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+                am.dispatchMediaKeyEvent(event)
+            }
+            return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_POWER && event.action == KeyEvent.ACTION_DOWN) {
             turnScreenOff()
