@@ -3,6 +3,18 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Alarm/haptics feedback (AlarmRingService, Haptics). Without this, Vibrator.vibrate
+         no-ops and lint flags it as a MissingPermission crash risk. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- BluetoothAdapter/BluetoothDevice access in Settings (bonded-device list, enable/
+         disable, getName). BLUETOOTH_CONNECT is the API 31+ runtime permission; the legacy
+         BLUETOOTH/BLUETOOTH_ADMIN cover pre-31. Without CONNECT, getBondedDevices/getName
+         throw SecurityException on this API-34 device. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />

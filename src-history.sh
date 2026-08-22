@@ -32,7 +32,7 @@ stage_source() {
     ! -name 'local.properties' ! -name 'arco.properties' \
     -print0 | xargs -0 git add -f --
   # Record deletions of files already tracked but now gone.
-  git add -A -u
+  git add -u
 }
 
 case "${1:-}" in

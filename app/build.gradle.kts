@@ -14,8 +14,8 @@ android {
         applicationId = "com.miku.player"
         minSdk = 26
         targetSdk = 35
-        versionCode = 329
-        versionName = "0.9.229"
+        versionCode = 330
+        versionName = "0.9.230"
 
         // Last.fm API credentials — read from local.properties (gitignored, never committed) so
         // the key/secret never live in source. Register a free app at

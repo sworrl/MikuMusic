@@ -801,7 +801,10 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 val safePos = if (lastPos in 0..(restoredTrack.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)) lastPos else 0L
                 player.setMediaItems(restoredQueue.map { mediaItemFor(it) }, targetIdx, safePos)
                 player.prepare()
-                if (PlayerPreferences.loadWasPlaying(ctx)) player.play()
+                // Restore queue + position ready-to-play but PAUSED. Auto-calling play() here
+                // meant every process restart (any app reinstall/update, a cached-process kill)
+                // resumed audio unprompted — the "music starts randomly on update" glitch.
+                // Pressing play continues exactly where it left off.
             } else {
                 val exact = tracks.find { it.id == lastTrackId } ?: tracks.firstOrNull()
                 if (exact != null) {
@@ -810,7 +813,8 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                     val safePos = if (lastPos in 0..(exact.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)) lastPos else 0L
                     player.setMediaItems(tracks.map { mediaItemFor(it) }, idx, safePos)
                     player.prepare()
-                    if (PlayerPreferences.loadWasPlaying(ctx)) player.play()
+                    // Restore ready-to-play but PAUSED — see note above; never auto-resume on
+                    // a process restart, which is what an app update looks like from here.
                 }
             }
             UpdateOverlay.mode.value = UpdateOverlayMode.NONE
