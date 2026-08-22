@@ -1,0 +1,12 @@
+# Proprietary source — this repo tracks distributable build artifacts only, not source.
+# Miku Music Player is fully owned by Justin Earl / Falcon Technix. Source stays local/private;
+# only minified, obfuscated, encrypted release APKs in minified_apks/ are version-controlled here.
+*
+!minified_apks/
+!minified_apks/**
+!.gitignore
+
+# Explicit secret-file exclusion (defense in depth on top of the blanket rule
+# above): local-only arcobocconotto RGB integration credentials. Never commit.
+mikuos-launcher/arco.properties
+**/arco.properties
