@@ -194,6 +194,8 @@ object MikuWeatherService {
     fun start(ctx: Context) {
         if (locationJob != null && weatherJob != null) return
 
+        // Seed last-good forecast immediately so the widget/UI aren't blank before the first fetch.
+        restoreLastWeather(ctx)
         startLocationTracking(ctx)
 
         if (weatherJob == null) {
@@ -404,6 +406,40 @@ object MikuWeatherService {
                 .putString("last_city", city)
                 .putString("last_region", region)
                 .apply()
+        }
+    }
+
+    /** Persist just the fields the widget + compact UI render, so a cold start isn't blank. */
+    private fun saveLastWeather(ctx: Context, c: WeatherCondition) {
+        runCatching {
+            ctx.getSharedPreferences("miku_weather", Context.MODE_PRIVATE).edit()
+                .putFloat("wx_tempf", c.tempF)
+                .putString("wx_summary", c.summary)
+                .putString("wx_icon", c.icon)
+                .putString("wx_severe", c.severeWarning)
+                .putLong("wx_updated", c.lastUpdatedTime)
+                .apply()
+        }
+    }
+
+    /** Seed _state with the last persisted forecast so surfaces have real data before the first
+     *  fetch of the session completes. No-op when nothing saved yet. */
+    fun restoreLastWeather(ctx: Context) {
+        runCatching {
+            val p = ctx.getSharedPreferences("miku_weather", Context.MODE_PRIVATE)
+            val updated = p.getLong("wx_updated", 0L)
+            if (updated <= 0L) return
+            // Don't clobber a fresher live condition already fetched this session.
+            if (_state.value.weather.lastUpdatedTime >= updated) return
+            _state.value = _state.value.copy(
+                weather = _state.value.weather.copy(
+                    tempF = p.getFloat("wx_tempf", 72f),
+                    summary = p.getString("wx_summary", "Clear Sky") ?: "Clear Sky",
+                    icon = p.getString("wx_icon", "☀️") ?: "☀️",
+                    severeWarning = p.getString("wx_severe", null),
+                    lastUpdatedTime = updated
+                )
+            )
         }
     }
 
@@ -970,6 +1006,10 @@ object MikuWeatherService {
                         isLoading = false,
                         error = null
                     )
+                    // Persist the essentials so a cold start shows the last real forecast instantly
+                    // (widget + compact UI) instead of an "awaiting data" placeholder. Only the few
+                    // fields those surfaces render — not the whole heavy condition object.
+                    saveLastWeather(ctx, condition)
                     // Refresh the placed weather widgets with the new condition; no-op with none
                     // placed, and never let a widget failure poison the fetch cycle.
                     try { com.miku.launcher.widget.MikuWeatherWidget.pushUpdate(ctx) } catch (_: Throwable) {}

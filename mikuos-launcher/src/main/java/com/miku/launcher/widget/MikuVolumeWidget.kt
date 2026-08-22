@@ -1,9 +1,11 @@
 package com.miku.launcher.widget
 
+import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.media.AudioManager
 import android.os.SystemClock
 import android.widget.RemoteViews
@@ -12,16 +14,28 @@ import com.miku.launcher.R
 /**
  * STREAM_MUSIC volume as an individual system App Widget. Live on-render read from AudioManager;
  * refreshed via [pushUpdate] from MikuVolumeManager on every volume change (lightly throttled —
- * knob/rotary spins fire updates in bursts). The volume HUD is an in-launcher Compose overlay
- * with no external trigger intent, so the tap target is the launcher itself.
+ * knob/rotary spins fire updates in bursts). Tapping fires [ACTION_SHOW_HUD] to this receiver,
+ * which raises the launcher's volume HUD via MikuVolumeManager.triggerHud — so a tap on the home
+ * screen (launcher foreground) shows the same modal the in-bar badge does, no Activity plumbing.
  */
 class MikuVolumeWidget : AppWidgetProvider() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == ACTION_SHOW_HUD) {
+            runCatching {
+                com.miku.launcher.volume.MikuVolumeManager.triggerHud(context.applicationContext)
+            }
+            pushUpdate(context)
+        }
+        super.onReceive(context, intent)
+    }
 
     override fun onUpdate(context: Context, mgr: AppWidgetManager, ids: IntArray) {
         ids.forEach { render(context, mgr, it) }
     }
 
     companion object {
+        const val ACTION_SHOW_HUD = "com.miku.launcher.SHOW_VOLUME_HUD"
         private var lastPushMs = 0L
 
         fun pushUpdate(context: Context) {
@@ -54,7 +68,12 @@ class MikuVolumeWidget : AppWidgetProvider() {
             v.setTextViewText(R.id.widget_volume_text, if (muted) "MUTE" else "VOL $pct%")
             v.setTextColor(R.id.widget_volume_text, tint)
 
-            v.setOnClickPendingIntent(R.id.widget_volume_root, MikuBatteryWidget.launchLauncher(ctx))
+            val tap = PendingIntent.getBroadcast(
+                ctx, 7009,
+                Intent(ctx, MikuVolumeWidget::class.java).setAction(ACTION_SHOW_HUD),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            v.setOnClickPendingIntent(R.id.widget_volume_root, tap)
             mgr.updateAppWidget(id, v)
         }
     }

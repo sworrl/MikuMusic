@@ -1,0 +1,3023 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.5.2" type="baseline" client="gradle" dependencies="false" name="AGP (8.5.2)" variant="all" version="8.5.2">
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                    val existing = wm.configuredNetworks?.find { it.SSID == &quot;\&quot;$escSsid\&quot;&quot; }"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="749"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                    val existing = wm.configuredNetworks?.find { it.SSID == &quot;\&quot;$escSsid\&quot;&quot; }"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="808"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                btAdapter?.bondedDevices?.toList() ?: emptyList()"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSettingsActivity.kt"
+            line="880"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                                            try { btAdapter?.enable() } catch (_: Throwable) {}"
+        errorLine2="                                                  ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSettingsActivity.kt"
+            line="926"
+            column="51"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                                            try { btAdapter?.disable() } catch (_: Throwable) {}"
+        errorLine2="                                                  ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSettingsActivity.kt"
+            line="929"
+            column="51"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                                        Text(dev.name ?: &quot;Unknown Device&quot;, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)"
+        errorLine2="                                             ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSettingsActivity.kt"
+            line="989"
+            column="46"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="                audioRecord = AudioRecord(AUDIO_SOURCE_RADIO_TUNER, sampleRate, channelIn, encoding, minBuf).apply {"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/radio/QualcommFmHardwareEngine.kt"
+            line="289"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                .commit() // Immediate synchronous write to flash"
+        errorLine2="                 ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="233"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="ApplySharedPref"
+        message="Consider using `apply()` instead; `commit` writes its data to persistent storage immediately, whereas `apply` will handle it in the background"
+        errorLine1="                .commit()"
+        errorLine2="                 ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="311"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                    &quot;🚀 SYNC IN PROGRESS (${String.format(&quot;%.1f&quot;, sync.transferRateMBs)} MB/s) · $transportBadge&quot;"
+        errorLine2="                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/LibraryDaemonService.kt"
+            line="46"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            &quot;Active ingress at ${String.format(&quot;%.1f&quot;, sync.transferRateMBs)} MB/s to /storage/EAFF-98FE/MUSIC.&quot;"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/LibraryDaemonService.kt"
+            line="208"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                    Text(&quot;${String.format(&quot;%.1f&quot;, syncState.transferRateMBs)} MB/s&quot;, color = MikuPink, fontSize = 13.sp, fontWeight = FontWeight.Black)"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2031"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                                &quot;${res.transportTier}\n⚡ ${String.format(&quot;%.1f&quot;, res.speedMBs)} MB/s (Latency: ${res.latencyMs}ms)&quot;,"
+        errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2065"
+            column="60"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                            &quot;${String.format(&quot;%.1f&quot;, syncState.speedTest?.speedMBs ?: 0f)} MB/s (${syncState.speedTest?.latencyMs}ms)&quot;,"
+        errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2102"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                Text(&quot;${String.format(&quot;%.1f&quot;, animSpeed)}x&quot;, color = MikuPink, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5097"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                Text(&quot;${String.format(&quot;%.1f&quot;, syncState.transferRateMBs)} MB/s&quot;, color = MikuPink, fontSize = 13.sp, fontWeight = FontWeight.Black)"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5172"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="        AlarmTriggerMode.CLOCK_TIME -> String.format(&quot;%02d:%02d&quot;, a.hour, a.minute)"
+        errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5458"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="        return String.format(&quot;%02d:%02d&quot;, min, sec)"
+        errorLine2="               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/api/MikuApiRouter.kt"
+            line="335"
+            column="16"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                    timeLabel = String.format(&quot;%02d:00&quot;, hour),"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/weather/MikuMeteogramForecastView.kt"
+            line="66"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                            statusMessage = &quot;⚡ ${String.format(&quot;%.1f&quot;, res.speedMBs)} MB/s (${res.latencyMs}ms)&quot;"
+        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuMonitorModal.kt"
+            line="348"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                    val cacheGbStr = String.format(&quot;%.2f GB&quot;, daemon.cacheBytes / (1024.0 * 1024.0 * 1024.0))"
+        errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuMonitorModal.kt"
+            line="685"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            String.format("
+        errorLine2="            ^">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="568"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="    return if (h > 0) String.format(&quot;%d:%02d:%02d&quot;, h, m, s) else String.format(&quot;%d:%02d&quot;, m, s)"
+        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/VideoPlayer.kt"
+            line="270"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="    return if (h > 0) String.format(&quot;%d:%02d:%02d&quot;, h, m, s) else String.format(&quot;%d:%02d&quot;, m, s)"
+        errorLine2="                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/VideoPlayer.kt"
+            line="270"
+            column="67"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 31 (current min is 26): `android.provider.Settings#ACTION_REQUEST_SCHEDULE_EXACT_ALARM`"
+        errorLine1="                                android.content.Intent(android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)"
+        errorLine2="                                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5500"
+            column="56"/>
+    </issue>
+
+    <issue
+        id="MissingIntentFilterForMediaSearch"
+        message="Missing `intent-filter` for action `android.media.action.MEDIA_PLAY_FROM_SEARCH`."
+        errorLine1="    &lt;application"
+        errorLine2="    ^">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="88"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 26): `android.app.Activity#setShowWhenLocked`"
+        errorLine1="        setShowWhenLocked(true)"
+        errorLine2="        ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/AlarmRingActivity.kt"
+            line="43"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 26): `android.app.Activity#setTurnScreenOn`"
+        errorLine1="        setTurnScreenOn(true)"
+        errorLine2="        ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/AlarmRingActivity.kt"
+            line="44"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 31 (current min is 26): `android.app.AlarmManager#canScheduleExactAlarms`"
+        errorLine1="        if (!am.canScheduleExactAlarms()) return"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/AlarmScheduler.kt"
+            line="29"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 31 (current min is 26): `android.app.AlarmManager#canScheduleExactAlarms`"
+        errorLine1="        if (!am.canScheduleExactAlarms()) return"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/AlarmScheduler.kt"
+            line="45"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 31 (current min is 26): `android.app.AlarmManager#canScheduleExactAlarms`"
+        errorLine1="        (ctx.getSystemService(android.content.Context.ALARM_SERVICE) as android.app.AlarmManager).canScheduleExactAlarms()"
+        errorLine2="                                                                                                  ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5479"
+            column="99"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.content.ContentResolver#loadThumbnail`"
+        errorLine1="                    artBmp = ctx.contentResolver.loadThumbnail(uri, Size(120, 120), null)"
+        errorLine2="                                                 ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuMusicWidget.kt"
+            line="68"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 30 (current min is 29): `android.net.wifi.WifiNetworkSuggestion.Builder#setIsInitialAutojoinEnabled`"
+        errorLine1="                    .setIsInitialAutojoinEnabled(true)"
+        errorLine2="                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="334"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 30 (current min is 29): `android.net.wifi.WifiNetworkSuggestion.Builder#setIsInitialAutojoinEnabled`"
+        errorLine1="                        .setIsInitialAutojoinEnabled(true)"
+        errorLine2="                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkService.kt"
+            line="722"
+            column="26"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.content.ContentResolver#loadThumbnail`"
+        errorLine1="                    artBmp = ctx.contentResolver.loadThumbnail(uri, Size(180, 180), null)"
+        errorLine2="                                                 ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuTapeWidget.kt"
+            line="76"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.icu.text.Transliterator#getInstance`"
+        errorLine1="            val trans = android.icu.text.Transliterator.getInstance(&quot;Any-Latin; Title&quot;)"
+        errorLine2="                                                        ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/Model.kt"
+            line="295"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.icu.text.Transliterator#transliterate`"
+        errorLine1="            val res = trans.transliterate(trimmed).trim()"
+        errorLine2="                            ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/Model.kt"
+            line="296"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.service.quicksettings.Tile#setSubtitle`"
+        errorLine1="        tile.subtitle = if (active) &quot;${UsbDacManager.getSampleRate(applicationContext) / 1000}kHz&quot; else &quot;MTP / ADB&quot;"
+        errorLine2="             ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/QuickSettingsTiles.kt"
+            line="26"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.service.quicksettings.Tile#setSubtitle`"
+        errorLine1="        tile.subtitle = if (active) &quot;Touch &amp; Keys Locked&quot; else &quot;Key Lock Only&quot;"
+        errorLine2="             ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/QuickSettingsTiles.kt"
+            line="55"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 29 (current min is 26): `android.service.quicksettings.Tile#setSubtitle`"
+        errorLine1="        tile.subtitle = if (enabled) mode.label else &quot;Off&quot;"
+        errorLine2="             ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/QuickSettingsTiles.kt"
+            line="91"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 33 (current min is 26): `android.graphics.RuntimeShader#setFloatUniform`"
+        errorLine1="    shaderHolder.setFloatUniform(&quot;resolution&quot;, size.width, size.height)"
+        errorLine2="                 ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="2447"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 33 (current min is 26): `android.graphics.RenderEffect#createRuntimeShaderEffect`"
+        errorLine1="    renderEffect = android.graphics.RenderEffect.createRuntimeShaderEffect(shaderHolder, &quot;content&quot;).asComposeRenderEffect()"
+        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="2449"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="OldTargetApi"
+        message="Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the `android.os.Build.VERSION_CODES` javadoc for details."
+        errorLine1="        targetSdk = 35"
+        errorLine2="        ~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="16"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="PrivateApi"
+        message="Accessing internal APIs via reflection is not supported and may not work on all devices or in the future"
+        errorLine1="            val c = Class.forName(&quot;android.os.SystemProperties&quot;)"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/api/MikuApiRouter.kt"
+            line="321"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="SdCardPath"
+        message="Do not hardcode &quot;/sdcard/&quot;; use `Environment.getExternalStorageDirectory().getPath()` instead"
+        errorLine1="    const val PATH_SD_MUSIC = &quot;/sdcard/MUSIC&quot;"
+        errorLine2="                               ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSyncTransceiver.kt"
+            line="34"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="SdCardPath"
+        message="Do not hardcode &quot;/sdcard/&quot;; use `Environment.getExternalStorageDirectory().getPath()` instead"
+        errorLine1="    const val PATH_SD_MOVIES = &quot;/sdcard/Movies&quot;"
+        errorLine2="                                ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSyncTransceiver.kt"
+            line="35"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SdCardPath"
+        message="Do not hardcode &quot;/sdcard/&quot;; use `Environment.getExternalStorageDirectory().getPath()` instead"
+        errorLine1="    const val PATH_SD_STAGING = &quot;/sdcard/.m500staging&quot;"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuSyncTransceiver.kt"
+            line="36"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellWidth` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:targetCellWidth=&quot;3&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_clock_info.xml"
+            line="5"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellHeight` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:targetCellHeight=&quot;2&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_clock_info.xml"
+            line="6"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `previewLayout` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:previewLayout=&quot;@layout/widget_clock&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_clock_info.xml"
+            line="12"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellWidth` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:targetCellWidth=&quot;4&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_now_playing_info.xml"
+            line="5"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellHeight` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:targetCellHeight=&quot;1&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_now_playing_info.xml"
+            line="6"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `previewLayout` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:previewLayout=&quot;@layout/widget_now_playing&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_now_playing_info.xml"
+            line="12"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellWidth` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:targetCellWidth=&quot;4&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_tape_info.xml"
+            line="8"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `targetCellHeight` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:targetCellHeight=&quot;2&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_tape_info.xml"
+            line="9"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="UnusedAttribute"
+        message="Attribute `previewLayout` is only used in API level 31 and higher (current min is 26)"
+        errorLine1="    android:previewLayout=&quot;@layout/widget_tape&quot;"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/widget_tape_info.xml"
+            line="15"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: DefaultAudioSink.OUTPUT_MODE_PCM, DefaultAudioSink.OUTPUT_MODE_OFFLOAD, DefaultAudioSink.OUTPUT_MODE_PASSTHROUGH"
+        errorLine1="                outputMode,"
+        errorLine2="                ~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="731"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one of: LibraryResult.RESULT_SUCCESS, SessionError.INFO_CANCELLED, SessionError.ERROR_UNKNOWN, SessionError.ERROR_INVALID_STATE, SessionError.ERROR_BAD_VALUE, SessionError.ERROR_PERMISSION_DENIED, SessionError.ERROR_IO, SessionError.ERROR_SESSION_DISCONNECTED, SessionError.ERROR_NOT_SUPPORTED, SessionError.ERROR_SESSION_AUTHENTICATION_EXPIRED, SessionError.ERROR_SESSION_PREMIUM_ACCOUNT_REQUIRED, SessionError.ERROR_SESSION_CONCURRENT_STREAM_LIMIT, SessionError.ERROR_SESSION_PARENTAL_CONTROL_RESTRICTED, SessionError.ERROR_SESSION_NOT_AVAILABLE_IN_REGION, SessionError.ERROR_SESSION_SKIP_LIMIT_REACHED, SessionError.ERROR_SESSION_SETUP_REQUIRED"
+        errorLine1="            Futures.immediateFuture(LibraryResult.ofError&lt;MediaItem>(SessionResult.RESULT_ERROR_BAD_VALUE))"
+        errorLine2="                                                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MikuMediaLibrarySession.kt"
+            line="157"
+            column="70"/>
+    </issue>
+
+    <issue
+        id="SelectedPhotoAccess"
+        message="Your app is currently not handling Selected Photos Access introduced in Android 14+"
+        errorLine1="    &lt;uses-permission android:name=&quot;android.permission.READ_MEDIA_VIDEO&quot; />"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="18"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.compose:compose-bom than 2024.09.02 is available: 2026.08.00"
+        errorLine1="    implementation(platform(&quot;androidx.compose:compose-bom:2024.09.02&quot;))"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="162"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.activity:activity-compose than 1.9.2 is available: 1.13.0"
+        errorLine1="    implementation(&quot;androidx.activity:activity-compose:1.9.2&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="167"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.13.1 is available: 1.19.0"
+        errorLine1="    implementation(&quot;androidx.core:core-ktx:1.13.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="168"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.8.6 is available: 2.11.0"
+        errorLine1="    implementation(&quot;androidx.lifecycle:lifecycle-runtime-ktx:2.8.6&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="169"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-exoplayer than 1.4.1 is available: 1.11.0"
+        errorLine1="    implementation(&quot;androidx.media3:media3-exoplayer:1.4.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="170"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.media3:media3-session than 1.4.1 is available: 1.11.0"
+        errorLine1="    implementation(&quot;androidx.media3:media3-session:1.4.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="171"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of dev.chrisbanes.haze:haze than 0.7.3 is available: 1.7.2"
+        errorLine1="    implementation(&quot;dev.chrisbanes.haze:haze:0.7.3&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="176"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of dev.chrisbanes.haze:haze-materials than 0.7.3 is available: 1.7.2"
+        errorLine1="    implementation(&quot;dev.chrisbanes.haze:haze-materials:0.7.3&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="177"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.security:security-crypto than 1.1.0-alpha06 is available: 1.1.0"
+        errorLine1="    implementation(&quot;androidx.security:security-crypto:1.1.0-alpha06&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="180"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="113"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="131"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="170"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="186"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="202"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="LockedOrientationActivity"
+        message="Expecting `android:screenOrientation=&quot;unspecified&quot;` or `&quot;fullSensor&quot;` for this activity so the user can use the application in any orientation and provide a great experience on Chrome OS devices"
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="237"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="SourceLockedOrientationActivity"
+        message="You should not lock orientation of your activities, so that you can support a good user experience for any device or orientation"
+        errorLine1="        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="360"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2817"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="3012"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="3061"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="3454"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Optional Modifier parameter should have a default value of `Modifier`"
+        errorLine1="@Composable fun QualityGauge(score: Float?, modifier: Modifier = Modifier.size(22.dp)) {"
+        errorLine2="                                            ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="4283"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="@Composable private fun LibraryStatsCard(trackCount: Int, artistCount: Int, albumCount: Int, stats: LibraryStats, loading: Boolean = false, modifier: Modifier = Modifier) {"
+        errorLine2="                                                                                                                                            ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="6345"
+            column="141"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier,"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/network/MikuNetworkObservatoryModal.kt"
+            line="54"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ModifierParameter"
+        message="Modifier parameter should be the first optional parameter"
+        errorLine1="    modifier: Modifier = Modifier"
+        errorLine2="    ~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="2348"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="113"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="131"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="170"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="186"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="202"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;portrait&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="237"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="AcceptsUserCertificates"
+        message="The Network Security Configuration allows the use of user certificates in the release version of your app"
+        errorLine1="            &lt;certificates src=&quot;user&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/xml/network_security_config.xml"
+            line="6"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ExportedReceiver"
+        message="Exported receiver does not require permission"
+        errorLine1="        &lt;receiver"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="212"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="ExportedReceiver"
+        message="Exported receiver does not require permission"
+        errorLine1="        &lt;receiver"
+        errorLine2="         ~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="324"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="ExportedService"
+        message="Exported service does not require permission"
+        errorLine1="        &lt;service"
+        errorLine2="         ~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="249"
+            column="10"/>
+    </issue>
+
+    <issue
+        id="InsecureBaseConfiguration"
+        message="Insecure Base Configuration"
+        errorLine1="    &lt;base-config cleartextTrafficPermitted=&quot;true&quot;>"
+        errorLine2="                                            ~~~~">
+        <location
+            file="src/main/res/xml/network_security_config.xml"
+            line="3"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 26"
+        errorLine1="            if (Build.VERSION.SDK_INT >= 26)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/Haptics.kt"
+            line="90"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 26"
+        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/LibraryDaemonService.kt"
+            line="175"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 26"
+        errorLine1="                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
+        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/LibraryDaemonService.kt"
+            line="268"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 23"
+        errorLine1="  @RequiresApi(23)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="1335"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 23"
+        errorLine1="  @RequiresApi(23)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="1525"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 21"
+        errorLine1="  @RequiresApi(21)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="1770"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 21"
+        errorLine1="  @RequiresApi(21)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="1775"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 21"
+        errorLine1="  @RequiresApi(21)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="1815"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 24"
+        errorLine1="  @RequiresApi(24)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="1875"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 21"
+        errorLine1="    @RequiresApi(21)"
+        errorLine2="    ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="2224"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 21"
+        errorLine1="    @RequiresApi(21)"
+        errorLine2="    ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="2258"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 21"
+        errorLine1="    @RequiresApi(21)"
+        errorLine2="    ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="2268"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 23"
+        errorLine1="  @RequiresApi(23)"
+        errorLine2="  ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
+            line="2323"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 24"
+        errorLine1="@RequiresApi(Build.VERSION_CODES.N)"
+        errorLine2="~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/QuickSettingsTiles.kt"
+            line="12"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 24"
+        errorLine1="@RequiresApi(Build.VERSION_CODES.N)"
+        errorLine2="~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/QuickSettingsTiles.kt"
+            line="41"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 24"
+        errorLine1="@RequiresApi(Build.VERSION_CODES.N)"
+        errorLine2="~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/QuickSettingsTiles.kt"
+            line="76"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `LastFmScrobbler` which has field `appCtx` pointing to `Context`); this is a memory leak"
+        errorLine1="/**"
+        errorLine2="^">
+        <location
+            file="src/main/java/com/miku/player/LastFmScrobbler.kt"
+            line="10"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields; this is a memory leak"
+        errorLine1="    private var appCtx: Context? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/LastFmScrobbler.kt"
+            line="26"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `MikuApiRouter` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="    private var router: MikuApiRouter? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/api/MikuApiServer.kt"
+            line="38"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="StaticFieldLeak"
+        message="Do not place Android context classes in static fields (static reference to `QualcommFmHardwareEngine` which has field `context` pointing to `Context`); this is a memory leak"
+        errorLine1="    private var engine: QualcommFmHardwareEngine? = null"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/radio/MikuFMRadioActivity.kt"
+            line="84"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var csDsdComp by remember { mutableStateOf(6) }"
+        errorLine2="                                ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/HardwareSettingsActivity.kt"
+            line="58"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var usbDacRate by remember { mutableStateOf(UsbDacManager.getSampleRate(ctx)) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/HardwareSettingsActivity.kt"
+            line="63"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var usbDacBits by remember { mutableStateOf(UsbDacManager.getBitDepth(ctx)) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/HardwareSettingsActivity.kt"
+            line="64"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var activeSec by mutableStateOf(120)"
+        errorLine2="                     ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/IdleScreen.kt"
+            line="53"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dimSec by mutableStateOf(120)"
+        errorLine2="                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/IdleScreen.kt"
+            line="54"
+            column="19"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var ambientSec by mutableStateOf(60)"
+        errorLine2="                      ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/IdleScreen.kt"
+            line="55"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var now by remember { mutableStateOf(System.currentTimeMillis()) }"
+        errorLine2="                          ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/IdleScreen.kt"
+            line="200"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var currentId by mutableStateOf(-1L)"
+        errorLine2="                     ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="263"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="                        var refresh by remember { mutableStateOf(0) }"
+        errorLine2="                                                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="425"
+            column="51"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="                        var lastSeenGen by remember { mutableStateOf(ScanProgress.generation.get()) }"
+        errorLine2="                                                      ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="431"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var historyTick by remember { mutableStateOf(0) }"
+        errorLine2="                                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="797"
+            column="35"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var currentPose by remember { mutableStateOf(1) } // 1: Cheering Welcome, 2: Peace Sign Wink"
+        errorLine2="                                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="1328"
+            column="35"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var phase by remember { mutableStateOf(0f) }"
+        errorLine2="                            ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2781"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var idleActiveSec by remember { mutableStateOf(IdleController.activeSec) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="4659"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var idleDimSec by remember { mutableStateOf(IdleController.dimSec) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="4660"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var idleAmbientSec by remember { mutableStateOf(IdleController.ambientSec) }"
+        errorLine2="                                     ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="4661"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var brightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx)) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5039"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var animSpeed by remember { mutableStateOf(PulsarLight.getAnimationSpeed(ctx)) }"
+        errorLine2="                                ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5041"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var hour by remember { mutableStateOf(initial?.hour ?: 7) }"
+        errorLine2="                           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5594"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var minute by remember { mutableStateOf(initial?.minute ?: 0) }"
+        errorLine2="                             ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5595"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var fadeInSeconds by remember { mutableStateOf(initial?.fadeInSeconds ?: 30) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5599"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var snoozeMinutes by remember { mutableStateOf(initial?.snoozeMinutes ?: 9) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5600"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var pos by remember { mutableStateOf(0L) }"
+        errorLine2="                          ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="6089"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dur by remember { mutableStateOf(track.durationMs.coerceAtLeast(1L)) }"
+        errorLine2="                          ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="6090"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var currentPresetIndex by remember { mutableStateOf(PlayerPreferences.loadProjectMPreset(ctx)) }"
+        errorLine2="                                         ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="113"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var pos by remember(track.id) { mutableStateOf(0L) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="124"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dur by remember(track.id) { mutableStateOf(track.durationMs.coerceAtLeast(1L)) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="125"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dragOffsetY by remember { mutableStateOf(0f) }"
+        errorLine2="                                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="186"
+            column="35"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="                var totalDragX by remember { mutableStateOf(0f) }"
+        errorLine2="                                             ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="399"
+            column="46"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var shimmer by remember { mutableStateOf(0f) }"
+        errorLine2="                              ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="821"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var phase by remember { mutableStateOf(0f) }"
+        errorLine2="                            ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="963"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var beat by remember { mutableStateOf(0f) }"
+        errorLine2="                           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/NowPlaying.kt"
+            line="964"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var pulsarBrightness by remember { mutableStateOf((PulsarLight.getBrightness(ctx) / 255f).coerceIn(0f, 1f)) }"
+        errorLine2="                                       ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/PulsarSettingsActivity.kt"
+            line="52"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var pos by remember(track.id) { mutableStateOf(0L) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="358"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dur by remember(track.id) { mutableStateOf(track.durationMs.coerceAtLeast(1L)) }"
+        errorLine2="                                    ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="359"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableIntStateOf` instead of `mutableStateOf`"
+        errorLine1="    var themeIdx by remember { mutableStateOf(PlayerPreferences.loadTapeTheme(ctx)) }"
+        errorLine2="                               ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="385"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var lastTapTime by remember { mutableStateOf(0L) }"
+        errorLine2="                                  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="389"
+            column="35"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var lastTapX by remember { mutableStateOf(0f) }"
+        errorLine2="                               ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="390"
+            column="32"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var reelAngleL by remember { mutableStateOf(0f) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="396"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var reelAngleR by remember { mutableStateOf(0f) }"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="397"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var phase by remember { mutableStateOf(0f) }"
+        errorLine2="                            ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="1976"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var beat by remember { mutableStateOf(0f) }"
+        errorLine2="                           ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/TapeMode.kt"
+            line="1977"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var pos by remember { mutableStateOf(0L) }"
+        errorLine2="                          ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/VideoPlayer.kt"
+            line="139"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableLongStateOf` instead of `mutableStateOf`"
+        errorLine1="    var dur by remember { mutableStateOf(video.durationMs.coerceAtLeast(1L)) }"
+        errorLine2="                          ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/VideoPlayer.kt"
+            line="140"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="DisableBaselineAlignment"
+        message="Set `android:baselineAligned=&quot;false&quot;` on this element for better performance"
+        errorLine1="    &lt;LinearLayout"
+        errorLine2="     ~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_tape.xml"
+            line="32"
+            column="6"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.battery_low` appears to be unused">
+        <location
+            file="src/main/res/raw/battery_low.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.battery_low_en` appears to be unused">
+        <location
+            file="src/main/res/raw/battery_low_en.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.battery_low_jp` appears to be unused">
+        <location
+            file="src/main/res/raw/battery_low_jp.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.charging` appears to be unused">
+        <location
+            file="src/main/res/raw/charging.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.charging_en` appears to be unused">
+        <location
+            file="src/main/res/raw/charging_en.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.charging_jp` appears to be unused">
+        <location
+            file="src/main/res/raw/charging_jp.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.headset_plugged_in` appears to be unused">
+        <location
+            file="src/main/res/raw/headset_plugged_in.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.headset_plugged_in_en` appears to be unused">
+        <location
+            file="src/main/res/raw/headset_plugged_in_en.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.headset_plugged_in_jp` appears to be unused">
+        <location
+            file="src/main/res/raw/headset_plugged_in_jp.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.headset_plugged_out` appears to be unused">
+        <location
+            file="src/main/res/raw/headset_plugged_out.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.headset_plugged_out_en` appears to be unused">
+        <location
+            file="src/main/res/raw/headset_plugged_out_en.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.headset_plugged_out_jp` appears to be unused">
+        <location
+            file="src/main/res/raw/headset_plugged_out_jp.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_alicloud_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_alicloud_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_apkpure_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_apkpure_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_apple_music_classic_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_apple_music_classic_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_apple_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_apple_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_aweme_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_aweme_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_baidu_cloud_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_baidu_cloud_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_baidu_input_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_baidu_input_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_baofeng_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_baofeng_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_bg_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_bg_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_bili_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_bili_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_border_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_border_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_browser_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_browser_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_calculator_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_calculator_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_calendar_bg_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_calendar_bg_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_calendar_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_calendar_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_camera_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_camera_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_chrome_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_chrome_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_clock_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_clock_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_cloud_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_cloud_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_coolapk_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_coolapk_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_cxfileexplorer_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_cxfileexplorer_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_douban_fm_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_douban_fm_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_douban_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_douban_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_ecloud_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_ecloud_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_estrongs_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_estrongs_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_facebook_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_facebook_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_feiao_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_feiao_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_file_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_file_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_firefox_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_firefox_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_folder_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_folder_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_gallery_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_gallery_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hiby_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hiby_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hiby_roon_ready_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hiby_roon_ready_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hibyblue_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hibyblue_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hibycast_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hibycast_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hibysupport_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hibysupport_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hibyusb_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hibyusb_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_hires_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_hires_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_iflytek_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_iflytek_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_iqiyi_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_iqiyi_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_kuake_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_kuake_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_kugou_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_kugou_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_kuwo_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_kuwo_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_lizhi_fm_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_lizhi_fm_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_magisk_sakura` appears to be unused">
+        <location
+            file="src/main/res/drawable/ic_magisk_sakura.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_market_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_market_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_mask_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_mask_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_miku_fm_boombox` appears to be unused">
+        <location
+            file="src/main/res/drawable/ic_miku_fm_boombox.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_miku_music_brand` appears to be unused">
+        <location
+            file="src/main/res/drawable/ic_miku_music_brand.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_miku_settings_bespoke` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_miku_settings_bespoke.xml"
+            line="1"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_musictag_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_musictag_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_news_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_news_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_playstore_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_playstore_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_promusic_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_promusic_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_qobuz_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_qobuz_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_qq_input_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_qq_input_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_qq_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_qq_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_qq_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_qq_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_qqlive_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_qqlive_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_qtradio_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_qtradio_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_roon_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_roon_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_roonready_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_roonready_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_shanling_music_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_shanling_music_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_sina_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_sina_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_sougou_input_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_sougou_input_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_soundrecorder_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_soundrecorder_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_spotify_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_spotify_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_spotify_pink_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable/ic_spotify_pink_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_tidal_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_tidal_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_via_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_via_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_video_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_video_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_viper_hifi_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_viper_hifi_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_weather_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_weather_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_wechat_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_wechat_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_widgets_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_widgets_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_xhs_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_xhs_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_xiaoyuzhou_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_xiaoyuzhou_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_ximalaya_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_ximalaya_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_zhihu_miku` appears to be unused">
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_zhihu_miku.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.img_os_crash` appears to be unused">
+        <location
+            file="src/main/res/drawable/img_os_crash.webp"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.lb_voice_failure` appears to be unused">
+        <location
+            file="src/main/res/raw/lb_voice_failure.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.lb_voice_no_input` appears to be unused">
+        <location
+            file="src/main/res/raw/lb_voice_no_input.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.lb_voice_open` appears to be unused">
+        <location
+            file="src/main/res/raw/lb_voice_open.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.lb_voice_success` appears to be unused">
+        <location
+            file="src/main/res/raw/lb_voice_success.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.miku_bg_drawer` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/miku_bg_drawer.jpg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.miku_bg_settings` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/miku_bg_settings.jpg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.miku_clock_preview` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/miku_clock_preview.webp"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.miku_drawer_bg_tokyo` appears to be unused">
+        <location
+            file="src/main/res/drawable/miku_drawer_bg_tokyo.jpg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.shutdown` appears to be unused">
+        <location
+            file="src/main/res/raw/shutdown.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.shutdown_en` appears to be unused">
+        <location
+            file="src/main/res/raw/shutdown_en.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.shutdown_jp` appears to be unused">
+        <location
+            file="src/main/res/raw/shutdown_jp.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.hardware_settings_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;hardware_settings_title&quot;>M500 Hardware &amp;amp; DAC Suite&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="5"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.hardware_settings_summary` appears to be unused"
+        errorLine1="    &lt;string name=&quot;hardware_settings_summary&quot;>Hardware Fn Pocket Lock, Pulsar RGB Lighting, and Bit-Perfect USB DAC&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="6"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.volume_high` appears to be unused">
+        <location
+            file="src/main/res/raw/volume_high.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.volume_high_en` appears to be unused">
+        <location
+            file="src/main/res/raw/volume_high_en.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.raw.volume_high_jp` appears to be unused">
+        <location
+            file="src/main/res/raw/volume_high_jp.ogg"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_0` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_0.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_1` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_1.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_2` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_2.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_3` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_3.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_4` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_4.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_5` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_5.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_6` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_6.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_7` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_7.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_8` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_8.png"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.wall_paper_9` appears to be unused">
+        <location
+            file="src/main/res/drawable-nodpi/wall_paper_9.png"/>
+    </issue>
+
+    <issue
+        id="UseOfNonLambdaOffsetOverload"
+        message="State backed values should use the lambda overload of Modifier.offset"
+        errorLine1="                .offset(x = shakeAnim.value.dp)"
+        errorLine2="                 ~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/FnLockHudActivity.kt"
+            line="198"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="UseOfNonLambdaOffsetOverload"
+        message="State backed values should use the lambda overload of Modifier.offset"
+        errorLine1="                    .offset(x = left)"
+        errorLine2="                     ~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2418"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseOfNonLambdaOffsetOverload"
+        message="State backed values should use the lambda overload of Modifier.offset"
+        errorLine1="                    .offset(x = (-1).dp, y = animatedReticleYOffsetDp)"
+        errorLine2="                     ~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2962"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseOfNonLambdaOffsetOverload"
+        message="State backed values should use the lambda overload of Modifier.offset"
+        errorLine1="                    .offset(x = (-52).dp, y = animatedReticleYOffsetDp)"
+        errorLine2="                     ~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="2983"
+            column="22"/>
+    </issue>
+
+    <issue
+        id="UseOfNonLambdaOffsetOverload"
+        message="State backed values should use the lambda overload of Modifier.offset"
+        errorLine1="                .offset(x = thumbOffset)"
+        errorLine2="                 ~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/MainActivity.kt"
+            line="5969"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="IconDuplicatesConfig"
+        message="The `ic_miku_music_brand.png` icon has identical contents in the following configuration folders: drawable-xxxhdpi, drawable">
+        <location
+            file="src/main/res/drawable/ic_miku_music_brand.png"/>
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_miku_music_brand.png"/>
+    </issue>
+
+    <issue
+        id="IconDuplicatesConfig"
+        message="The `ic_spotify_pink_miku.png` icon has identical contents in the following configuration folders: drawable-xxxhdpi, drawable">
+        <location
+            file="src/main/res/drawable/ic_spotify_pink_miku.png"/>
+        <location
+            file="src/main/res/drawable-xxxhdpi/ic_spotify_pink_miku.png"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/falcon_technix_logo.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/falcon_technix_logo.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/ic_magisk_sakura.png` in densityless folder">
+        <location
+            file="src/main/res/drawable/ic_magisk_sakura.png"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/ic_miku_fm_boombox.png` in densityless folder">
+        <location
+            file="src/main/res/drawable/ic_miku_fm_boombox.png"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/ic_miku_music_brand.png` in densityless folder">
+        <location
+            file="src/main/res/drawable/ic_miku_music_brand.png"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/ic_spotify_pink_miku.png` in densityless folder">
+        <location
+            file="src/main/res/drawable/ic_spotify_pink_miku.png"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/img_os_crash.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/img_os_crash.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_audiophile_art.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_audiophile_art.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_banner_cyber_stage.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_banner_cyber_stage.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_boot_splash.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_boot_splash.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_boot_splash_pose2.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_boot_splash_pose2.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_chibi_hearts.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_chibi_hearts.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_cyber_stage.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_cyber_stage.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_dj_megaphone.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_dj_megaphone.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_drawer_bg_tokyo.jpg` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_drawer_bg_tokyo.jpg"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_pose_chibi_dj.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_pose_chibi_dj.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_pose_dance.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_pose_dance.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_pose_headphones.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_pose_headphones.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_pose_peace.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_pose_peace.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_pose_vocal.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_pose_vocal.webp"/>
+    </issue>
+
+    <issue
+        id="IconLocation"
+        message="Found bitmap drawable `res/drawable/miku_render_stage_dj.webp` in densityless folder">
+        <location
+            file="src/main/res/drawable/miku_render_stage_dj.webp"/>
+    </issue>
+
+    <issue
+        id="IconDuplicates"
+        message="The following unrelated icon files have identical contents: ic_launcher.png, ic_launcher_round.png">
+        <location
+            file="src/main/res/mipmap-hdpi/ic_launcher_round.png"/>
+        <location
+            file="src/main/res/mipmap-hdpi/ic_launcher.png"/>
+    </issue>
+
+    <issue
+        id="IconDuplicates"
+        message="The following unrelated icon files have identical contents: ic_launcher.png, ic_launcher_round.png">
+        <location
+            file="src/main/res/mipmap-mdpi/ic_launcher_round.png"/>
+        <location
+            file="src/main/res/mipmap-mdpi/ic_launcher.png"/>
+    </issue>
+
+    <issue
+        id="IconDuplicates"
+        message="The following unrelated icon files have identical contents: ic_launcher.png, ic_launcher_round.png">
+        <location
+            file="src/main/res/mipmap-xhdpi/ic_launcher_round.png"/>
+        <location
+            file="src/main/res/mipmap-xhdpi/ic_launcher.png"/>
+    </issue>
+
+    <issue
+        id="IconDuplicates"
+        message="The following unrelated icon files have identical contents: ic_launcher.png, ic_launcher_round.png">
+        <location
+            file="src/main/res/mipmap-xxhdpi/ic_launcher_round.png"/>
+        <location
+            file="src/main/res/mipmap-xxhdpi/ic_launcher.png"/>
+    </issue>
+
+    <issue
+        id="IconDuplicates"
+        message="The following unrelated icon files have identical contents: ic_launcher.png, ic_launcher_round.png">
+        <location
+            file="src/main/res/mipmap-xxxhdpi/ic_launcher_round.png"/>
+        <location
+            file="src/main/res/mipmap-xxxhdpi/ic_launcher.png"/>
+    </issue>
+
+    <issue
+        id="IconDuplicates"
+        message="The following unrelated icon files have identical contents: miku_bg_drawer.jpg, miku_drawer_bg_tokyo.jpg">
+        <location
+            file="src/main/res/drawable/miku_drawer_bg_tokyo.jpg"/>
+        <location
+            file="src/main/res/drawable-nodpi/miku_bg_drawer.jpg"/>
+    </issue>
+
+    <issue
+        id="SmallSp"
+        message="Avoid using sizes smaller than `11sp`: `9.5sp`"
+        errorLine1="        android:textSize=&quot;9.5sp&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_clock.xml"
+            line="57"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `ProjectMGLSurfaceView` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class ProjectMGLSurfaceView(context: Context, private var sessionId: Int) : GLSurfaceView(context) {"
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/player/ProjectMVisualizer.kt"
+            line="345"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;03:39&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;03:39&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_clock.xml"
+            line="22"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;PM&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;PM&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_clock.xml"
+            line="33"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;SATURDAY, AUG 15&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;SATURDAY, AUG 15&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_clock.xml"
+            line="44"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;初音ミク · M500 DAP&quot;, should use `@string` resource"
+        errorLine1="        android:text=&quot;初音ミク · M500 DAP&quot;"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_clock.xml"
+            line="55"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Album Art&quot;, should use `@string` resource"
+        errorLine1="        android:contentDescription=&quot;Album Art&quot; />"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_now_playing.xml"
+            line="18"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Miku Music&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Miku Music&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_now_playing.xml"
+            line="33"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Nothing playing&quot;, should use `@string` resource"
+        errorLine1="            android:text=&quot;Nothing playing&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_now_playing.xml"
+            line="45"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Previous&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Previous&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_now_playing.xml"
+            line="65"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Play/Pause&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Play/Pause&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_now_playing.xml"
+            line="74"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Next&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Next&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_now_playing.xml"
+            line="83"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Previous&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Previous&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_tape.xml"
+            line="42"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Play/Pause&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Play/Pause&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_tape.xml"
+            line="49"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="HardcodedText"
+        message="Hardcoded string &quot;Next&quot;, should use `@string` resource"
+        errorLine1="            android:contentDescription=&quot;Next&quot; />"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/layout/widget_tape.xml"
+            line="56"
+            column="13"/>
+    </issue>
+
+</issues>

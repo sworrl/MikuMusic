@@ -8,6 +8,10 @@
          telephony reads return defaults and the signal pod can't reflect the real radio. -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <!-- Haptic feedback (BPM tap-tempo orb + UI ticks). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- ActivityManager.moveTaskToFront (bring launcher/app forward). -->
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
@@ -231,6 +235,7 @@
             android:label="Miku Volume">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.miku.launcher.SHOW_VOLUME_HUD" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

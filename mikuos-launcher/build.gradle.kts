@@ -35,8 +35,8 @@ android {
         applicationId = "com.miku.launcher"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.1.17"
+        versionCode = 28
+        versionName = "0.1.18"
 
         buildConfigField("String", "ARCO_HMAC_KEY_ID", "\"${arcoProp("ARCO_HMAC_KEY_ID")}\"")
         buildConfigField("String", "ARCO_HMAC_SECRET", "\"${arcoProp("ARCO_HMAC_SECRET")}\"")
@@ -130,8 +130,13 @@ android {
     }
 
     lint {
-        checkReleaseBuilds = false
-        abortOnError = false
+        // Correct-by-design for a platform-signed system launcher — not defects:
+        //  QueryAllPackagesPermission: a launcher legitimately enumerates all apps.
+        //  ProtectedPermissions: system/signature permissions on our own ROM.
+        disable += setOf("QueryAllPackagesPermission", "ProtectedPermissions")
+        // Accept remaining known issues (NewApi on API-34-only device, pre-granted runtime perms,
+        // framework false-positives) via a baseline; NEW issues still fail the build.
+        baseline = file("lint-baseline.xml")
     }
 
     applicationVariants.all {

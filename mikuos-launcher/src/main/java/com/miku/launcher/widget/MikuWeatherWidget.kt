@@ -12,8 +12,9 @@ import kotlin.math.roundToInt
 /**
  * Current weather as an individual system App Widget. Widgets render in the launcher process, so
  * the render is a synchronous read of MikuWeatherService.state.value — no fetch of its own.
- * Refreshed via [pushUpdate] from the service's fetch cycle; until the first successful fetch
- * (lastUpdatedTime == 0) it shows an awaiting-data placeholder instead of default values.
+ * Refreshed via [pushUpdate] from the service's fetch cycle. On a cold start it seeds from the
+ * persisted last forecast; only when no fetch has EVER succeeded does it show an awaiting-data
+ * placeholder instead of default values.
  */
 class MikuWeatherWidget : AppWidgetProvider() {
 
@@ -32,6 +33,12 @@ class MikuWeatherWidget : AppWidgetProvider() {
         private fun render(ctx: Context, mgr: AppWidgetManager, id: Int) {
             val v = RemoteViews(ctx.packageName, R.layout.widget_miku_weather)
 
+            // The widget can render in a freshly-started launcher process before the service's
+            // start() runs — seed from the persisted last forecast so it's never blank when one
+            // exists. No-op if state already holds a fresher condition.
+            if (MikuWeatherService.state.value.weather.lastUpdatedTime == 0L) {
+                runCatching { MikuWeatherService.restoreLastWeather(ctx.applicationContext) }
+            }
             val w = MikuWeatherService.state.value.weather
             val fresh = w.lastUpdatedTime > 0L
             v.setTextViewText(R.id.widget_weather_icon, if (fresh) w.icon else "🌐")

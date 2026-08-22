@@ -303,7 +303,10 @@ class MikuLauncherActivity : ComponentActivity() {
         hideSystemBars()
     }
 
+    // Delegating to the dispatcher IS the recommended replacement for super.onBackPressed();
+    // lint's MissingSuperCall doesn't recognize the delegation as equivalent.
     @Deprecated("Deprecated in Java")
+    @android.annotation.SuppressLint("MissingSuperCall")
     override fun onBackPressed() {
         onBackPressedDispatcher.onBackPressed()
     }

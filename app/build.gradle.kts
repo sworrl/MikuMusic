@@ -124,6 +124,17 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
+    lint {
+        // Correct-by-design for this platform-signed, single-device ROM app — not defects:
+        //  UnsafeOptInUsageError: we deliberately extend Media3 @UnstableApi internals
+        //    (MikuDirectAudioSink) for the bit-perfect DIRECT path.
+        //  ProtectedPermissions/QueryAllPackagesPermission: system app on our own ROM.
+        disable += setOf("UnsafeOptInUsageError", "ProtectedPermissions", "QueryAllPackagesPermission")
+        // Accept the remaining known issues (NewApi on an API-34-only device, pre-granted runtime
+        // permissions, framework false-positives) via a baseline, so the build stays green while
+        // any NEW issue still fails the build.
+        baseline = file("lint-baseline.xml")
+    }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
