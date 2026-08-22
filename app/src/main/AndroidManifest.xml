@@ -228,22 +228,6 @@
         </service>
 
         <activity
-            android:name=".UsbDacActivity"
-            android:exported="true"
-            android:label="Miku USB DAC Mode"
-            android:icon="@mipmap/ic_launcher"
-            android:roundIcon="@mipmap/ic_launcher_round"
-            android:theme="@style/Theme.MikuLauncher"
-            android:screenOrientation="portrait"
-            android:configChanges="orientation|screenSize|keyboardHidden">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="android.settings.WORK_MODE_VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
-
-        <activity
             android:name=".radio.MikuFMRadioActivity"
             android:exported="true"
             android:label="Miku FM Radio"

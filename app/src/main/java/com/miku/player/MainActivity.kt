@@ -18,10 +18,26 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColor
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.LocalIndication
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -162,11 +178,85 @@ fun Modifier.glassCard(corner: androidx.compose.ui.unit.Dp = 14.dp, tint: Color 
         )
     }
 
+/**
+ * [glassCard] plus tactile press response: a springy scale-dip of the WHOLE tile (material and
+ * content together — graphicsLayer sits before the glass draw), ripple clipped to the card, and
+ * an optional long-press. One definition of "pressable tile" so grid cells and list rows all
+ * respond the same way, instead of some rippling flat and others doing bespoke scale effects.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+fun Modifier.pressableGlassCard(
+    corner: androidx.compose.ui.unit.Dp = 14.dp,
+    tint: Color = MikuTeal,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit
+): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        if (pressed) 0.965f else 1f,
+        spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow),
+        label = "cardPress"
+    )
+    return this
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .glassCard(corner, tint)
+        .combinedClickable(
+            interactionSource = interaction,
+            indication = LocalIndication.current,
+            onLongClick = onLongClick,
+            onClick = onClick
+        )
+}
+
 // Order here is the visual tab-bar order (Home, Artists, Albums, Library) — Songs is no longer
 // its own top-level tab (merged into Library, reachable via an "All Songs" row there), but the
 // enum value stays for the existing `tab == Tab.SONGS -> SongList(...)` route; TabBar filters it
 // out of what it actually renders rather than the enum controlling bar order/membership directly.
 private enum class Tab(val label: String) { HOME("Home"), ARTISTS("Artists"), ALBUMS("Albums"), GENRES("Library"), SONGS("Songs") }
+
+// Snapshot routes for the main content area's AnimatedContent. The exiting screen must keep
+// rendering from data captured HERE, not from the live selection state — albumSel/artistSel/
+// libSel are already nulled by the time that screen's exit animation plays, so reading them
+// with !! inside the old content would crash mid-transition. `key` is what AnimatedContent
+// compares (via contentKey) so a rescan swapping in an equal-looking group with a fresh track
+// list updates in place instead of replaying the transition; `depth` drives push-vs-pop motion.
+private sealed class ContentRoute(val key: String, val depth: Int) {
+    class TabPage(val tab: Tab) : ContentRoute("tab:${tab.name}", if (tab == Tab.SONGS) 1 else 0)
+    class Album(val group: AlbumGroup) : ContentRoute("album:${group.name}#${group.artist}", 1)
+    class Artist(val group: ArtistGroup) : ContentRoute("artist:${group.name}", 1)
+    class Lib(val name: String) : ContentRoute("lib:$name", 1)
+    object Videos : ContentRoute("videos", 1)
+}
+
+// Bar position of a top-level tab route (-1 for everything else) — gives lateral tab hops a
+// direction so content slides TOWARD the tapped tab rather than always from the same side.
+private fun routeLane(r: ContentRoute): Int =
+    (r as? ContentRoute.TabPage)?.let { VISIBLE_TABS.indexOf(it.tab) } ?: -1
+
+// One motion grammar for the whole content area: detail screens PUSH in (rise + settle over the
+// parent easing back) and POP out the way they came; same-level tab hops slide laterally toward
+// the tapped tab. Springs kept stiff and fades short — both screens are live mid-transition on
+// modest DAP silicon, and anything languid reads as lag rather than polish on a 3.5" panel.
+private fun AnimatedContentTransitionScope<ContentRoute>.mainContentTransition(): ContentTransform {
+    val from = initialState.depth
+    val to = targetState.depth
+    return when {
+        to > from ->
+            (slideInVertically(spring(dampingRatio = 0.9f, stiffness = 900f)) { it / 10 } +
+                fadeIn(tween(190, easing = LinearOutSlowInEasing)))
+                .togetherWith(fadeOut(tween(130)) + scaleOut(targetScale = 0.985f, animationSpec = tween(190)))
+        to < from ->
+            (fadeIn(tween(170, easing = LinearOutSlowInEasing)) + scaleIn(initialScale = 0.985f, animationSpec = tween(170)))
+                .togetherWith(slideOutVertically(tween(190, easing = FastOutLinearInEasing)) { it / 12 } + fadeOut(tween(150)))
+        else -> {
+            val dir = if (routeLane(targetState) >= routeLane(initialState)) 1 else -1
+            (slideInHorizontally(spring(dampingRatio = 1f, stiffness = 700f)) { dir * it / 9 } + fadeIn(tween(160)))
+                .togetherWith(slideOutHorizontally(tween(160)) { -dir * it / 12 } + fadeOut(tween(130)))
+        }
+    }.using(SizeTransform(clip = false))
+}
 
 /** Observable "what's playing" state so any track row can show a live indicator without prop-drilling. */
 object NowPlayingState {
@@ -970,23 +1060,41 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).haze(hazeState).padding(top = with(density) { headerHeightPx.toDp() })) {
-                when {
-                    albumSel != null -> DetailList(albumSel!!.name, albumSel!!.tracks, { albumSel = null }, ::startPlay, likeAlbum = albumSel!!.name, onOpenArtist = openArtistByName)
-                    artistSel != null -> ArtistDetail(artistSel!!, { artistSel = null }, { albumSel = it }, ::startPlay, listState = artistDetailListState)
-                    libSel != null -> {
-                        val isLiked = libSel == LIKED_KEY
+                // Same priority chain the old hard-cut `when` rendered in, snapshotted into an
+                // immutable route so the outgoing screen can finish its exit animation from its
+                // own captured data (see ContentRoute's doc comment).
+                val route: ContentRoute = when {
+                    albumSel != null -> ContentRoute.Album(albumSel!!)
+                    artistSel != null -> ContentRoute.Artist(artistSel!!)
+                    libSel != null -> ContentRoute.Lib(libSel!!)
+                    showVideoLibrary -> ContentRoute.Videos
+                    else -> ContentRoute.TabPage(tab)
+                }
+                AnimatedContent(
+                    targetState = route,
+                    modifier = Modifier.fillMaxSize(),
+                    contentKey = { it.key },
+                    transitionSpec = { mainContentTransition() },
+                    label = "mainContent"
+                ) { r ->
+                    when (r) {
+                    is ContentRoute.Album -> DetailList(r.group.name, r.group.tracks, { albumSel = null }, ::startPlay, likeAlbum = r.group.name, onOpenArtist = openArtistByName)
+                    is ContentRoute.Artist -> ArtistDetail(r.group, { artistSel = null }, { albumSel = it }, ::startPlay, listState = artistDetailListState)
+                    is ContentRoute.Lib -> {
+                        val isLiked = r.name == LIKED_KEY
                         val libTracks = if (isLiked) LikeStore.resolveLiked(ctx, tracks)
-                                        else { val ids = PlayerPreferences.loadPlaylists(ctx)[libSel]?.toSet() ?: emptySet(); tracks.filter { it.id in ids } }
-                        DetailList(if (isLiked) "Liked Songs" else libSel!!, libTracks, { libSel = null }, ::startPlay, onOpenArtist = openArtistByName)
+                                        else { val ids = PlayerPreferences.loadPlaylists(ctx)[r.name]?.toSet() ?: emptySet(); tracks.filter { it.id in ids } }
+                        DetailList(if (isLiked) "Liked Songs" else r.name, libTracks, { libSel = null }, ::startPlay, onOpenArtist = openArtistByName)
                     }
-                    showVideoLibrary -> VideoLibraryScreen(videos, onOpen = { videoSel = it }, onClose = { showVideoLibrary = false })
-                    tab == Tab.HOME -> HomeScreen(
+                    ContentRoute.Videos -> VideoLibraryScreen(videos, onOpen = { videoSel = it }, onClose = { showVideoLibrary = false })
+                    is ContentRoute.TabPage -> when (r.tab) {
+                    Tab.HOME -> HomeScreen(
                         tracks, recentlyPlayed, { tab = Tab.ARTISTS }, ::startPlay, listState = homeListState,
                         albumGroups = albumGroups, artistGroups = artistGroups,
                         onOpenAlbum = { albumSel = it }, onOpenArtist = openArtistByName
                     )
-                    tab == Tab.SONGS -> SongList(tracks, sortIgnoreThe = sortIgnoreThe, onPlay = ::startPlay, listState = songsListState)
-                    tab == Tab.ARTISTS -> ArtistList(
+                    Tab.SONGS -> SongList(tracks, sortIgnoreThe = sortIgnoreThe, onPlay = ::startPlay, listState = songsListState)
+                    Tab.ARTISTS -> ArtistList(
                         artists = artistGroups,
                         loading = loading || (tracks.isNotEmpty() && !hasGroupedOnce),
                         sortIgnoreThe = sortIgnoreThe,
@@ -1003,14 +1111,22 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                         onShuffle = { if (it.tracks.isNotEmpty()) startPlay(it.tracks.shuffled(), 0) },
                         listState = artistsListState
                     )
-                    tab == Tab.ALBUMS -> AlbumGrid(albumGroups, loading = loading || (tracks.isNotEmpty() && !hasAlbumGroupedOnce), onOpen = { albumSel = it }, onShuffle = { if (it.tracks.isNotEmpty()) startPlay(it.tracks.shuffled(), 0) }, gridState = albumsGridState)
-                    tab == Tab.GENRES -> LibraryScreen(
+                    Tab.ALBUMS -> AlbumGrid(
+                        albumGroups, loading = loading || (tracks.isNotEmpty() && !hasAlbumGroupedOnce),
+                        onOpen = { albumSel = it },
+                        onShuffle = { if (it.tracks.isNotEmpty()) startPlay(it.tracks.shuffled(), 0) },
+                        onPlay = { if (it.tracks.isNotEmpty()) startPlay(sortAlbumTracks(it.tracks), 0) },
+                        gridState = albumsGridState
+                    )
+                    Tab.GENRES -> LibraryScreen(
                         ctx, listState = libraryListState, trackCount = tracks.size, tracks = tracks,
                         artistCount = artistGroups.size, albumCount = albumGroups.size,
                         loading = loading, videoCount = videos.size,
                         onAllSongs = { tab = Tab.SONGS },
                         onVideos = { showVideoLibrary = true }
                     ) { libSel = it }
+                    }
+                    }
                 }
             }
             if (currentTrack != null) NowPlayingBar(
@@ -1123,15 +1239,39 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 albumSel = null
             }
         }
-        if (showSettings) {
+        // Overlay screens animate in/out instead of hard-cutting — each keeps rendering through
+        // its exit via AnimatedVisibility, so the content lambdas guard with ?.let rather than !!
+        // (currentTrack can drop null mid-exit and the last frames must not crash).
+        AnimatedVisibility(
+            visible = showSettings,
+            enter = fadeIn(tween(200)) + slideInVertically(spring(dampingRatio = 0.9f, stiffness = 900f)) { it / 14 },
+            exit = fadeOut(tween(150)) + slideOutVertically(tween(180)) { it / 18 }
+        ) {
             SettingsScreen(ctx = ctx, tracks = tracks, onClose = { showSettings = false })
         }
-        if (showFullNowPlaying && currentTrack != null && !showTape) {
-            NowPlayingScreen(track = currentTrack!!, player = player, onClose = { showFullNowPlaying = false },
-                onTape = { showTape = true }, tracks = tracks, onOpenArtist = openArtistByName, onOpenAlbum = openAlbumByName)
+        // Rise-from-the-bar: full Now Playing grows up out of the bottom edge — where the mini
+        // bar it expands from lives — rather than swapping in. Offset kept modest (it/4) because
+        // the projectM GLSurfaceView inside punches a window hole that can trail the layout by a
+        // frame while moving; a short rise reads as expansion without exposing that.
+        AnimatedVisibility(
+            visible = showFullNowPlaying && currentTrack != null && !showTape,
+            enter = slideInVertically(spring(dampingRatio = 0.92f, stiffness = 600f)) { it / 4 } +
+                fadeIn(tween(200)) + scaleIn(initialScale = 0.97f, animationSpec = tween(200)),
+            exit = slideOutVertically(tween(190, easing = FastOutLinearInEasing)) { it / 5 } + fadeOut(tween(160))
+        ) {
+            currentTrack?.let { np ->
+                NowPlayingScreen(track = np, player = player, onClose = { showFullNowPlaying = false },
+                    onTape = { showTape = true }, tracks = tracks, onOpenArtist = openArtistByName, onOpenAlbum = openAlbumByName)
+            }
         }
-        if (showTape && currentTrack != null) {
-            TapeScreen(track = currentTrack!!, player = player, onExit = { showTape = false })
+        // Tape is its own rotated full-bleed deck — a directional slide would fight its sideways
+        // orientation, so it simply fades like a deck door closing over the app.
+        AnimatedVisibility(
+            visible = showTape && currentTrack != null,
+            enter = fadeIn(tween(240)),
+            exit = fadeOut(tween(200))
+        ) {
+            currentTrack?.let { TapeScreen(track = it, player = player, onExit = { showTape = false }) }
         }
         if (videoSel != null) {
             VideoPlayerScreen(video = videoSel!!, musicPlayer = player, onClose = { videoSel = null })
@@ -2254,18 +2394,49 @@ private fun tabColor(t: Tab): Color = when (t) {
     Tab.SONGS -> MikuTeal
 }
 
-@Composable private fun TabBar(sel: Tab, onSel: (Tab) -> Unit) = ScrollableTabRow(
+@Composable private fun TabBar(sel: Tab, onSel: (Tab) -> Unit) {
+    val ctx = LocalContext.current
     // Transparent container — same reasoning as Header: this rides on the shared glass panel now.
     // Songs isn't ever the active tab from the bar's own perspective (it's not clickable here), but
     // App() can still land `tab` on it internally (Library's "All Songs" row) — fall back to
     // highlighting Library in that case rather than an out-of-range/no selection.
-    selectedTabIndex = VISIBLE_TABS.indexOf(sel).let { if (it >= 0) it else VISIBLE_TABS.indexOf(Tab.GENRES) },
-    containerColor = Color.Transparent, contentColor = MikuTeal, edgePadding = 12.dp) {
-    VISIBLE_TABS.forEach { t ->
-        val base = tabColor(t)
-        androidx.compose.material3.Tab(selected = t == sel, onClick = { onSel(t) },
-            modifier = Modifier.height(36.dp),
-            text = { Text(t.label, color = if (t == sel) base else base.copy(alpha = 0.55f), fontWeight = if (t == sel) FontWeight.Bold else FontWeight.Normal, fontFamily = RighteousFont, fontSize = 13.5.sp, letterSpacing = 0.5.sp) })
+    val selIdx = VISIBLE_TABS.indexOf(sel).let { if (it >= 0) it else VISIBLE_TABS.indexOf(Tab.GENRES) }
+    ScrollableTabRow(
+        selectedTabIndex = selIdx,
+        containerColor = Color.Transparent, contentColor = MikuTeal, edgePadding = 12.dp,
+        indicator = { positions ->
+            // Springy pill that GLIDES between tabs and retints toward each tab's own accent —
+            // the default indicator hard-jumps and stays one color, which reads as a repaint
+            // rather than the selection physically moving.
+            val p = positions[selIdx]
+            val left by animateDpAsState(p.left, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow), label = "tabIndLeft")
+            val width by animateDpAsState(p.width, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow), label = "tabIndWidth")
+            val accent by animateColorAsState(tabColor(VISIBLE_TABS[selIdx]), tween(300), label = "tabIndColor")
+            Box(
+                Modifier
+                    .wrapContentSize(Alignment.BottomStart)
+                    .offset(x = left)
+                    .width(width)
+                    .padding(horizontal = 14.dp)
+                    .height(3.dp)
+                    .background(
+                        Brush.horizontalGradient(listOf(accent.copy(alpha = 0.25f), accent, accent.copy(alpha = 0.25f))),
+                        RoundedCornerShape(1.5.dp)
+                    )
+            )
+        },
+        divider = {}
+    ) {
+        VISIBLE_TABS.forEach { t ->
+            val base = tabColor(t)
+            // Label color/weight ease over instead of snapping, matching the gliding indicator.
+            val labelColor by animateColorAsState(if (t == sel) base else base.copy(alpha = 0.55f), tween(250), label = "tabLabel")
+            androidx.compose.material3.Tab(
+                selected = t == sel,
+                onClick = { if (t != sel) Haptics.tick(ctx); onSel(t) },
+                modifier = Modifier.height(36.dp),
+                text = { Text(t.label, color = labelColor, fontWeight = if (t == sel) FontWeight.Bold else FontWeight.Normal, fontFamily = RighteousFont, fontSize = 13.5.sp, letterSpacing = 0.5.sp) })
+        }
     }
 }
 
@@ -3088,8 +3259,7 @@ fun MikuEmptyState(
                         val reprTrack = a.coverTrack(rowCtx)
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)
-                                .glassCard()
-                                .clickable { onOpen(a) }
+                                .pressableGlassCard { onOpen(a) }
                                 .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -3486,6 +3656,7 @@ private fun ArtistSortSettingsModal(
     loading: Boolean = false,
     onOpen: (AlbumGroup) -> Unit,
     onShuffle: (AlbumGroup) -> Unit = {},
+    onPlay: (AlbumGroup) -> Unit = {},   // long-press a tile: play the album in order, no detail hop
     gridState: LazyGridState = rememberLazyGridState()
 ) {
     val ctx = LocalContext.current
@@ -3532,8 +3703,11 @@ private fun ArtistSortSettingsModal(
                         val albumPlays = remember(al.tracks) { al.tracks.sumOf { PlayerPreferences.loadPlayCount(ctx, it.id) } }
                         Column(
                             Modifier.padding(6.dp)
-                                .glassCard(corner = 16.dp)
-                                .clickable { onOpen(al) }
+                                .pressableGlassCard(
+                                    corner = 16.dp,
+                                    onLongClick = { Haptics.tick(ctx); onPlay(al) },
+                                    onClick = { onOpen(al) }
+                                )
                                 .padding(8.dp)
                         ) {
                             val bestBitsTrack = remember(al.tracks) { al.tracks.maxByOrNull { TrackTech.bitsFor(ctx, it) ?: -1 } }
@@ -4140,10 +4314,10 @@ private fun ArtistSortSettingsModal(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 3.dp)
-            .glassCard(tint = if (NowPlayingState.currentId == t.id) MikuTealBright else MikuTeal)
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = { Haptics.tick(ctx); showSheet = true }   // long-press → full queue actions & metrics
+            .pressableGlassCard(
+                tint = if (NowPlayingState.currentId == t.id) MikuTealBright else MikuTeal,
+                onLongClick = { Haptics.tick(ctx); showSheet = true },   // long-press → full queue actions & metrics
+                onClick = onClick
             )
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -5928,7 +6102,10 @@ object TransportShapes {
             delay(500)
         }
     }
-    val progress = (pos.toFloat() / dur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
+    // The raw fraction only updates every 500ms poll tick, which steps the line visibly — glide
+    // between samples so it reads as continuous playback, not a ticking gauge.
+    val targetProgress = (pos.toFloat() / dur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
+    val progress by animateFloatAsState(targetProgress, tween(520, easing = LinearEasing), label = "barProgress")
     // Flush-to-bottom cyber docked NowPlayingBar
     Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
         Column(
@@ -5940,7 +6117,23 @@ object TransportShapes {
                     drawRoundRect(Color(0x66000000), topLeft = Offset(0f, 3.dp.toPx()), size = size, cornerRadius = rr)
                 }
                 .border(1.dp, Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x00FFFFFF)), endY = 0.5f), RoundedCornerShape(16.dp))
-                .clickable { onBarClick() }
+                .clickable { Haptics.tick(ctx); onBarClick() }
+                // Swipe-up = expand to full Now Playing, same as tap: the bar docks at the screen
+                // bottom, so an upward fling on it reads as "pull the big screen up". Only upward
+                // movement is consumed — downward drags pass through untouched, and the detector
+                // arms after touch slop so plain taps still land on the clickable above. Nothing
+                // here touches the system edges (bottom-home strip / top shade zones own those).
+                .pointerInput(Unit) {
+                    var totalY = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { totalY = 0f },
+                        onDragEnd = { if (totalY < -24f) { Haptics.tick(ctx); onBarClick() } },
+                        onVerticalDrag = { change, dy ->
+                            if (dy < 0) change.consume()
+                            totalY += dy
+                        }
+                    )
+                }
         ) {
             Box {
                 // Themed inlay background: the current track's own album art, blurred + scrimmed —
@@ -6022,7 +6215,7 @@ object TransportShapes {
                         Icon(Icons.Default.SkipPrevious, "Prev", tint = Muted, modifier = Modifier.size(22.dp))
                     }
                     HapticIconButton(onClick = onToggle, face = MikuTeal, keyShape = TransportShapes.hero, modifier = Modifier.size(width = 56.dp, height = 42.dp)) {
-                        Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause", tint = Color(0xFF00201D), modifier = Modifier.size(26.dp))
+                        PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 26.dp)
                     }
                     HapticIconButton(onClick = { player.seekToNextMediaItem() }, keyShape = TransportShapes.nextWing, modifier = Modifier.size(38.dp)) {
                         Icon(Icons.Default.SkipNext, "Next", tint = Muted, modifier = Modifier.size(24.dp))

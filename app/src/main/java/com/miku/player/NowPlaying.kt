@@ -317,7 +317,7 @@ fun NowPlayingScreen(
                         }
                         HapticIconButton(onClick = { if (player.isPlaying) player.pause() else player.play() },
                             face = MikuTeal, modifier = Modifier.size(width = 78.dp, height = 58.dp)) {
-                            Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause", tint = Color(0xFF00201D), modifier = Modifier.size(34.dp))
+                            PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 34.dp)
                         }
                         HapticIconButton(onClick = { player.seekToNextMediaItem() }) {
                             Icon(Icons.Default.SkipNext, "Next", tint = MikuTeal, modifier = Modifier.size(34.dp))
@@ -568,12 +568,7 @@ fun NowPlayingScreen(
                 // The play key is the hero: larger than its neighbours and a little oblong-wide.
                 HapticIconButton(onClick = { if (player.isPlaying) player.pause() else player.play() },
                     face = MikuTeal, keyShape = TransportShapes.hero, modifier = Modifier.size(width = 84.dp, height = 62.dp)) {
-                    Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        "Play/Pause",
-                        tint = Color(0xFF00201D),
-                        modifier = Modifier.size(36.dp)
-                    )
+                    PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 36.dp)
                 }
                 HapticIconButton(onClick = { player.seekToNextMediaItem() }, keyShape = TransportShapes.nextWing, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.SkipNext, "Next", tint = MikuTeal, modifier = Modifier.size(30.dp))

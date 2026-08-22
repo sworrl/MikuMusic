@@ -5,8 +5,21 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.IconButton
@@ -29,6 +42,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /** A little cassette glyph (shell, two reels, head mouth) — the app has no CD anywhere. */
@@ -77,6 +91,28 @@ object Haptics {
                 v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
             else @Suppress("DEPRECATION") v.vibrate(ms)
         } catch (_: Throwable) {}
+    }
+}
+
+/**
+ * Play/pause glyph with a springy pop-morph between states — every transport key already
+ * animates its own press (see [HapticIconButton]), so an instant icon swap inside it reads as
+ * a render glitch next to that. One definition, used by the mini bar and full Now Playing.
+ */
+@Composable
+fun PlayPauseGlyph(isPlaying: Boolean, tint: Color, size: Dp) {
+    AnimatedContent(
+        targetState = isPlaying,
+        transitionSpec = {
+            (scaleIn(initialScale = 0.55f, animationSpec = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium)) + fadeIn(tween(90)))
+                .togetherWith(scaleOut(targetScale = 0.55f, animationSpec = tween(90)) + fadeOut(tween(70)))
+        },
+        label = "playGlyph"
+    ) { playing ->
+        Icon(
+            if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+            "Play/Pause", tint = tint, modifier = Modifier.size(size)
+        )
     }
 }
 
