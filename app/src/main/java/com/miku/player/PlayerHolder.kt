@@ -226,6 +226,25 @@ object PlayerHolder {
                         artist = meta.artist?.toString() ?: "",
                         album = meta.albumTitle?.toString() ?: ""
                     )
+                    LikeStore.init(app)
+                    val isLiked = LikeStore.isLiked(trackId)
+                    try {
+                        android.provider.Settings.Global.putString(
+                            app.contentResolver,
+                            "miku_current_track_liked",
+                            if (isLiked) "1" else "0"
+                        )
+                        android.provider.Settings.Global.putLong(
+                            app.contentResolver,
+                            "miku_current_track_id",
+                            trackId
+                        )
+                        val out = Intent("com.miku.player.action.LIKE_STATE_CHANGED").apply {
+                            putExtra("track_id", trackId)
+                            putExtra("is_liked", isLiked)
+                        }
+                        app.sendBroadcast(out)
+                    } catch (_: Throwable) {}
                 }
             }
             override fun onMediaMetadataChanged(m: androidx.media3.common.MediaMetadata) { WidgetUpdateExecutor.push(app) }

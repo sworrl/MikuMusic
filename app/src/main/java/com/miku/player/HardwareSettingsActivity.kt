@@ -55,8 +55,8 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
     var csGain by remember { mutableStateOf(CirrusLogicManager.GainMode.LOW) }
     var csDre by remember { mutableStateOf(true) }
     var csTurbo by remember { mutableStateOf(false) }
-    var csDsdComp by remember { mutableStateOf(6) }
-    var csOutput by remember { mutableStateOf(CirrusLogicManager.OutputMode.HEADPHONE_OUT) }
+    var csDsdComp by remember { mutableStateOf(true) }
+    var csOutput by remember { mutableStateOf(CirrusLogicManager.OutputMode.BAL_HEADPHONE_OUT) }
 
     // USB DAC
     var usbDacActive by remember { mutableStateOf(UsbDacManager.isActive(ctx)) }
@@ -440,6 +440,156 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                                     }
                                 },
                                 colors = SwitchDefaults.colors(checkedThumbColor = MikuNeonPink, checkedTrackColor = Color(0xFF880E4F))
+                            )
+                        }
+                    }
+                }
+
+                // ============================================================
+                // SECTION 1.2: AUDIO OUTPUT ROUTING MATRIX & QUICK SWAP
+                // ============================================================
+                item {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xDD0A1E26))
+                            .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("AUDIO OUTPUT ROUTING MATRIX", color = MikuCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                Text("Select primary DAC route or wireless Bluetooth audio stream", color = MikuTextSecondary, fontSize = 10.sp)
+                            }
+
+                            // Quick Swap Button
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        csOutput = CirrusLogicManager.swapOutputMode(ctx)
+                                        refreshAudit()
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MikuCyan),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Text("⇄ Swap 4.4mm/BT", color = MikuCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        CirrusLogicManager.OutputMode.values().forEach { out ->
+                            val isSel = csOutput == out
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(if (isSel) MikuCyan.copy(alpha = 0.15f) else Color.Transparent)
+                                    .border(1.dp, if (isSel) MikuCyan.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        csOutput = out
+                                        scope.launch {
+                                            CirrusLogicManager.setOutputMode(ctx, out)
+                                            refreshAudit()
+                                        }
+                                    }
+                                    .padding(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(out.icon, fontSize = 16.sp)
+                                Spacer(Modifier.width(10.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(out.label, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        if (isSel) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Box(
+                                                Modifier
+                                                    .clip(RoundedCornerShape(4.dp))
+                                                    .background(MikuCyan.copy(alpha = 0.25f))
+                                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                                            ) {
+                                                Text("ACTIVE", color = MikuCyan, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
+                                            }
+                                        }
+                                    }
+                                    Text(out.description, color = MikuTextSecondary, fontSize = 10.sp)
+                                }
+                                RadioButton(
+                                    selected = isSel,
+                                    onClick = {
+                                        csOutput = out
+                                        scope.launch {
+                                            CirrusLogicManager.setOutputMode(ctx, out)
+                                            refreshAudit()
+                                        }
+                                    },
+                                    colors = RadioButtonDefaults.colors(selectedColor = MikuCyan, unselectedColor = MikuTextSecondary)
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                        }
+                    }
+                }
+
+                // ============================================================
+                // SECTION 1.3: CAR & ANDROID AUTO HI-RES AUDIO POLICY
+                // ============================================================
+                item {
+                    var allowUsbAudio by remember { mutableStateOf(PlayerPreferences.loadAllowUsbAudio(ctx)) }
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xDD0A1E26))
+                            .border(1.dp, if (allowUsbAudio) Color(0xFFFF9100) else MikuCyan, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("CAR & ANDROID AUTO AUDIO ROUTING", color = MikuCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                Text("Enforce Hi-Res 3.5mm/4.4mm AUX output in car mode. Blocks USB audio degradation.", color = MikuTextSecondary, fontSize = 10.sp)
+                            }
+                        }
+
+                        Spacer(Modifier.height(10.dp))
+
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Block USB Audio in Car / Android Auto", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (!allowUsbAudio) "LOCKED: Audio strictly routes to 3.5mm/4.4mm AUX DAC jack for maximum sound quality (Recommended)."
+                                    else "WARNING: USB Audio enabled (Audio will route to car head unit via USB).",
+                                    color = if (!allowUsbAudio) MikuCyan else Color(0xFFFF9100),
+                                    fontSize = 10.sp
+                                )
+                            }
+                            Switch(
+                                checked = !allowUsbAudio,
+                                onCheckedChange = { blockUsb ->
+                                    val allow = !blockUsb
+                                    allowUsbAudio = allow
+                                    PlayerPreferences.saveAllowUsbAudio(ctx, allow)
+                                    MikuCarAudioRouter.ensureAnalogIfCar(ctx, "settings-toggle")
+                                },
+                                colors = SwitchDefaults.colors(checkedThumbColor = MikuCyan, checkedTrackColor = Color(0xFF00695C))
                             )
                         }
                     }

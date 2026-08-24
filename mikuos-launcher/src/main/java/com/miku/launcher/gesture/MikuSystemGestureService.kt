@@ -72,6 +72,7 @@ class MikuSystemGestureService : Service() {
         setupGestureOverlay()
         setupTopShadeOverlay()
         setupEdgeBackOverlays()
+        com.miku.launcher.volume.MikuVolumeManager.init(this)
     }
 
     private fun setupTopShadeOverlay() {

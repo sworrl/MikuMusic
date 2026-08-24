@@ -27,8 +27,8 @@ object BpmEngine {
     private const val SAMPLE_WINDOW_SEC = 20
     private const val FFT_SIZE = 1024
     private const val HOP_SIZE = 512
-    private const val MIN_BPM = 60
-    private const val MAX_BPM = 200
+    private const val MIN_BPM = 20
+    private const val MAX_BPM = 999
 
     private val bpmCache = ConcurrentHashMap<String, Int>()
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -235,31 +235,71 @@ object BpmEngine {
             prevMids = mids
         }
 
-        // Autocorrelation over tempo lag range
+        // Autocorrelation over tempo lag range (50 BPM to 290 BPM)
         val frameRate = sampleRate.toFloat() / HOP_SIZE
-        val minLag = (frameRate * 60f / MAX_BPM).roundToInt().coerceAtLeast(1)
-        val maxLag = (frameRate * 60f / MIN_BPM).roundToInt().coerceAtMost(numFrames / 2)
+        val minLag = (frameRate * 60f / 290f).roundToInt().coerceAtLeast(1)
+        val maxLag = (frameRate * 60f / 50f).roundToInt().coerceAtMost(numFrames / 2)
+        if (maxLag <= minLag) return 120
 
-        var bestLag = minLag
-        var maxCorr = -1f
+        val corr = FloatArray(maxLag + 1)
+        var norm = 0f
+        for (i in 0 until numFrames) norm += energyFlux[i] * energyFlux[i]
+        if (norm <= 0f) return 120
 
         for (lag in minLag..maxLag) {
-            var corr = 0f
-            var norm = 0f
+            var c = 0f
             for (i in 0 until numFrames - lag) {
-                corr += energyFlux[i] * energyFlux[i + lag]
-                norm += energyFlux[i] * energyFlux[i]
+                c += energyFlux[i] * energyFlux[i + lag]
             }
-            if (norm > 0f) corr /= norm
+            corr[lag] = c / norm
+        }
 
-            if (corr > maxCorr) {
-                maxCorr = corr
+        // Perceptual human tempo prior centered around 140 BPM
+        fun tempoPrior(bpm: Float): Float {
+            if (bpm <= 0f) return 0f
+            val oct = log2(bpm / 140f)
+            return exp(-0.5f * (oct / 1.3f).pow(2f))
+        }
+
+        var bestLag = minLag
+        var bestScore = -1f
+
+        for (lag in minLag..maxLag) {
+            val bpm = frameRate * 60f / lag
+            val prior = tempoPrior(bpm)
+            var score = corr[lag] * prior
+
+            val halfLag = (lag / 2f).roundToInt()
+            if (halfLag >= minLag && corr[halfLag] > 0.30f * corr[lag]) {
+                score += corr[halfLag] * tempoPrior(bpm * 2f) * 0.85f
+            }
+
+            val dblLag = lag * 2
+            if (dblLag <= maxLag) {
+                score += corr[dblLag] * tempoPrior(bpm / 2f) * 0.35f
+            }
+
+            if (score > bestScore) {
+                bestScore = score
                 bestLag = lag
             }
         }
 
-        val estimatedBpm = (frameRate * 60f / bestLag).roundToInt()
-        return estimatedBpm.coerceIn(MIN_BPM, MAX_BPM)
+        // Double-time / half-time promotion (e.g. 85 -> 170 BPM)
+        var finalLag = bestLag
+        val fastLag = (bestLag / 2f).roundToInt()
+        if (fastLag >= minLag) {
+            val fastBpm = frameRate * 60f / fastLag
+            val slowBpm = frameRate * 60f / bestLag
+            if (slowBpm < 105f && fastBpm <= 220f) {
+                if (corr[fastLag] >= 0.35f * corr[bestLag] || (tempoPrior(fastBpm) > 1.35f * tempoPrior(slowBpm) && corr[fastLag] > 0.25f)) {
+                    finalLag = fastLag
+                }
+            }
+        }
+
+        val estimatedBpm = (frameRate * 60f / finalLag).roundToInt()
+        return estimatedBpm.coerceIn(40, 320)
     }
 
     /**

@@ -10,6 +10,8 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.widget.FrameLayout
 
@@ -153,10 +155,66 @@ class MikuNotificationShadeService : AccessibilityService() {
         } catch (_: Throwable) {}
     }
 
+    private fun openPowerMenuActivity() {
+        try {
+            val intent = Intent(this, MikuPowerMenuActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pi = PendingIntent.getActivity(
+                this, 1, intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            pi.send()
+        } catch (_: Throwable) {
+            try {
+                val intent = Intent(this, MikuPowerMenuActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(intent)
+            } catch (_: Throwable) {}
+        }
+    }
+
+    private var powerDownTimestamp = 0L
+
+    override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
+        if (event == null) return false
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_POWER) {
+            if (event.action == android.view.KeyEvent.ACTION_DOWN) {
+                if (powerDownTimestamp == 0L) {
+                    powerDownTimestamp = System.currentTimeMillis()
+                } else if (System.currentTimeMillis() - powerDownTimestamp > 450L) {
+                    openPowerMenuActivity()
+                    powerDownTimestamp = 0L
+                    return true
+                }
+            } else if (event.action == android.view.KeyEvent.ACTION_UP) {
+                powerDownTimestamp = 0L
+            }
+        }
+        return super.onKeyEvent(event)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val cls = event.className?.toString() ?: ""
+            val pkg = event.packageName?.toString() ?: ""
+            if (cls.contains("GlobalActions", ignoreCase = true) ||
+                cls.contains("PowerDialog", ignoreCase = true) ||
+                cls.contains("ShutdownActivity", ignoreCase = true) ||
+                (pkg.contains("android") && cls.contains("GlobalActionsDialog", ignoreCase = true))) {
+                try {
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    sendBroadcast(Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS))
+                } catch (_: Throwable) {}
+                
+                Handler(Looper.getMainLooper()).postDelayed({
+                    openPowerMenuActivity()
+                }, 150)
+                return
+            }
+
             if (cls.contains("NotificationShade", ignoreCase = true) ||
                 cls.contains("QuickSettings", ignoreCase = true) ||
                 cls.contains("StatusBarWindow", ignoreCase = true)) {

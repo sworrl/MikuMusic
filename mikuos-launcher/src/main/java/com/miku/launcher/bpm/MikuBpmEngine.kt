@@ -28,10 +28,10 @@ object MikuBpmEngine {
     // RECEIVER_EXPORTED (pulses come from com.miku.player), so ANY app can broadcast these
     // actions. A bogus sender putting tempo in the wrong unit (e.g. beats-per-second ≈ 0.5,
     // or a raw beat interval) must never reach UI readouts as if it were BPM.
-    private const val MIN_BPM = 40f
-    private const val MAX_BPM = 260f
-    private const val MIN_INTERVAL_MS = 150L
-    private const val MAX_INTERVAL_MS = 3000L
+    private const val MIN_BPM = 20f
+    private const val MAX_BPM = 999f
+    private const val MIN_INTERVAL_MS = 60L
+    private const val MAX_INTERVAL_MS = 4000L
 
     data class BpmState(
         val bpm: Float = 120f,
@@ -106,10 +106,12 @@ object MikuBpmEngine {
                             val interval = sanitizeInterval(
                                 intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, prev.beatIntervalMs), bpm
                             )
+                            val playing = intent.getBooleanExtra(EXTRA_IS_PLAYING, true)
                             val color = intent.getIntExtra(EXTRA_DOMINANT_COLOR, prev.dominantColor)
                             _state.value = prev.copy(
                                 bpm = bpm,
                                 beatIntervalMs = interval,
+                                isPlaying = playing,
                                 dominantColor = color,
                                 lastPulseEpochMs = System.currentTimeMillis()
                             )

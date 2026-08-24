@@ -1,15 +1,18 @@
 package com.miku.launcher.bpm
 
-import android.content.Context
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,41 +20,51 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.miku.launcher.*
+import com.miku.launcher.AudiowideFont
+import com.miku.launcher.audio.MikuSeasonalAudioEngine
+import com.miku.launcher.haptics.MikuTactileHaptics
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.random.Random
 
-// Official Miku palette accents for this modal (CyberTheme's neon set stays for chrome).
-private val MikuTeal = Color(0xFF39C5BB)
-private val MikuSakuraPink = Color(0xFFFF4FA3)
-private val MikuLightTeal = Color(0xFF9FF3EC)
-private val MikuDeepDark = Color(0xFF091420)
-
-/** Beat-match judgment tiers for the rhythm game. */
-private enum class BeatJudgment { PERFECT, GOOD, MISS }
+// =========================================================================
+// 🌸 ULTRA KAWAII SWEET PASTEL PALETTE & JUICY ARCADE THEME
+// =========================================================================
+private val KawaiiSakuraPink = Color(0xFFFF85B3)
+private val KawaiiHotPink = Color(0xFFFF3385)
+private val KawaiiMikuMint = Color(0xFF39C5BB)
+private val KawaiiSoftTeal = Color(0xFF66E0D8)
+private val KawaiiLavender = Color(0xFFDFB8FF)
+private val KawaiiGoldenHoney = Color(0xFFFFD166)
+private val KawaiiPeach = Color(0xFFFF9E80)
+private val KawaiiCardBg = Color(0xEE140A18)
+private val KawaiiSurface = Color(0xF2200E26)
+private val KawaiiTextMuted = Color(0xFFD8B4E2)
 
 /**
- * Hatsune Miku Live BPM Cyber Observatory Modal.
- *
- * Every animation in here ticks off ONE beat clock derived from the live engine interval
- * (beatIntervalMs), re-anchored on each real BPM_PULSE broadcast — nothing free-wheels on a
- * fake timer. Contents: beat-pulsing hero tempo ring, now-playing telemetry, beat-synced
- * spectrum + waveform, a beat-match rhythm game around the tap orb (Perfect/Good/Miss,
- * combo + score), and a "Guess the BPM" challenge.
+ * Hatsune Miku Ultra-Kawaii BPM Observatory & Project DIVA Rhythm Arcade.
+ * Packed with juicy tactile visual feedback, rainbow fever gauges, SSS+ performance grades,
+ * particle explosions, and high-readability typography for the HiBy M500 DAP screen.
  */
 @Composable
 fun MikuBpmObservatoryModal(
@@ -59,18 +72,21 @@ fun MikuBpmObservatoryModal(
     bpmState: MikuBpmEngine.BpmState
 ) {
     val ctx = LocalContext.current
-    // Tempo readouts MUST come from this one guarded value — never from a re-derived
-    // interval (an old build showed the seconds-per-beat derivation, 60/128 ≈ "0.5", as if
-    // it were the BPM). Finite + 40..260 or the 128 house-tempo fallback.
-    val liveBpm = if (bpmState.bpm.isFinite() && bpmState.bpm in 40f..260f) bpmState.bpm else 128f
-    val isPlaying = bpmState.isPlaying
-    // Single canonical tick period; engine already sanitizes, clamp again for animation math.
-    val beatIntervalMs = bpmState.beatIntervalMs.coerceIn(240L, 1600L)
-    val dominantColor = Color(bpmState.dominantColor)
+    val bpmDb = remember { MikuBpmDatabase.getInstance(ctx) }
+    val coroutineScope = rememberCoroutineScope()
 
-    // Now Playing metadata from Settings.Global. Keyed on the fields that change per TRACK,
-    // not on bpmState itself — lastPulseEpochMs churns every beat and would re-run these
-    // settings IPC reads ~2x/second for nothing.
+    LaunchedEffect(Unit) {
+        MikuBeatClickerEngine.init(ctx)
+        MikuBpmSeasonsEngine.init(ctx)
+    }
+
+    // Modal Mode: 0 = Kawaii Beat Match, 1 = Sweet Leek Clicker, 2 = Producer Skills, 3 = Skins & Textures, 4 = Quests & DB, 5 = Seasons
+    var selectedMode by remember { mutableIntStateOf(0) }
+
+    val liveBpm = if (bpmState.bpm.isFinite() && bpmState.bpm in 20f..999f) bpmState.bpm else 120f
+    val isPlaying = bpmState.isPlaying
+    val beatIntervalMs = bpmState.beatIntervalMs.coerceIn(60L, 3000L)
+
     val cr = ctx.contentResolver
     val trackTitle = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
         try { android.provider.Settings.Global.getString(cr, "miku_now_playing_title") ?: "World is Mine" } catch (_: Throwable) { "World is Mine" }
@@ -78,1071 +94,1392 @@ fun MikuBpmObservatoryModal(
     val trackArtist = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
         try { android.provider.Settings.Global.getString(cr, "miku_now_playing_artist") ?: "supercell feat. Hatsune Miku" } catch (_: Throwable) { "supercell feat. Hatsune Miku" }
     }
-    val trackFormat = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
-        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_format") ?: "192kHz / 24-bit FLAC • ALSA Direct" } catch (_: Throwable) { "192kHz / 24-bit FLAC • ALSA Direct" }
+
+    var calculatedTapBpm by remember { mutableStateOf<Float?>(null) }
+    var dbStats by remember { mutableStateOf<Map<String, Any>>(emptyMap()) }
+
+    // Auto-resolve canonical BPM from SQLite / Preseeded dictionary on track change
+    LaunchedEffect(trackArtist, trackTitle) {
+        dbStats = bpmDb.getCalibrationStats()
+        val rec = bpmDb.resolveCanonicalBpm(trackArtist, trackTitle)
+        if (rec != null && rec.canonicalBpm > 0f) {
+            calculatedTapBpm = rec.canonicalBpm
+            try {
+                android.provider.Settings.Global.putFloat(ctx.contentResolver, "miku_live_bpm", rec.canonicalBpm)
+                android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_beat_interval_ms", (60000f / rec.canonicalBpm).toInt())
+                val intent = android.content.Intent("com.miku.action.BPM_UPDATE").apply {
+                    putExtra("bpm", rec.canonicalBpm)
+                    putExtra("beat_interval_ms", (60000f / rec.canonicalBpm).toLong())
+                    putExtra("is_playing", isPlaying)
+                }
+                ctx.sendBroadcast(intent)
+            } catch (_: Throwable) {}
+        }
     }
 
-    // ================================================================
-    // THE BEAT CLOCK — one metronome for the whole modal.
-    // Restarting on lastPulseEpochMs re-anchors phase to the player's real
-    // beat broadcasts; between broadcasts it free-runs at the live interval.
-    // ================================================================
+    // High-Precision Metronome & Approach Clocks
     var beatTick by remember { mutableLongStateOf(0L) }
-    var lastBeatAtMs by remember { mutableLongStateOf(0L) }
+    var lastBeatEpochMs by remember { mutableLongStateOf(0L) }
     LaunchedEffect(isPlaying, beatIntervalMs, bpmState.lastPulseEpochMs) {
-        if (!isPlaying) return@LaunchedEffect
+        if (!isPlaying) {
+            beatTick = 0L
+            return@LaunchedEffect
+        }
         while (true) {
-            lastBeatAtMs = SystemClock.elapsedRealtime()
+            lastBeatEpochMs = SystemClock.elapsedRealtime()
             beatTick += 1
             delay(beatIntervalMs)
         }
     }
-    // beatEnv: 1.0 at the beat, decays — the "punch" every visual multiplies by.
-    // beatPhase: 0→1 linear sweep across the beat — arcs and closing rings.
-    val beatEnv = remember { Animatable(0f) }
-    val beatPhase = remember { Animatable(0f) }
-    LaunchedEffect(beatTick) {
-        if (beatTick == 0L) return@LaunchedEffect
-        launch {
-            beatEnv.snapTo(1f)
-            beatEnv.animateTo(0f, tween((beatIntervalMs * 0.85f).toInt().coerceAtLeast(120), easing = LinearOutSlowInEasing))
-        }
-        launch {
-            beatPhase.snapTo(0f)
-            beatPhase.animateTo(1f, tween(beatIntervalMs.toInt(), easing = LinearEasing))
+
+    // Incremental Game Loop Tick (200ms interval for 0 lag)
+    LaunchedEffect(liveBpm, isPlaying) {
+        while (true) {
+            delay(200L)
+            MikuBeatClickerEngine.tick(0.2, if (isPlaying) liveBpm else 120f)
         }
     }
 
-    // Tap-tempo calibration state (feeds the orb's readout).
+    // Approach Ring Phase: 1.6f -> 0.0f
+    val beatApproachAnim = remember { Animatable(1f) }
+    val beatPulseScale = remember { Animatable(1f) }
+    LaunchedEffect(isPlaying, beatTick) {
+        if (!isPlaying || beatTick == 0L) {
+            beatApproachAnim.snapTo(1f)
+            beatPulseScale.snapTo(1f)
+            return@LaunchedEffect
+        }
+        launch {
+            beatApproachAnim.snapTo(1.6f)
+            beatApproachAnim.animateTo(0f, tween(beatIntervalMs.toInt().coerceAtLeast(60), easing = LinearEasing))
+        }
+        launch {
+            beatPulseScale.snapTo(1.18f)
+            beatPulseScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow))
+        }
+    }
+
+    // Game Economy & Customization State
+    val leekCount by MikuBeatClickerEngine.leeks.collectAsState()
+    val clickerBuildings by MikuBeatClickerEngine.buildings.collectAsState()
+    val clickerSkills by MikuBeatClickerEngine.skills.collectAsState()
+    val currentSkin by MikuBeatClickerEngine.currentSkin.collectAsState()
+    val achievements by MikuBeatClickerEngine.achievements.collectAsState()
+    val clickerCombo by MikuBeatClickerEngine.combo.collectAsState()
+    val feverEnergy by MikuBeatClickerEngine.feverEnergy.collectAsState()
+    val feverSeconds by MikuBeatClickerEngine.feverSeconds.collectAsState()
+    val goldenLeekVisible by MikuBeatClickerEngine.goldenLeekVisible.collectAsState()
+    val floatingTexts by MikuBeatClickerEngine.floatingTexts.collectAsState()
+    val activeParticles by MikuBeatClickerEngine.particles.collectAsState()
+
+    val activeSkinPrimary = Color(currentSkin.primaryColor)
+    val activeSkinAccent = Color(currentSkin.accentColor)
+
+    val currentSeason by MikuBpmSeasonsEngine.currentSeason.collectAsState()
+    val lifetimeStats by MikuBpmSeasonsEngine.lifetime.collectAsState()
+
+    // Real-Time Hit Timing State
     val tapTimestamps = remember { mutableStateListOf<Long>() }
-    var calculatedTapBpm by remember { mutableStateOf<Float?>(null) }
+    var tapCounter by remember { mutableIntStateOf(0) }
+    var timingOffsetMs by remember { mutableIntStateOf(0) }
+    var judgmentTitle by remember { mutableStateOf("") }
+    var judgmentColor by remember { mutableStateOf(KawaiiSakuraPink) }
+    var lastTapTimeMs by remember { mutableLongStateOf(0L) }
+    var perfectShockwaveTrigger by remember { mutableIntStateOf(0) }
 
-    // Beat-match rhythm game state.
-    var gameScore by remember { mutableLongStateOf(0L) }
-    var gameCombo by remember { mutableIntStateOf(0) }
-    var gameBestCombo by remember { mutableIntStateOf(0) }
-    var judgmentText by remember { mutableStateOf("") }
-    var judgmentColor by remember { mutableStateOf(MikuTeal) }
-    var judgmentSeq by remember { mutableIntStateOf(0) }
-    val judgmentPop = remember { Animatable(0f) }
-    LaunchedEffect(judgmentSeq) {
-        if (judgmentSeq > 0) {
-            judgmentPop.snapTo(1f)
-            judgmentPop.animateTo(0f, tween(700, easing = LinearOutSlowInEasing))
-        }
+    BackHandler(enabled = true) {
+        MikuBeatClickerEngine.saveState()
+        onClose()
     }
-    // Pink glow burst across the game card on a PERFECT hit.
-    var flashSeq by remember { mutableIntStateOf(0) }
-    val perfectFlash = remember { Animatable(0f) }
-    LaunchedEffect(flashSeq) {
-        if (flashSeq > 0) {
-            perfectFlash.snapTo(0.55f)
-            perfectFlash.animateTo(0f, tween(420, easing = FastOutSlowInEasing))
-        }
-    }
-
-    // "Guess the BPM" challenge state: 0 idle · 1 tapping blind · 2 result.
-    var guessPhase by remember { mutableIntStateOf(0) }
-    val guessTaps = remember { mutableStateListOf<Long>() }
-    var guessBpm by remember { mutableStateOf<Float?>(null) }
-    var guessResult by remember { mutableStateOf<Triple<Float, Float, Float>?>(null) } // guess, actual, diffPct
-    val bpmHidden = guessPhase == 1 // hero masks the number while the player is guessing
-
-    // Ambient per-bar oscillation for the spectrum (the beat punch is applied on top).
-    val infiniteTransition = rememberInfiniteTransition(label = "ObservatoryAmbient")
-    val spectrumOsc = List(20) { idx ->
-        infiniteTransition.animateFloat(
-            initialValue = 0.18f + (idx % 4) * 0.07f,
-            targetValue = 0.85f - (idx % 5) * 0.06f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(240 + (idx * 37) % 340, easing = FastOutSlowInEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "spec_$idx"
-        )
-    }
-    val waveScroll by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
-        label = "waveScroll"
-    )
-
-    BackHandler(enabled = true) { onClose() }
 
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xE6040D12))
-            .clickable { onClose() },
+            .background(Color(0xD90E0514))
+            .clickable {
+                MikuBeatClickerEngine.saveState()
+                onClose()
+            }
+            .swipeUpFromBottomToDismiss(onDismiss = {
+                MikuBeatClickerEngine.saveState()
+                onClose()
+            }),
         contentAlignment = Alignment.BottomCenter
     ) {
-        // Cyber Glass Container (inset from physical screen edges)
+        // Kawaii Pastel Card Sheet with Polka-Dot Texture
         Box(
             Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.92f)
+                .fillMaxHeight(0.96f)
                 .clickable(enabled = false) {}
-                .clip(RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp))
+                .clip(RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp))
                 .background(
                     Brush.verticalGradient(
-                        listOf(Color(0xFF0B1B26), MikuDeepDark, Color(0xFA020A0E))
+                        listOf(KawaiiSurface, KawaiiCardBg, Color(0xFF0C0310))
                     )
                 )
                 .border(
                     BorderStroke(
-                        1.2.dp,
+                        2.5.dp,
                         Brush.linearGradient(
                             listOf(
-                                MikuTeal.copy(alpha = 0.85f),
-                                dominantColor.copy(alpha = 0.6f),
-                                MikuSakuraPink.copy(alpha = 0.7f)
+                                if (feverSeconds > 0) KawaiiGoldenHoney else KawaiiSakuraPink,
+                                KawaiiMikuMint,
+                                KawaiiLavender
                             )
                         )
                     ),
-                    RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+                    RoundedCornerShape(topStart = 32.dp, topEnd = 32.dp)
                 )
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState()),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Grab bar
-                Box(
-                    Modifier
-                        .width(44.dp)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(MikuTeal.copy(alpha = 0.6f))
-                )
-                Spacer(Modifier.height(8.dp))
+            // Floating Kawaii Heart & Star Particles Canvas
+            KawaiiDreamyHeartCanvas(
+                modifier = Modifier.fillMaxSize(),
+                isFever = feverSeconds > 0
+            )
 
-                // Header
-                Row(
+            // Dynamic Hit Particles System
+            KawaiiJuicyParticleOverlay(
+                particles = activeParticles,
+                modifier = Modifier.fillMaxSize()
+            )
+
+            // Layout Column (Single Page, 0 Scroll)
+            Column(
+                Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceBetween
+            ) {
+                // 1. TOP HEADER & CUTE MODE PILLS + FEVER GAUGE
+                Column(
                     Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "⚡ MIKU BPM & AUDIO ENGINE",
-                                color = MikuTeal,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Black,
-                                fontFamily = AudiowideFont
+                    // Cute Cloud Pill Handle
+                    Box(
+                        Modifier
+                            .width(46.dp)
+                            .height(5.5.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(KawaiiSakuraPink.copy(alpha = 0.7f))
+                    )
+                    Spacer(Modifier.height(6.dp))
+
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 6 Gamified Mode Tabs (Horizontally Scrollable)
+                        LazyRow(
+                            Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color(0x40000000))
+                                .border(1.2.dp, activeSkinPrimary.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                                .padding(3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            item {
+                                KawaiiModeTabPill("🌸 RHYTHM", selectedMode == 0, activeSkinPrimary) { selectedMode = 0 }
+                            }
+                            item {
+                                KawaiiModeTabPill("🥬 HARVEST", selectedMode == 1, KawaiiGoldenHoney) { selectedMode = 1 }
+                            }
+                            item {
+                                KawaiiModeTabPill("🧲 SKILLS", selectedMode == 2, KawaiiSoftTeal) { selectedMode = 2 }
+                            }
+                            item {
+                                KawaiiModeTabPill("🎨 SKINS", selectedMode == 3, KawaiiLavender) { selectedMode = 3 }
+                            }
+                            item {
+                                KawaiiModeTabPill("🏆 QUESTS", selectedMode == 4, Color(0xFFFFD700)) { selectedMode = 4 }
+                            }
+                            item {
+                                KawaiiModeTabPill("${currentSeason.rank.badge} SEASONS", selectedMode == 5, Color(currentSeason.rank.colorHex)) { selectedMode = 5 }
+                            }
+                        }
+
+                        // Close button
+                        IconButton(
+                            onClick = {
+                                MikuBeatClickerEngine.saveState()
+                                onClose()
+                            },
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x33FF85B3))
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = activeSkinPrimary,
+                                modifier = Modifier.size(18.dp)
                             )
-                            Spacer(Modifier.width(6.dp))
-                            Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(if (isPlaying) Color(0x3300FF7F) else Color(0x3339C5BB))
-                                    .border(0.8.dp, if (isPlaying) Color(0xFF00FF7F) else MikuTeal, RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 4.dp, vertical = 1.dp)
-                            ) {
+                        }
+                    }
+
+                    Spacer(Modifier.height(6.dp))
+
+                    // Rainbow Sugar Fever Gauge
+                    KawaiiSugarFeverGauge(
+                        feverEnergy = feverEnergy,
+                        feverSeconds = feverSeconds,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // 2. HERO SECTION: TIMING & TRACK CARDS
+                if (selectedMode == 0) {
+                    // MODE 0: KAWAII BEAT MATCH HERO (LIVE BPM + PRECISION OFFSET GAUGE + SSS+ GRADE)
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(124.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Left: Kawaii BPM Orb Badge
+                        Box(
+                            Modifier
+                                .size(124.dp)
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(
+                                    Brush.radialGradient(
+                                        listOf(activeSkinPrimary.copy(alpha = 0.35f), Color(0x22140A18))
+                                    )
+                                )
+                                .border(1.5.dp, activeSkinPrimary.copy(alpha = 0.7f), RoundedCornerShape(22.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(if (isPlaying) "💖" else "⏸️", fontSize = 16.sp)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        text = if (isPlaying) String.format(Locale.US, "%.0f", liveBpm) else "--",
+                                        color = Color.White,
+                                        fontSize = 35.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = AudiowideFont
+                                    )
+                                }
                                 Text(
-                                    if (isPlaying) "PLAYING" else "STANDBY",
-                                    color = if (isPlaying) Color(0xFF00FF7F) else MikuTeal,
-                                    fontSize = 7.5.sp,
+                                    text = if (isPlaying) "BEAT TEMPO" else "PAUSED",
+                                    color = if (isPlaying) activeSkinPrimary else KawaiiTextMuted,
+                                    fontSize = 12.5.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = AudiowideFont
                                 )
+                                Text(
+                                    text = if (isPlaying) "${liveBpm.toInt()} BPM · ${beatIntervalMs}ms" else "ALSA Standby",
+                                    color = KawaiiSoftTeal,
+                                    fontSize = 10.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
-                        Text(
-                            "Autocorrelation Tempo Engine • Beat-Synced Observatory",
-                            color = MikuTextSecondary,
-                            fontSize = 8.sp
-                        )
-                    }
-                }
 
-                Spacer(Modifier.height(10.dp))
-
-                // ============================================================
-                // HERO: BEAT-PULSING TEMPO RING + LARGE LIVE BPM READOUT
-                // ============================================================
-                Box(Modifier.size(168.dp), contentAlignment = Alignment.Center) {
-                    Canvas(Modifier.fillMaxSize()) {
-                        val c = center
-                        val baseR = size.minDimension / 2f - 10f
-                        val env = beatEnv.value
-                        // Halo bloom on the beat
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                listOf(dominantColor.copy(alpha = 0.30f * env), Color.Transparent),
-                                center = c, radius = baseR * (1.05f + 0.14f * env)
-                            ),
-                            radius = baseR * (1.05f + 0.14f * env), center = c
-                        )
-                        // Static track ring
-                        drawCircle(
-                            color = MikuTeal.copy(alpha = 0.22f),
-                            radius = baseR, center = c, style = Stroke(width = 7f)
-                        )
-                        // Pulse ring — kicks outward and brightens on every beat
-                        drawCircle(
-                            color = lerp(MikuTeal, MikuSakuraPink, env).copy(alpha = 0.35f + 0.6f * env),
-                            radius = baseR * (1f + 0.05f * env), center = c,
-                            style = Stroke(width = 4f + 7f * env)
-                        )
-                        // Beat sweep arc — one full revolution per beat, tip = the metronome
-                        drawArc(
-                            brush = Brush.sweepGradient(
-                                listOf(Color.Transparent, MikuLightTeal, MikuSakuraPink), center = c
-                            ),
-                            startAngle = -90f,
-                            sweepAngle = 360f * beatPhase.value,
-                            useCenter = false,
-                            topLeft = Offset(c.x - baseR, c.y - baseR),
-                            size = androidx.compose.ui.geometry.Size(baseR * 2f, baseR * 2f),
-                            style = Stroke(width = 6f, cap = StrokeCap.Round)
-                        )
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            // Locale.US: tempo must never render with a comma decimal.
-                            text = if (bpmHidden) "??" else String.format(Locale.US, "%.0f", liveBpm),
-                            color = Color.White,
-                            fontSize = 44.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont
-                        )
-                        Text(
-                            text = if (bpmHidden) "NO PEEKING" else "BPM",
-                            color = if (bpmHidden) MikuSakuraPink else MikuTeal,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont,
-                            letterSpacing = 3.sp
-                        )
-                        if (!bpmHidden) {
-                            Text(
-                                text = String.format(Locale.US, "%.1f · %d ms/beat", liveBpm, beatIntervalMs),
-                                color = MikuTextSecondary,
-                                fontSize = 7.5.sp,
-                                fontFamily = AudiowideFont
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // ============================================================
-                // NOW PLAYING TELEMETRY CARD
-                // ============================================================
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(
-                            Brush.linearGradient(
-                                listOf(dominantColor.copy(alpha = 0.22f), Color(0xFF041218), Color(0xFF02090D))
-                            )
-                        )
-                        .border(1.dp, Brush.linearGradient(listOf(dominantColor.copy(alpha = 0.8f), MikuTeal.copy(alpha = 0.4f))), RoundedCornerShape(14.dp))
-                        .padding(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
+                        // Right: Live Track Card + Rhythm Timing Deviation Gauge + Arcade Grade
+                        Column(
                             Modifier
-                                .size(40.dp)
-                                .scale(1f + 0.05f * beatEnv.value) // art chip nods to the beat
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color(0xFF051820))
-                                .border(1.dp, MikuTeal.copy(alpha = 0.6f), RoundedCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(Color(0x33000000))
+                                .border(1.5.dp, KawaiiMikuMint.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
+                                .padding(8.dp),
+                            verticalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Icon(
-                                Icons.Default.MusicNote,
-                                contentDescription = null,
-                                tint = if (isPlaying) dominantColor else MikuTeal,
-                                modifier = Modifier.size(22.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                text = if (isPlaying) trackTitle else "Miku OS Master Audio Pipeline",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (isPlaying) trackArtist else "Dual CS43198 Direct Master DAC",
-                                color = MikuLightTeal,
-                                fontSize = 9.5.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = if (isPlaying) trackFormat else "Bit-Perfect Direct ALSA Bypass: STANDBY",
-                                color = MikuTextSecondary,
-                                fontSize = 8.sp,
-                                maxLines = 1
-                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        text = if (isPlaying) "♪ $trackTitle" else "🌸 MikuOS Player",
+                                        color = Color.White,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Black,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        text = if (isPlaying) trackArtist else "Bit-Perfect DTA Direct",
+                                        color = KawaiiMikuMint,
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1
+                                    )
+                                }
+                                // Arcade Performance Grade Badge
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0x44FF3385))
+                                        .border(1.dp, KawaiiHotPink, RoundedCornerShape(10.dp))
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = MikuBeatClickerEngine.sessionGrade,
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = AudiowideFont
+                                    )
+                                }
+                            }
+
+                            // Visual Rhythm Timing Calibration Gauge
+                            Column(Modifier.fillMaxWidth()) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("EARLY (-ms)", color = KawaiiPeach, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        if (lastTapTimeMs > 0) {
+                                            when {
+                                                abs(timingOffsetMs) <= 35 -> "💖 EXACT (0ms)"
+                                                timingOffsetMs < 0 -> "⚠️ ${timingOffsetMs}ms EARLY"
+                                                else -> "⚠️ +${timingOffsetMs}ms LATE"
+                                            }
+                                        } else "TAP ON BEAT",
+                                        color = judgmentColor,
+                                        fontSize = 10.5.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = AudiowideFont
+                                    )
+                                    Text("LATE (+ms)", color = KawaiiSoftTeal, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                                }
+                                Spacer(Modifier.height(3.dp))
+                                // Horizontal Target Bar with Deviation Pointer
+                                KawaiiTimingDeviationBar(offsetMs = timingOffsetMs, maxWindowMs = (beatIntervalMs / 3).coerceIn(80L, 250L))
+                            }
                         }
                     }
-                }
-
-                Spacer(Modifier.height(10.dp))
-
-                // ============================================================
-                // LIVE SPECTRUM + WAVEFORM — punched by the beat envelope
-                // ============================================================
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF06121C))
-                        .border(1.dp, MikuTeal.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
-                    Column {
+                } else if (selectedMode == 1) {
+                    // MODE 1: HARVEST CLICKER HERO
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(124.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(Color(0x33000000))
+                            .border(1.5.dp, if (feverSeconds > 0) KawaiiGoldenHoney else KawaiiSakuraPink, RoundedCornerShape(22.dp))
+                            .padding(9.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("LIVE SPECTRUM · BEAT-SYNCED", color = MikuTeal, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                            // 4-count beat step dots, driven by the real beat clock
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                (0..3).forEach { step ->
-                                    val active = isPlaying && step == (beatTick % 4).toInt()
-                                    Box(
-                                        Modifier
-                                            .size(if (active) 6.dp else 5.dp)
-                                            .clip(CircleShape)
-                                            .background(if (active) MikuSakuraPink else Color(0x33FFFFFF))
-                                    )
-                                }
+                            Column {
+                                Text("SWEET LEEK HARVEST 🥬", color = KawaiiMikuMint, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                Text(
+                                    MikuBeatClickerEngine.formatNumber(leekCount),
+                                    color = if (feverSeconds > 0) KawaiiGoldenHoney else Color.White,
+                                    fontSize = 32.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = AudiowideFont
+                                )
+                            }
+                            Column(horizontalAlignment = Alignment.End) {
+                                val bps = MikuBeatClickerEngine.getEffectiveBps(liveBpm)
+                                Text(
+                                    "+${MikuBeatClickerEngine.formatNumber(bps)}/s",
+                                    color = KawaiiSoftTeal,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = AudiowideFont
+                                )
+                                Text(
+                                    if (feverSeconds > 0) "🔥 77x FEVER (${feverSeconds}s)" else "⚡ BPM Boost Active",
+                                    color = if (feverSeconds > 0) KawaiiGoldenHoney else KawaiiSakuraPink,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
-
-                        Spacer(Modifier.height(6.dp))
-
-                        // 20-bar equalizer: ambient oscillation × beat punch (bass side hits harder)
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(46.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.Bottom
-                        ) {
-                            spectrumOsc.forEachIndexed { idx, barAnim ->
-                                val bassBias = 1f - idx / 20f
-                                val punch =
-                                    if (isPlaying) 0.45f + 0.55f * (0.35f + 0.65f * beatEnv.value * (0.35f + 0.65f * bassBias))
-                                    else 0.30f
-                                val barColor = when {
-                                    idx < 5 -> MikuTeal
-                                    idx < 10 -> MikuLightTeal
-                                    idx < 15 -> dominantColor
-                                    else -> MikuSakuraPink
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (clickerCombo > 0) {
+                                val comboTier = when {
+                                    clickerCombo >= 50 -> "🌟 MAX OVERDRIVE"
+                                    clickerCombo >= 25 -> "✨ FEVER FRENZY"
+                                    clickerCombo >= 10 -> "💖 SWEET RHYTHM"
+                                    else -> "★ COMBO"
                                 }
                                 Box(
                                     Modifier
-                                        .weight(1f)
-                                        .padding(horizontal = 1.dp)
-                                        .fillMaxHeight((barAnim.value * punch).coerceIn(0.05f, 1f))
-                                        .clip(RoundedCornerShape(topStart = 1.5.dp, topEnd = 1.5.dp))
-                                        .background(Brush.verticalGradient(listOf(barColor, barColor.copy(alpha = 0.25f))))
-                                )
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(KawaiiHotPink.copy(alpha = 0.35f))
+                                        .border(1.dp, KawaiiSakuraPink, RoundedCornerShape(10.dp))
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                ) {
+                                    Text("$comboTier x$clickerCombo", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                }
                             }
-                        }
-
-                        Spacer(Modifier.height(6.dp))
-
-                        // Waveform ribbon: amplitude breathes with the beat envelope
-                        Canvas(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(30.dp)
-                        ) {
-                            val amp = size.height * 0.42f * (if (isPlaying) 0.35f + 0.65f * beatEnv.value else 0.22f)
-                            val midY = size.height / 2f
-                            val path = Path()
-                            val steps = 64
-                            for (i in 0..steps) {
-                                val x = size.width * i / steps
-                                val t = i.toFloat() / steps
-                                val y = midY +
-                                    amp * kotlin.math.sin((t * 4f + waveScroll) * 2f * Math.PI.toFloat()) *
-                                    kotlin.math.sin((t + waveScroll * 0.5f) * Math.PI.toFloat())
-                                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                            }
-                            drawPath(
-                                path,
-                                brush = Brush.horizontalGradient(listOf(MikuTeal, MikuLightTeal, MikuSakuraPink)),
-                                style = Stroke(width = 3f, cap = StrokeCap.Round)
+                            Text(
+                                "Total Earned: ${MikuBeatClickerEngine.formatNumber(MikuBeatClickerEngine.totalEarned.collectAsState().value)} 🥬",
+                                color = KawaiiTextMuted,
+                                fontSize = 11.sp
                             )
                         }
                     }
-                }
-
-                Spacer(Modifier.height(10.dp))
-
-                // ============================================================
-                // BEAT MATCH — RHYTHM GAME around the Kawaii tap orb
-                // ============================================================
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF071722))
-                        .border(1.dp, Brush.linearGradient(listOf(MikuSakuraPink.copy(alpha = 0.7f), MikuTeal.copy(alpha = 0.5f))), RoundedCornerShape(14.dp))
-                ) {
-                    // PERFECT-hit glow burst over the whole card
-                    if (perfectFlash.value > 0.01f) {
-                        Box(
-                            Modifier
-                                .matchParentSize()
-                                .background(
-                                    Brush.radialGradient(
-                                        listOf(MikuSakuraPink.copy(alpha = perfectFlash.value), Color.Transparent)
-                                    )
-                                )
-                        )
-                    }
-
+                } else if (selectedMode == 2) {
+                    // MODE 2: PRODUCER SKILLS TREE HERO
                     Column(
                         Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 10.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .height(124.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(Color(0x33000000))
+                            .border(1.5.dp, KawaiiSoftTeal, RoundedCornerShape(22.dp))
+                            .padding(9.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            "♥ BEAT MATCH · RHYTHM GAME",
-                            color = MikuSakuraPink,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont
-                        )
-                        Text(
-                            if (isPlaying) "Tap the orb exactly ON the beat" else "Play a track to arm the beat judge — free tap-tempo below",
-                            color = MikuTextSecondary,
-                            fontSize = 8.sp
-                        )
-
-                        Spacer(Modifier.height(6.dp))
-
-                        // Score row
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            TapStatChip(label = "SCORE", value = "$gameScore", accent = MikuLightTeal)
-                            TapStatChip(label = "COMBO", value = "x$gameCombo", accent = if (gameCombo >= 10) MikuGold else MikuSakuraPink)
-                            TapStatChip(label = "MAX", value = "x$gameBestCombo", accent = MikuTeal)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("🧲 PRODUCER SKILL TREE", color = KawaiiSoftTeal, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                Text("Rhythm Master Perks", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                            }
+                            Text("${clickerSkills.sumOf { it.level }} Upgrades Active", color = KawaiiGoldenHoney, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
-
-                        Spacer(Modifier.height(6.dp))
-
-                        Box(contentAlignment = Alignment.Center) {
-                            // Rhythm-game closing target ring: spawns wide at each beat and
-                            // contracts onto the orb rim exactly at the NEXT beat — that's
-                            // the moment to tap.
-                            if (isPlaying) {
-                                Canvas(Modifier.size(200.dp)) {
-                                    val c = center
-                                    val orbR = 74.dp.toPx()
-                                    val ringR = orbR + (size.minDimension / 2f - orbR) * (1f - beatPhase.value)
-                                    drawCircle(
-                                        color = MikuLightTeal.copy(alpha = 0.25f + 0.65f * beatPhase.value),
-                                        radius = ringR, center = c,
-                                        style = Stroke(width = 3f + 4f * beatPhase.value)
+                        Text(
+                            "Upgrade your timing window, magnetize Golden Leeks, overclock Fever duration, and summon Chibi Miku autopilot!",
+                            color = KawaiiTextMuted,
+                            fontSize = 11.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                } else if (selectedMode == 3) {
+                    // MODE 3: THEME SKINS & TEXTURES HERO
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(124.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(Color(0x33000000))
+                            .border(1.5.dp, activeSkinPrimary, RoundedCornerShape(22.dp))
+                            .padding(9.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("🎨 AESTHETIC SKINS & TEXTURES", color = activeSkinPrimary, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(currentSkin.icon, fontSize = 20.sp)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(currentSkin.displayName, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                }
+                            }
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(activeSkinPrimary.copy(alpha = 0.3f))
+                                    .border(1.dp, activeSkinPrimary, RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Text("ACTIVE SKIN", color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Text("Custom palette, ambient floating particles, and tactile shaders.", color = KawaiiTextMuted, fontSize = 11.sp)
+                    }
+                } else if (selectedMode == 4) {
+                    // MODE 4: QUESTS & CALIBRATION DATABASE HERO
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(124.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(Color(0x33000000))
+                            .border(1.5.dp, Color(0xFFFFD700), RoundedCornerShape(22.dp))
+                            .padding(9.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column {
+                                Text("🏆 QUESTS & CALIBRATION DB", color = Color(0xFFFFD700), fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                Text("Calibration Stats", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                            }
+                            Text("${achievements.count { it.isUnlocked }} of ${achievements.size} Done", color = KawaiiMikuMint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            val totalCal = dbStats["totalTracks"] ?: 0
+                            val userCal = dbStats["userCalibrated"] ?: 0
+                            val totalTaps = dbStats["totalTaps"] ?: 0
+                            val accPct = dbStats["perfectAccuracyPct"] ?: 100
+                            KawaiiStatBadge("DB TRACKS", "$totalCal", KawaiiSoftTeal)
+                            KawaiiStatBadge("USER CAL", "$userCal", KawaiiSakuraPink)
+                            KawaiiStatBadge("LOGGED TAPS", "$totalTaps", KawaiiGoldenHoney)
+                            KawaiiStatBadge("ACCURACY", "$accPct%", KawaiiMikuMint)
+                        }
+                    }
+                } else {
+                    // MODE 5: SEASONS & RANKS HERO
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(124.dp)
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(Color(0x33000000))
+                            .border(1.5.dp, Color(currentSeason.rank.colorHex), RoundedCornerShape(22.dp))
+                            .padding(9.dp),
+                        verticalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(currentSeason.seasonName, color = KawaiiSoftTeal, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(currentSeason.rank.badge, fontSize = 26.sp)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        currentSeason.rank.title,
+                                        color = Color(currentSeason.rank.colorHex),
+                                        fontSize = 20.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = AudiowideFont
                                     )
                                 }
                             }
-
-                            KawaiiWaifuTapTempoOrb(
-                                dominantColor = dominantColor,
-                                calculatedBpm = calculatedTapBpm,
-                                onTap = {
-                                    val now = SystemClock.elapsedRealtime()
-
-                                    // -- Tap-tempo calibration (original behavior) --
-                                    // Same session rule as the orb's own game: a >2s gap starts
-                                    // fresh, so a stale run can't skew the averaged tempo.
-                                    if (tapTimestamps.isNotEmpty() && now - tapTimestamps.last() > 2000L) {
-                                        tapTimestamps.clear()
-                                    }
-                                    tapTimestamps.add(now)
-                                    if (tapTimestamps.size > 6) tapTimestamps.removeAt(0)
-                                    if (tapTimestamps.size >= 2) {
-                                        val intervals = (1 until tapTimestamps.size).map { tapTimestamps[it] - tapTimestamps[it - 1] }
-                                        val avgInterval = intervals.average()
-                                        if (avgInterval > 0) {
-                                            calculatedTapBpm = (60_000.0 / avgInterval).toFloat().coerceIn(40f, 260f)
-                                        }
-                                    }
-
-                                    // -- Beat-match judgment (only meaningful with a live beat) --
-                                    if (isPlaying && lastBeatAtMs > 0L) {
-                                        val since = (now - lastBeatAtMs).mod(beatIntervalMs)
-                                        val err = minOf(since, beatIntervalMs - since)
-                                        // Windows scale with tempo so fast tracks stay fair.
-                                        val perfectWin = maxOf(60L, beatIntervalMs / 8)
-                                        val goodWin = maxOf(130L, beatIntervalMs / 4)
-                                        val judgment = when {
-                                            err <= perfectWin -> BeatJudgment.PERFECT
-                                            err <= goodWin -> BeatJudgment.GOOD
-                                            else -> BeatJudgment.MISS
-                                        }
-                                        when (judgment) {
-                                            BeatJudgment.PERFECT -> {
-                                                gameCombo += 1
-                                                val pts = 100L + gameCombo * 10L
-                                                gameScore += pts
-                                                judgmentText = "PERFECT!! +$pts"
-                                                judgmentColor = MikuSakuraPink
-                                                flashSeq += 1
-                                                // Celebration double-buzz on top of the orb's own
-                                                // haptic — VIBRATE is declared in the manifest.
-                                                try {
-                                                    val vib = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                                        vib?.vibrate(android.os.VibrationEffect.createWaveform(longArrayOf(0, 18, 40, 26), intArrayOf(0, 255, 0, 180), -1))
-                                                    }
-                                                } catch (_: Throwable) {}
-                                            }
-                                            BeatJudgment.GOOD -> {
-                                                gameCombo += 1
-                                                val pts = 50L + gameCombo * 5L
-                                                gameScore += pts
-                                                judgmentText = "GOOD +$pts"
-                                                judgmentColor = MikuLightTeal
-                                            }
-                                            BeatJudgment.MISS -> {
-                                                gameCombo = 0
-                                                judgmentText = "MISS…"
-                                                judgmentColor = Color(0xFFFF6E6E)
-                                            }
-                                        }
-                                        if (gameCombo > gameBestCombo) gameBestCombo = gameCombo
-                                        if (gameCombo > 0 && gameCombo % 10 == 0) {
-                                            judgmentText = "★ COMBO x$gameCombo ★"
-                                            judgmentColor = MikuGold
-                                        }
-                                        judgmentSeq += 1
-                                    }
-                                }
-                            )
-
-                            // Judgment pop — scales up and floats away above the orb
-                            if (judgmentPop.value > 0.02f && judgmentText.isNotEmpty()) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text("SEASON SCORE", color = KawaiiTextMuted, fontSize = 10.sp)
                                 Text(
-                                    text = judgmentText,
-                                    color = judgmentColor,
-                                    fontSize = (12f + 6f * judgmentPop.value).sp,
+                                    MikuBeatClickerEngine.formatNumber(currentSeason.seasonScore.toDouble()),
+                                    color = Color.White,
+                                    fontSize = 18.sp,
                                     fontWeight = FontWeight.Black,
-                                    fontFamily = AudiowideFont,
-                                    modifier = Modifier
-                                        .align(Alignment.TopCenter)
-                                        .graphicsLayer {
-                                            alpha = judgmentPop.value
-                                            translationY = -26f * (1f - judgmentPop.value)
-                                        }
+                                    fontFamily = AudiowideFont
                                 )
                             }
+                        }
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            KawaiiStatBadge("TOTAL TAPS", "${lifetimeStats.totalTaps}", KawaiiMikuMint)
+                            KawaiiStatBadge("MAX STREAK", "x${lifetimeStats.maxCombo}", KawaiiGoldenHoney)
+                            KawaiiStatBadge("PERFECTS", "${lifetimeStats.perfectHits}", KawaiiSakuraPink)
+                            KawaiiStatBadge("HIGH BPM", "${lifetimeStats.highestBpmLocked.toInt()}", KawaiiLavender)
                         }
                     }
                 }
 
-                Spacer(Modifier.height(10.dp))
-
-                // ============================================================
-                // GUESS THE BPM — blind tempo challenge
-                // ============================================================
+                // 3. CENTER: PROJECT DIVA APPROACH RING & ULTRA KAWAII BEAT NODE
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF06131E))
-                        .border(1.dp, MikuLightTeal.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-                        .padding(10.dp)
+                        .weight(1f, fill = false)
+                        .padding(vertical = 4.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            "🎯 GUESS THE BPM",
-                            color = MikuLightTeal,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        when (guessPhase) {
-                            0 -> {
-                                Text(
-                                    "Think you know the tempo? The readout hides while you tap it from feel.",
-                                    color = MikuTextSecondary,
-                                    fontSize = 8.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                GuessActionPill(text = "START CHALLENGE", accent = MikuSakuraPink, enabled = isPlaying) {
-                                    guessTaps.clear()
-                                    guessBpm = null
-                                    guessResult = null
-                                    guessPhase = 1
+                    // Golden Leek lucky target
+                    if (goldenLeekVisible) {
+                        Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(end = 12.dp)
+                                .clip(CircleShape)
+                                .background(Brush.radialGradient(listOf(KawaiiGoldenHoney, Color(0xFFFFA500))))
+                                .border(2.dp, Color.White, CircleShape)
+                                .clickable {
+                                    MikuBeatClickerEngine.tapGoldenLeek()
+                                    MikuTactileHaptics.playBumpyLikeTexture(ctx)
                                 }
-                                if (!isPlaying) {
-                                    Spacer(Modifier.height(3.dp))
-                                    Text("Needs a playing track", color = MikuTextSecondary, fontSize = 7.5.sp)
+                                .padding(8.dp)
+                        ) {
+                            Text("✨🥬✨", fontSize = 20.sp)
+                        }
+                    }
+
+                    // Interactive Kawaii Project DIVA Beat Node (with Approach Rings, Ripple & Shockwaves)
+                    KawaiiProjectDivaBeatNode(
+                        approachRadius = beatApproachAnim.value,
+                        pulseScale = beatPulseScale.value,
+                        isPlaying = isPlaying,
+                        feverActive = feverSeconds > 0,
+                        perfectShockwaveTrigger = perfectShockwaveTrigger,
+                        onTap = {
+                            val now = SystemClock.elapsedRealtime()
+                            lastTapTimeMs = now
+
+                            // Tap tempo tracking
+                            if (tapTimestamps.isNotEmpty() && now - tapTimestamps.last() > 2000L) {
+                                tapTimestamps.clear()
+                                tapCounter = 0
+                            }
+                            tapTimestamps.add(now)
+                            tapCounter++
+                            if (tapTimestamps.size > 8) tapTimestamps.removeAt(0)
+                            if (tapTimestamps.size >= 2) {
+                                val intervals = (1 until tapTimestamps.size).map { (tapTimestamps[it] - tapTimestamps[it - 1]).toDouble() }
+                                val avg = intervals.average()
+                                if (avg > 0) calculatedTapBpm = (60_000.0 / avg).toFloat().coerceIn(20f, 999f)
+                            }
+
+                            // Calculate Exact Millisecond Timing Offset (Early vs Late)
+                            val accuracy: HitAccuracy
+                            if (isPlaying && lastBeatEpochMs > 0L) {
+                                val cycle = (now - lastBeatEpochMs).mod(beatIntervalMs)
+                                val signedOffset = if (cycle > beatIntervalMs / 2) {
+                                    (cycle - beatIntervalMs).toInt()
+                                } else {
+                                    cycle.toInt()
+                                }
+                                timingOffsetMs = signedOffset
+
+                                val absOffset = abs(signedOffset)
+                                val perfectWin = maxOf(45, (beatIntervalMs / 8).toInt())
+                                val goodWin = maxOf(100, (beatIntervalMs / 4).toInt())
+
+                                accuracy = when {
+                                    absOffset <= perfectWin -> HitAccuracy.PERFECT
+                                    absOffset <= goodWin -> HitAccuracy.GOOD
+                                    else -> HitAccuracy.MISS
+                                }
+                            } else {
+                                timingOffsetMs = 0
+                                accuracy = HitAccuracy.GOOD
+                            }
+
+                            val yield = MikuBeatClickerEngine.tap(accuracy, liveBpm)
+                            val pts = when (accuracy) {
+                                HitAccuracy.PERFECT -> 100L + clickerCombo * 15L
+                                HitAccuracy.GOOD -> 50L + clickerCombo * 5L
+                                HitAccuracy.MISS -> 0L
+                            }
+                            MikuBpmSeasonsEngine.recordTap(accuracy, clickerCombo, pts, liveBpm)
+
+                            // Telemetry Logging to SQLite Database
+                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                bpmDb.logTapTelemetry(
+                                    MikuBpmDatabase.TapTelemetryRecord(
+                                        artist = trackArtist,
+                                        title = trackTitle,
+                                        tapEpochMs = System.currentTimeMillis(),
+                                        targetBeatMs = beatIntervalMs,
+                                        deviationMs = timingOffsetMs,
+                                        accuracy = accuracy.name,
+                                        instantaneousBpm = liveBpm,
+                                        comboAtTap = clickerCombo,
+                                        isFever = feverSeconds > 0
+                                    )
+                                )
+                                MikuBeatClickerEngine.checkAchievements()
+                                dbStats = bpmDb.getCalibrationStats()
+                            }
+
+                            when (accuracy) {
+                                HitAccuracy.PERFECT -> {
+                                    judgmentTitle = "💖 PERFECT!! (0ms)"
+                                    judgmentColor = KawaiiHotPink
+                                    perfectShockwaveTrigger++
+                                    MikuTactileHaptics.playBumpyLikeTexture(ctx)
+                                }
+                                HitAccuracy.GOOD -> {
+                                    val prefix = if (timingOffsetMs < 0) "EARLY" else "LATE"
+                                    judgmentTitle = "✨ GOOD ($prefix ${abs(timingOffsetMs)}ms)"
+                                    judgmentColor = KawaiiSoftTeal
+                                    MikuTactileHaptics.playRatchetTick(ctx)
+                                }
+                                HitAccuracy.MISS -> {
+                                    judgmentTitle = "MISS (${abs(timingOffsetMs)}ms)"
+                                    judgmentColor = Color(0xFFFF6B8B)
                                 }
                             }
-                            1 -> {
-                                Text(
-                                    "Tap the pink pad to the music — at least 4 taps, then lock it in.",
-                                    color = MikuTextSecondary,
-                                    fontSize = 8.sp,
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(Modifier.height(6.dp))
-                                // The guess pad — its own tap session, 2.5s idle gap resets
+                        }
+                    )
+
+                    // Floating Numbers / Floating Texts
+                    floatingTexts.forEach { ft ->
+                        key(ft.id) {
+                            val animY = remember { Animatable(0f) }
+                            val animAlpha = remember { Animatable(1f) }
+                            LaunchedEffect(ft.id) {
+                                launch { animY.animateTo(-40f, tween(600, easing = LinearOutSlowInEasing)) }
+                                launch {
+                                    delay(150L)
+                                    animAlpha.animateTo(0f, tween(450, easing = LinearEasing))
+                                }
+                            }
+                            Text(
+                                text = ft.text,
+                                color = if (ft.isCrit) KawaiiGoldenHoney else (if (ft.isFever) KawaiiHotPink else KawaiiSoftTeal),
+                                fontSize = if (ft.isCrit) 16.sp else 13.5.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = AudiowideFont,
+                                modifier = Modifier
+                                    .offset(x = ft.x.dp, y = (ft.y + animY.value).dp)
+                                    .graphicsLayer { alpha = animAlpha.value }
+                            )
+                        }
+                    }
+
+                    // Floating Judgment Title
+                    if (judgmentTitle.isNotEmpty()) {
+                        Text(
+                            text = judgmentTitle,
+                            color = judgmentColor,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont,
+                            modifier = Modifier
+                                .align(Alignment.TopCenter)
+                                .offset(y = (-14).dp)
+                        )
+                    }
+                }
+
+                // 4. BOTTOM DOCK (Modes 0..5)
+                if (selectedMode == 1) {
+                    // MODE 1: BUILDINGS SHOP CARDS
+                    LazyRow(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(72.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        items(clickerBuildings) { b ->
+                            val canAfford = leekCount >= b.currentCost
+                            Box(
+                                Modifier
+                                    .width(145.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0x33000000))
+                                    .border(1.dp, if (canAfford) KawaiiMikuMint else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
+                                    .clickable(enabled = canAfford) {
+                                        MikuBeatClickerEngine.buyBuilding(b.id)
+                                        MikuTactileHaptics.playRatchetTick(ctx)
+                                    }
+                                    .padding(6.dp)
+                            ) {
+                                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("${b.icon} ${b.name}", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        Text("x${b.owned}", color = KawaiiSakuraPink, fontSize = 12.sp, fontWeight = FontWeight.Black)
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+                                        Text("+${MikuBeatClickerEngine.formatNumber(b.baseBps)}/s", color = KawaiiSoftTeal, fontSize = 11.sp)
+                                        Text("${MikuBeatClickerEngine.formatNumber(b.currentCost)} 🥬", color = if (canAfford) KawaiiGoldenHoney else KawaiiTextMuted, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (selectedMode == 2) {
+                    // MODE 2: PRODUCER SKILLS UPGRADE CARDS
+                    LazyRow(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(72.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        items(clickerSkills) { s ->
+                            val canAfford = leekCount >= s.currentCost && s.level < s.maxLevel
+                            Box(
+                                Modifier
+                                    .width(155.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0x33000000))
+                                    .border(1.dp, if (canAfford) KawaiiSoftTeal else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
+                                    .clickable(enabled = canAfford) {
+                                        MikuBeatClickerEngine.buySkill(s.id)
+                                        MikuTactileHaptics.playBumpyLikeTexture(ctx)
+                                    }
+                                    .padding(6.dp)
+                            ) {
+                                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("${s.icon} ${s.name}", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        Text("Lv.${s.level}", color = KawaiiSoftTeal, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+                                        Text(if (s.level >= s.maxLevel) "MAX" else "${MikuBeatClickerEngine.formatNumber(s.currentCost)} 🥬", color = if (canAfford) KawaiiGoldenHoney else KawaiiTextMuted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                        Text(if (canAfford) "UPGRADE" else (if (s.level >= s.maxLevel) "MASTERED" else "LOCKED"), color = if (canAfford) KawaiiSoftTeal else KawaiiTextMuted, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if (selectedMode == 3) {
+                    // MODE 3: THEME SKINS SELECTOR
+                    LazyRow(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(72.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        items(MikuBeatClickerEngine.BpmSkin.values()) { skin ->
+                            val isCurrent = currentSkin == skin
+                            Box(
+                                Modifier
+                                    .width(140.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0x33000000))
+                                    .border(1.5.dp, if (isCurrent) Color(skin.primaryColor) else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
+                                    .clickable {
+                                        MikuBeatClickerEngine.setSkin(skin)
+                                        MikuTactileHaptics.playRatchetTick(ctx)
+                                    }
+                                    .padding(8.dp)
+                            ) {
+                                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(skin.icon, fontSize = 18.sp)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(skin.displayName, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                    Text(if (isCurrent) "✨ ACTIVE" else "TAP TO APPLY", color = if (isCurrent) Color(skin.primaryColor) else KawaiiTextMuted, fontSize = 10.sp, fontWeight = FontWeight.Black)
+                                }
+                            }
+                        }
+                    }
+                } else if (selectedMode == 4) {
+                    // MODE 4: QUESTS & ACHIEVEMENTS LIST
+                    LazyRow(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(72.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        items(achievements) { a ->
+                            Box(
+                                Modifier
+                                    .width(155.dp)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0x33000000))
+                                    .border(1.dp, if (a.isUnlocked) Color(0xFFFFD700) else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
+                                    .padding(6.dp)
+                            ) {
+                                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        Text("${a.icon} ${a.title}", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                                        Text(if (a.isUnlocked) "✅" else "🔒", fontSize = 12.sp)
+                                    }
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.Bottom) {
+                                        Text(a.desc, color = KawaiiTextMuted, fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("+${MikuBeatClickerEngine.formatNumber(a.rewardLeeks)} 🥬", color = Color(0xFFFFD700), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // MODE 0 / 5: CALIBRATION ACTION FOOTER & DB CONTROLS
+                    Column(
+                        Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            KawaiiStatBadge("LEEK HARVEST", MikuBeatClickerEngine.formatNumber(leekCount), KawaiiGoldenHoney)
+                            KawaiiStatBadge("COMBO STREAK", "x$clickerCombo", if (clickerCombo >= 10) KawaiiGoldenHoney else KawaiiSakuraPink)
+                            KawaiiStatBadge("SEASON RANK", currentSeason.rank.badge, Color(currentSeason.rank.colorHex))
+                            KawaiiStatBadge("TAP TEMPO", if (calculatedTapBpm != null) "${calculatedTapBpm!!.toInt()}" else "--", KawaiiMikuMint)
+                        }
+
+                        if (calculatedTapBpm != null) {
+                            val tapVal = calculatedTapBpm!!
+                            val halfVal = (tapVal / 2f).coerceIn(20f, 999f)
+                            val doubleVal = (tapVal * 2f).coerceIn(20f, 999f)
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Box(
                                     Modifier
-                                        .fillMaxWidth(0.8f)
-                                        .height(52.dp)
-                                        .clip(RoundedCornerShape(26.dp))
-                                        .background(Brush.horizontalGradient(listOf(MikuSakuraPink.copy(alpha = 0.35f), Color(0xFF13060F))))
-                                        .border(1.2.dp, MikuSakuraPink, RoundedCornerShape(26.dp))
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0x55FF3385))
+                                        .border(1.dp, KawaiiHotPink, RoundedCornerShape(10.dp))
                                         .clickable {
-                                            val now = SystemClock.elapsedRealtime()
-                                            if (guessTaps.isNotEmpty() && now - guessTaps.last() > 2500L) guessTaps.clear()
-                                            guessTaps.add(now)
-                                            if (guessTaps.size > 8) guessTaps.removeAt(0)
-                                            if (guessTaps.size >= 2) {
-                                                val iv = (1 until guessTaps.size).map { guessTaps[it] - guessTaps[it - 1] }.average()
-                                                if (iv > 0) guessBpm = (60_000.0 / iv).toFloat().coerceIn(40f, 260f)
-                                            }
+                                            MikuTactileHaptics.playBumpyLikeTexture(ctx)
                                             try {
-                                                val vib = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                                    vib?.vibrate(android.os.VibrationEffect.createOneShot(20, 160))
+                                                android.provider.Settings.Global.putFloat(ctx.contentResolver, "miku_live_bpm", tapVal)
+                                                android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_beat_interval_ms", (60000f / tapVal).toInt())
+                                                val intent = android.content.Intent("com.miku.action.BPM_UPDATE").apply {
+                                                    putExtra("bpm", tapVal)
+                                                    putExtra("beat_interval_ms", (60000f / tapVal).toLong())
+                                                    putExtra("is_playing", isPlaying)
                                                 }
+                                                ctx.sendBroadcast(intent)
                                             } catch (_: Throwable) {}
-                                        },
-                                    contentAlignment = Alignment.Center
+
+                                            // Save to SQLite Database
+                                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                bpmDb.saveTrackBpm(
+                                                    MikuBpmDatabase.TrackBpmRecord(
+                                                        artist = trackArtist,
+                                                        title = trackTitle,
+                                                        canonicalBpm = tapVal,
+                                                        rawDetectedBpm = liveBpm,
+                                                        userTappedBpm = tapVal,
+                                                        tempoMultiplier = if (tapVal > liveBpm * 1.5f) 2.0f else (if (tapVal < liveBpm * 0.75f) 0.5f else 1.0f),
+                                                        confidence = 1.0f,
+                                                        source = "USER_CALIBRATED",
+                                                        tapCount = tapCounter
+                                                    )
+                                                )
+                                                dbStats = bpmDb.getCalibrationStats()
+                                            }
+                                        }
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
                                 ) {
-                                    Text(
-                                        if (guessTaps.isEmpty()) "TAP THE BEAT HERE"
-                                        else "${guessTaps.size} TAP${if (guessTaps.size == 1) "" else "S"}",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Black,
-                                        fontFamily = AudiowideFont,
-                                        letterSpacing = 1.5.sp
-                                    )
+                                    Text("🔒 LOCK BPM: ${tapVal.toInt()}", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                 }
-                                Spacer(Modifier.height(6.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    GuessActionPill(text = "LOCK IN", accent = MikuTeal, enabled = guessTaps.size >= 4 && guessBpm != null) {
-                                        val guess = guessBpm
-                                        if (guess != null) {
-                                            // Capture the engine tempo at the moment of lock-in.
-                                            val actual = liveBpm
-                                            val diffPct = (kotlin.math.abs(guess - actual) / actual * 100f)
-                                            guessResult = Triple(guess, actual, diffPct)
-                                            guessPhase = 2
+                                Spacer(Modifier.width(5.dp))
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0x3339C5BB))
+                                        .border(1.dp, KawaiiMikuMint, RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            calculatedTapBpm = halfVal
+                                            MikuTactileHaptics.playRatchetTick(ctx)
                                         }
-                                    }
-                                    GuessActionPill(text = "CANCEL", accent = MikuTextSecondary, enabled = true) {
-                                        guessPhase = 0
-                                    }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    Text("➗ /2 (${halfVal.toInt()})", color = KawaiiMikuMint, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                 }
-                            }
-                            else -> {
-                                val res = guessResult
-                                if (res != null) {
-                                    val (guess, actual, diffPct) = res
-                                    val accuracy = (100f - diffPct).coerceIn(0f, 100f)
-                                    val (grade, gradeColor) = when {
-                                        diffPct <= 3f -> "S" to MikuGold
-                                        diffPct <= 8f -> "A" to MikuTeal
-                                        diffPct <= 15f -> "B" to MikuLightTeal
-                                        else -> "C" to Color(0xFFFF6E6E)
-                                    }
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            grade,
-                                            color = gradeColor,
-                                            fontSize = 34.sp,
-                                            fontWeight = FontWeight.Black,
-                                            fontFamily = AudiowideFont
-                                        )
-                                        Spacer(Modifier.width(12.dp))
-                                        Column {
-                                            Text(
-                                                String.format(Locale.US, "YOU %.0f · ENGINE %.0f BPM", guess, actual),
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                fontFamily = AudiowideFont
-                                            )
-                                            Text(
-                                                String.format(Locale.US, "%.1f%% accuracy", accuracy),
-                                                color = gradeColor,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0x33DFB8FF))
+                                        .border(1.dp, KawaiiLavender, RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            calculatedTapBpm = doubleVal
+                                            MikuTactileHaptics.playRatchetTick(ctx)
                                         }
-                                    }
-                                    Spacer(Modifier.height(6.dp))
-                                    GuessActionPill(text = "TRY AGAIN", accent = MikuSakuraPink, enabled = isPlaying) {
-                                        guessTaps.clear()
-                                        guessBpm = null
-                                        guessResult = null
-                                        guessPhase = 1
-                                    }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    Text("✖️ x2 (${doubleVal.toInt()})", color = KawaiiLavender, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                }
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(Color(0x3300E5FF))
+                                        .border(1.dp, Color(0xFF00E5FF), RoundedCornerShape(10.dp))
+                                        .clickable {
+                                            MikuTactileHaptics.playRatchetTick(ctx)
+                                            coroutineScope.launch {
+                                                val online = bpmDb.resolveCanonicalBpm(trackArtist, trackTitle)
+                                                if (online != null && online.canonicalBpm > 0f) {
+                                                    calculatedTapBpm = online.canonicalBpm
+                                                    android.widget.Toast.makeText(ctx, "🌐 DB Resolved: ${online.canonicalBpm.toInt()} BPM (${online.source})", android.widget.Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    android.widget.Toast.makeText(ctx, "🌐 Queried DB (DSP fallback active)", android.widget.Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                ) {
+                                    Text("🌐 DB", color = Color(0xFF00E5FF), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                 }
                             }
                         }
+
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = if (isPlaying) "🌸 Tap node when the glowing ring closes on center!" else "⏸️ Playback Paused · Tap node to measure tempo",
+                            color = if (isPlaying) KawaiiMikuMint else KawaiiTextMuted,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
                     }
                 }
-
-                Spacer(Modifier.height(10.dp))
-
-                // ============================================================
-                // HARDWARE PULSAR & DOCK LINK MATRIX
-                // ============================================================
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF05131A))
-                            .border(1.dp, MikuSakuraPink.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
-                            .padding(8.dp)
-                    ) {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Lightbulb, contentDescription = null, tint = MikuSakuraPink, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("PULSAR LED", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                            }
-                            Text("Front SGM31324 PWM", color = MikuTextSecondary, fontSize = 7.5.sp)
-                            Text("⚡ Hardware Beat Sync: ON", color = Color(0xFF00FF7F), fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF05131A))
-                            .border(1.dp, MikuTeal.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
-                            .padding(8.dp)
-                    ) {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.GraphicEq, contentDescription = null, tint = MikuTeal, modifier = Modifier.size(14.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("DOCK ANCHOR", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                            }
-                            Text("16s Slow Hypnotic Spin", color = MikuTextSecondary, fontSize = 7.5.sp)
-                            Text("🌈 Chroma Aura: Active", color = MikuTeal, fontSize = 7.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
             }
         }
     }
 }
 
-/** Compact action pill for the Guess-the-BPM challenge. */
+/**
+ * Rainbow Sugar Fever Energy Progress Bar with Shimmering Pulse.
+ */
 @Composable
-private fun GuessActionPill(text: String, accent: Color, enabled: Boolean, onClick: () -> Unit) {
+private fun KawaiiSugarFeverGauge(
+    feverEnergy: Float,
+    feverSeconds: Int,
+    modifier: Modifier = Modifier
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "FeverShimmer")
+    val shimmerOffset by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1800, easing = LinearEasing), RepeatMode.Restart),
+        label = "shimmer"
+    )
+
     Box(
-        Modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (enabled) accent.copy(alpha = 0.20f) else Color(0x22333B44))
-            .border(1.dp, if (enabled) accent else Color(0x44607078), RoundedCornerShape(14.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 5.dp)
+        modifier = modifier
+            .height(10.dp)
+            .clip(RoundedCornerShape(5.dp))
+            .background(Color(0x40000000))
+            .border(1.dp, if (feverSeconds > 0) KawaiiGoldenHoney else KawaiiSakuraPink.copy(alpha = 0.5f), RoundedCornerShape(5.dp))
     ) {
-        Text(
-            text,
-            color = if (enabled) accent else Color(0x88AABBC4),
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Black,
-            fontFamily = AudiowideFont,
-            letterSpacing = 1.sp
+        val frac = if (feverSeconds > 0) 1f else (feverEnergy / 100f).coerceIn(0f, 1f)
+        val animatedFrac by animateFloatAsState(targetValue = frac, animationSpec = spring(stiffness = Spring.StiffnessMediumLow), label = "feverFrac")
+
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(animatedFrac)
+                .clip(RoundedCornerShape(5.dp))
+                .background(
+                    if (feverSeconds > 0) {
+                        Brush.horizontalGradient(
+                            listOf(KawaiiGoldenHoney, KawaiiHotPink, KawaiiMikuMint, KawaiiLavender)
+                        )
+                    } else {
+                        Brush.horizontalGradient(
+                            listOf(KawaiiSakuraPink, KawaiiHotPink, KawaiiMikuMint)
+                        )
+                    }
+                )
         )
     }
 }
 
 /**
- * Round, Kawaii/Waifu-Inspired Tap-Tempo Heart Beat Orb.
- * Features 3D elevated circular cyber glass, dynamic spring bounce overshoot,
- * expanding ripple shockwave on tap, and crisp tactile haptic feedback.
+ * Visual Rhythm Timing Calibration Gauge.
  */
 @Composable
-fun KawaiiWaifuTapTempoOrb(
-    dominantColor: Color,
-    calculatedBpm: Float?,
+private fun KawaiiTimingDeviationBar(
+    offsetMs: Int,
+    maxWindowMs: Long,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(14.dp)
+    ) {
+        val w = size.width
+        val h = size.height
+        val midX = w / 2f
+
+        drawLine(
+            color = Color(0x44FFFFFF),
+            start = Offset(0f, h / 2f),
+            end = Offset(w, h / 2f),
+            strokeWidth = 3f,
+            cap = StrokeCap.Round
+        )
+
+        val perfectZoneWidth = (w * 0.2f)
+        drawRect(
+            color = KawaiiSakuraPink.copy(alpha = 0.35f),
+            topLeft = Offset(midX - perfectZoneWidth / 2f, 0f),
+            size = Size(perfectZoneWidth, h)
+        )
+
+        drawLine(
+            color = Color.White,
+            start = Offset(midX, 0f),
+            end = Offset(midX, h),
+            strokeWidth = 2f
+        )
+
+        val clampedOffset = offsetMs.toFloat().coerceIn(-maxWindowMs.toFloat(), maxWindowMs.toFloat())
+        val fraction = (clampedOffset / maxWindowMs.toFloat()).coerceIn(-1f, 1f)
+        val pointerX = midX + (fraction * (w / 2f - 6f))
+
+        val pointerColor = when {
+            abs(offsetMs) <= 35 -> KawaiiHotPink
+            offsetMs < 0 -> KawaiiPeach
+            else -> KawaiiSoftTeal
+        }
+
+        drawCircle(color = pointerColor, radius = 6f, center = Offset(pointerX, h / 2f))
+        drawCircle(color = Color.White, radius = 3f, center = Offset(pointerX, h / 2f))
+    }
+}
+
+/**
+ * Project DIVA Approach Ring & Kawaii Beat Node with Squash & Stretch + Perfect Shockwaves.
+ */
+@Composable
+private fun KawaiiProjectDivaBeatNode(
+    approachRadius: Float,
+    pulseScale: Float,
+    isPlaying: Boolean,
+    feverActive: Boolean,
+    perfectShockwaveTrigger: Int,
     onTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val ctx = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    val bounceScale = remember { Animatable(1.0f) }
-    val shockwaveAnim = remember { Animatable(0.0f) }
-    var tapCounter by remember { mutableIntStateOf(0) }
-    // Game state: per-session tap timestamps → tap count + a "steadiness" score (how even your
-    // intervals are). A gap > 2s starts a fresh session so the counter/score are per-run.
-    val orbTapTimes = remember { mutableStateListOf<Long>() }
-    var steadiness by remember { mutableStateOf(0f) }   // 0..1, higher = more even taps
-    var bestStreak by remember { mutableIntStateOf(0) }
+    val touchScale = remember { Animatable(1f) }
+    val rippleAnim = remember { Animatable(0f) }
+    val shockwaveAnim = remember { Animatable(0f) }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "OrbHaloSpin")
-    val haloRotate by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(4000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "HaloRotate"
-    )
+    LaunchedEffect(perfectShockwaveTrigger) {
+        if (perfectShockwaveTrigger > 0) {
+            shockwaveAnim.snapTo(0f)
+            shockwaveAnim.animateTo(1f, tween(400, easing = LinearOutSlowInEasing))
+        }
+    }
 
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+        modifier = modifier
+            .size(140.dp)
+            .scale(touchScale.value * pulseScale)
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onPress = {
+                        coroutineScope.launch {
+                            touchScale.snapTo(0.85f)
+                            touchScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                        }
+                        coroutineScope.launch {
+                            rippleAnim.snapTo(0f)
+                            rippleAnim.animateTo(1f, tween(320, easing = LinearOutSlowInEasing))
+                        }
+                        onTap()
+                    }
+                )
+            },
+        contentAlignment = Alignment.Center
     ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val c = center
+            val baseR = (size.minDimension / 2f) * 0.65f
+
+            // Approach Ring
+            if (isPlaying && approachRadius > 0.01f) {
+                val currentApproachR = baseR + (approachRadius * 26f)
+                drawCircle(
+                    color = if (feverActive) KawaiiGoldenHoney.copy(alpha = 0.8f) else KawaiiSakuraPink.copy(alpha = 0.85f),
+                    radius = currentApproachR,
+                    center = c,
+                    style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round)
+                )
+                drawCircle(
+                    color = Color.White.copy(alpha = 0.6f),
+                    radius = currentApproachR,
+                    center = c,
+                    style = Stroke(width = 1.2.dp.toPx())
+                )
+            }
+
+            // Tap Ripple
+            if (rippleAnim.value > 0.01f && rippleAnim.value < 0.99f) {
+                val r = baseR + (rippleAnim.value * 35f)
+                val alpha = (1f - rippleAnim.value) * 0.9f
+                drawCircle(
+                    color = KawaiiHotPink.copy(alpha = alpha),
+                    radius = r,
+                    center = c,
+                    style = Stroke(width = 4.dp.toPx() * (1f - rippleAnim.value))
+                )
+            }
+
+            // Perfect Shockwave
+            if (shockwaveAnim.value > 0.01f && shockwaveAnim.value < 0.99f) {
+                val swR = baseR + (shockwaveAnim.value * 70f)
+                val swAlpha = (1f - shockwaveAnim.value) * 0.8f
+                drawCircle(
+                    color = KawaiiGoldenHoney.copy(alpha = swAlpha),
+                    radius = swR,
+                    center = c,
+                    style = Stroke(width = 2.5.dp.toPx())
+                )
+            }
+        }
+
         Box(
             modifier = Modifier
-                .size(170.dp),
+                .size(104.dp)
+                .clip(CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(
+                            Color.White,
+                            if (feverActive) KawaiiGoldenHoney else KawaiiSakuraPink,
+                            Color(0xFF5A1A3A)
+                        ),
+                        center = Offset(34f, 34f),
+                        radius = 105f
+                    )
+                )
+                .border(
+                    BorderStroke(
+                        2.5.dp,
+                        Brush.linearGradient(listOf(Color.White, KawaiiHotPink))
+                    ),
+                    CircleShape
+                ),
             contentAlignment = Alignment.Center
         ) {
-            // Layer 1: Expanding Ripple Shockwave on Tap
-            if (shockwaveAnim.value > 0.01f) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val radius = (size.width / 2f) * (1.0f + shockwaveAnim.value * 0.7f)
-                    drawCircle(
-                        color = MikuNeonPink.copy(alpha = (1.0f - shockwaveAnim.value) * 0.8f),
-                        radius = radius,
-                        style = Stroke(width = 4f)
-                    )
-                }
-            }
-
-            // Layer 2: Steadily Spinning Dual-Tone Aura Ring
-            Box(
-                Modifier
-                    .size(160.dp)
-                    .graphicsLayer { rotationZ = haloRotate }
-                    .border(
-                        BorderStroke(
-                            2.dp,
-                            Brush.sweepGradient(
-                                listOf(
-                                    MikuCyan,
-                                    MikuNeonPink,
-                                    Color(0xFF00FF88),
-                                    dominantColor,
-                                    MikuCyan
-                                )
-                            )
-                        ),
-                        CircleShape
-                    )
-            )
-
-            // Layer 3: Round Kawaii Heart Beat Orb
-            Box(
-                modifier = Modifier
-                    .size(148.dp)
-                    .scale(bounceScale.value)
-                    .clip(CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            listOf(
-                                Color(0xFF133842),
-                                Color(0xFF081F26),
-                                Color(0xFF030D12)
-                            )
-                        )
-                    )
-                    .border(
-                        BorderStroke(
-                            1.5.dp,
-                            Brush.linearGradient(
-                                listOf(
-                                    MikuCyan,
-                                    Color.White.copy(alpha = 0.6f),
-                                    MikuNeonPink
-                                )
-                            )
-                        ),
-                        CircleShape
-                    )
-                    .clickable {
-                        // ---- Game mechanic: per-session tap count + steadiness score ----
-                        val now = SystemClock.elapsedRealtime()
-                        if (orbTapTimes.isNotEmpty() && now - orbTapTimes.last() > 2000L) {
-                            // Idle gap → new session: bank the best streak, reset the run.
-                            if (tapCounter > bestStreak) bestStreak = tapCounter
-                            orbTapTimes.clear()
-                            tapCounter = 0
-                            steadiness = 0f
-                        }
-                        orbTapTimes.add(now)
-                        if (orbTapTimes.size > 8) orbTapTimes.removeAt(0)
-                        tapCounter++
-                        if (tapCounter > bestStreak) bestStreak = tapCounter
-                        // Steadiness = how even the intervals are (1 - coefficient of variation).
-                        if (orbTapTimes.size >= 3) {
-                            val iv = (1 until orbTapTimes.size).map { (orbTapTimes[it] - orbTapTimes[it - 1]).toDouble() }
-                            val mean = iv.average()
-                            if (mean > 0) {
-                                val sd = kotlin.math.sqrt(iv.sumOf { (it - mean) * (it - mean) } / iv.size)
-                                steadiness = (1.0 - (sd / mean)).coerceIn(0.0, 1.0).toFloat()
-                            }
-                        }
-                        // Haptic feedback — punchier the steadier you are.
-                        try {
-                            val vibrator = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
-                            val amp = (60 + (steadiness * 195f)).toInt().coerceIn(1, 255)
-                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                vibrator?.vibrate(android.os.VibrationEffect.createOneShot(30, amp))
-                            } else {
-                                @Suppress("DEPRECATION")
-                                vibrator?.vibrate(30)
-                            }
-                        } catch (_: Throwable) {}
-
-                        // Spring tactile bounce & shockwave animation
-                        coroutineScope.launch {
-                            bounceScale.snapTo(0.78f)
-                            bounceScale.animateTo(
-                                targetValue = 1.0f,
-                                animationSpec = spring(
-                                    dampingRatio = Spring.DampingRatioMediumBouncy,
-                                    stiffness = Spring.StiffnessLow
-                                )
-                            )
-                        }
-                        coroutineScope.launch {
-                            shockwaveAnim.snapTo(0.0f)
-                            shockwaveAnim.animateTo(
-                                targetValue = 1.0f,
-                                animationSpec = tween(380, easing = FastOutSlowInEasing)
-                            )
-                        }
-
-                        onTap()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    if (calculatedBpm != null && tapCounter >= 2) {
-                        // Live BPM front and center, big, as you tap.
-                        Text(
-                            text = String.format(Locale.US, "%.0f", calculatedBpm),
-                            color = Color.White,
-                            fontSize = 46.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont
-                        )
-                        Text(
-                            text = "BPM",
-                            color = MikuCyan,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont,
-                            letterSpacing = 2.sp
-                        )
-                    } else {
-                        Text(
-                            text = "♥",
-                            color = MikuNeonPink,
-                            fontSize = 44.sp,
-                            fontWeight = FontWeight.Black
-                        )
-                        Text(
-                            text = "TAP",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont,
-                            letterSpacing = 2.sp
-                        )
-                    }
-                }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (feverActive) "✨🥬✨" else "🌸💖🌸", fontSize = 20.sp)
+                Text(
+                    text = "TAP BEAT",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = AudiowideFont,
+                    letterSpacing = 0.5.sp
+                )
             }
         }
+    }
+}
 
-        Spacer(Modifier.height(10.dp))
+/**
+ * Dynamic Tap Juice Particle Explosions.
+ */
+@Composable
+private fun KawaiiJuicyParticleOverlay(
+    particles: List<MikuBeatClickerEngine.JuiceParticle>,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        particles.forEach { p ->
+            key(p.id) {
+                val animProgress = remember { Animatable(0f) }
+                LaunchedEffect(p.id) {
+                    animProgress.animateTo(1f, tween(550, easing = LinearOutSlowInEasing))
+                }
+                val currentX = p.x + p.vx * animProgress.value
+                val currentY = p.y + p.vy * animProgress.value
+                val currentAlpha = (1f - animProgress.value).coerceIn(0f, 1f)
 
-        // ---- Game stat row: tap counter · steadiness score · best streak ----
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            TapStatChip(label = "TAPS", value = "$tapCounter", accent = MikuNeonPink)
-            val steadyPct = (steadiness * 100f).toInt()
-            val steadyColor = when {
-                tapCounter < 3 -> MikuTextSecondary
-                steadyPct >= 90 -> Color(0xFF00FF7F)
-                steadyPct >= 70 -> Color(0xFFFFD600)
-                else -> Color(0xFFFF6E6E)
+                Text(
+                    text = p.emoji,
+                    fontSize = p.sizeDp.sp,
+                    modifier = Modifier
+                        .offset(x = currentX.dp, y = currentY.dp)
+                        .graphicsLayer { alpha = currentAlpha }
+                )
             }
-            TapStatChip(
-                label = "STEADY",
-                value = if (tapCounter < 3) "--" else "$steadyPct%",
-                accent = steadyColor
-            )
-            TapStatChip(label = "BEST", value = "$bestStreak", accent = MikuCyan)
         }
+    }
+}
 
-        Spacer(Modifier.height(6.dp))
+/**
+ * Dreamy Floating Kawaii Hearts and Sakura Canvas.
+ */
+@Composable
+private fun KawaiiDreamyHeartCanvas(
+    modifier: Modifier = Modifier,
+    isFever: Boolean
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "DreamyCanvas")
+    val phase by infiniteTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(4500, easing = LinearEasing), RepeatMode.Restart),
+        label = "phase"
+    )
 
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val count = 16
+
+        for (i in 0 until count) {
+            val seed = i * 142.3f
+            val baseX = (seed % w)
+            val baseY = ((seed * 2.1f) % h)
+            val driftY = (baseY - (phase * h * 0.6f) + (i * 18f)).mod(h)
+            val wobbleX = baseX + sin((phase * 6.28f) + i) * 14f
+            val scale = (0.5f + (i % 4) * 0.15f)
+            val alpha = (0.2f + 0.5f * sin(phase * 3.14f + i)).coerceIn(0.1f, 0.75f)
+
+            val heartColor = when {
+                isFever -> if (i % 2 == 0) KawaiiGoldenHoney else KawaiiHotPink
+                i % 3 == 0 -> KawaiiSakuraPink
+                i % 3 == 1 -> KawaiiMikuMint
+                else -> KawaiiLavender
+            }
+
+            drawKawaiiHeart(center = Offset(wobbleX, driftY), size = 14f * scale, color = heartColor.copy(alpha = alpha))
+        }
+    }
+}
+
+private fun DrawScope.drawKawaiiHeart(center: Offset, size: Float, color: Color) {
+    val path = Path().apply {
+        moveTo(center.x, center.y + size * 0.5f)
+        cubicTo(
+            center.x - size, center.y - size * 0.3f,
+            center.x - size * 0.5f, center.y - size,
+            center.x, center.y - size * 0.4f
+        )
+        cubicTo(
+            center.x + size * 0.5f, center.y - size,
+            center.x + size, center.y - size * 0.3f,
+            center.x, center.y + size * 0.5f
+        )
+        close()
+    }
+    drawPath(path, color)
+}
+
+@Composable
+private fun KawaiiModeTabPill(
+    label: String,
+    isSelected: Boolean,
+    activeColor: Color,
+    onClick: () -> Unit
+) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (isSelected) activeColor.copy(alpha = 0.35f) else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 9.dp, vertical = 5.dp)
+    ) {
         Text(
-            text = when {
-                calculatedBpm == null -> "Tap the orb in rhythm to lock the tempo"
-                steadiness >= 0.9f && tapCounter >= 4 -> "✨ PERFECT LOCK · ${String.format(Locale.US, "%.1f", calculatedBpm)} BPM"
-                else -> "✨ TAP BPM: ${String.format(Locale.US, "%.1f", calculatedBpm)}"
-            },
-            color = if (calculatedBpm != null) Color(0xFF00FF7F) else MikuTextSecondary,
-            fontSize = 9.sp,
-            fontWeight = FontWeight.Bold,
+            text = label,
+            color = if (isSelected) Color.White else KawaiiTextMuted,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Black,
             fontFamily = AudiowideFont
         )
     }
 }
 
-/** Compact stat pill for the game readouts (taps / steadiness / best / score / combo). */
 @Composable
-private fun TapStatChip(label: String, value: String, accent: Color) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xDD08202A))
-            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 12.dp, vertical = 5.dp)
+private fun KawaiiStatBadge(label: String, value: String, accent: Color) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0x33000000))
+            .border(1.dp, accent.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
-        Text(
-            text = value,
-            color = accent,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Black,
-            fontFamily = AudiowideFont
-        )
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.65f),
-            fontSize = 7.sp,
-            fontWeight = FontWeight.Bold,
-            fontFamily = AudiowideFont,
-            letterSpacing = 1.sp
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(label, color = KawaiiTextMuted, fontSize = 9.5.sp, fontFamily = AudiowideFont)
+            Text(value, color = accent, fontSize = 14.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+        }
     }
 }

@@ -8,7 +8,6 @@ import android.os.BatteryManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,12 +27,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miku.launcher.*
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import java.io.File
 
 /**
@@ -126,13 +125,9 @@ fun MikuFullscreenChargingModal(
             .fillMaxSize()
             .background(Color(0xF502090D))
             .clickable { onDismiss() }
-            .pointerInput(Unit) {
-                detectVerticalDragGestures { _, dragAmount ->
-                    if (kotlin.math.abs(dragAmount) > 35f) {
-                        onDismiss()
-                    }
-                }
-            }
+            // System-gesture-style dismiss: swipe up starting at the bottom edge. Replaces the
+            // old any-direction fling dismiss so a stray graze can't kill the modal.
+            .swipeUpFromBottomToDismiss(onDismiss = onDismiss)
             .padding(horizontal = 16.dp, vertical = 24.dp),
         contentAlignment = Alignment.Center
     ) {

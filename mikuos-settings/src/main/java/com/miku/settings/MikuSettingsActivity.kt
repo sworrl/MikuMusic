@@ -7,6 +7,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import com.miku.settings.bluetooth.*
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
@@ -61,21 +62,50 @@ import kotlin.math.roundToInt
  */
 fun openAospSettings(ctx: Context, action: String, fallbackMsg: String = "Not available on this device") {
     val pm = ctx.packageManager
-    // 1. Explicit AOSP Settings package — never loops back to com.miku.settings.
+    val explicitComponent = when (action) {
+        Settings.ACTION_BLUETOOTH_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$ConnectedDeviceDashboardActivity")
+        Settings.ACTION_WIFI_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$NetworkDashboardActivity")
+        Settings.ACTION_DISPLAY_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$DisplaySettingsActivity")
+        Settings.ACTION_SOUND_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$SoundSettingsActivity")
+        Settings.ACTION_DEVICE_INFO_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$MyDeviceInfoActivity")
+        Settings.ACTION_APPLICATION_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$ManageApplicationsActivity")
+        Settings.ACTION_INTERNAL_STORAGE_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$StorageDashboardActivity")
+        Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS -> android.content.ComponentName("com.android.settings", "com.android.settings.Settings\$DevelopmentSettingsDashboardActivity")
+        else -> null
+    }
+
+    if (explicitComponent != null) {
+        val intent = Intent(action).apply {
+            component = explicitComponent
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try { ctx.startActivity(intent); return } catch (_: Throwable) {}
+    }
+
+    // 1. Explicit AOSP Settings package query — find any exported activity in com.android.settings
     val scoped = Intent(action).apply {
         setPackage("com.android.settings")
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-    if (scoped.resolveActivity(pm) != null) {
-        try { ctx.startActivity(scoped); return } catch (_: Throwable) {}
+    val matches = pm.queryIntentActivities(scoped, 0)
+    for (m in matches) {
+        if (m.activityInfo.packageName == "com.android.settings") {
+            val direct = Intent(action).apply {
+                setClassName("com.android.settings", m.activityInfo.name)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try { ctx.startActivity(direct); return } catch (_: Throwable) {}
+        }
     }
-    // 2. Unscoped fallback, but only if it resolves to something other than ourselves.
+
+    // 2. Unscoped fallback, only if it resolves to something other than ourselves
     val generic = Intent(action).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
     val resolved = generic.resolveActivity(pm)
     if (resolved != null && resolved.packageName != ctx.packageName) {
         try { ctx.startActivity(generic); return } catch (_: Throwable) {}
     }
-    // 3. Nothing safe to launch — inform the user instead of silently looping/failing.
+
+    // 3. Fallback Toast
     try { Toast.makeText(ctx, fallbackMsg, Toast.LENGTH_SHORT).show() } catch (_: Throwable) {}
 }
 
@@ -607,17 +637,52 @@ fun AudioDacScreen(ctx: Context) {
             }
         }
 
-        // Section 3: Hardware Output Routing (Auto-Detect / Manual Override)
+        // Section 3: Audio Output Routing & Stream Matrix
         item {
             Column(Modifier.mikuCard().padding(14.dp)) {
-                Text(
-                    "HARDWARE OUTPUT ROUTING",
-                    color = MikuTealBright,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "AUDIO OUTPUT ROUTING MATRIX",
+                            color = MikuTealBright,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                        Text(
+                            "Select primary active DAC output or Bluetooth audio stream",
+                            color = MikuMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    // Quick Swap Button
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                outMode = CirrusLogicManager.swapOutputMode(ctx)
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MikuTealBright),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.height(30.dp)
+                    ) {
+                        Text(
+                            "⇄ Swap 4.4mm / BT",
+                            color = MikuTealBright,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(10.dp))
 
                 CirrusLogicManager.OutputMode.values().forEach { out ->
                     val isSel = outMode == out
@@ -626,13 +691,33 @@ fun AudioDacScreen(ctx: Context) {
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
                             .background(if (isSel) MikuTealBright.copy(alpha = 0.15f) else Color.Transparent)
+                            .border(1.dp, if (isSel) MikuTealBright.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(10.dp))
                             .clickable {
                                 outMode = out
                                 scope.launch { CirrusLogicManager.setOutputMode(ctx, out) }
                             }
-                            .padding(8.dp),
+                            .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        Text(out.icon, fontSize = 16.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(out.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                if (isSel) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Box(
+                                        Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(MikuTealBright.copy(alpha = 0.25f))
+                                            .padding(horizontal = 5.dp, vertical = 1.dp)
+                                    ) {
+                                        Text("ACTIVE", color = MikuTealBright, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                            Text(out.description, color = MikuMuted, fontSize = 11.sp, lineHeight = 14.sp)
+                        }
                         RadioButton(
                             selected = isSel,
                             onClick = {
@@ -641,17 +726,13 @@ fun AudioDacScreen(ctx: Context) {
                             },
                             colors = RadioButtonDefaults.colors(selectedColor = MikuTealBright, unselectedColor = MikuMuted)
                         )
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text(out.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            Text(out.description, color = MikuMuted, fontSize = 11.sp, lineHeight = 14.sp)
-                        }
                     }
+                    Spacer(Modifier.height(4.dp))
                 }
             }
         }
 
-        // Section 3.5: Dual Audio Sharing Matrix (Vocaloid Dual Link)
+        // Section 3.5: Dual Simultaneous Audio Sharing Matrix
         item {
             var audioShareEnabled by remember { mutableStateOf(CirrusLogicManager.isAudioShareEnabled(ctx)) }
             var audioShareTarget by remember { mutableStateOf(CirrusLogicManager.getAudioShareTarget(ctx)) }
@@ -664,14 +745,14 @@ fun AudioDacScreen(ctx: Context) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "DUAL AUDIO SHARING MATRIX",
+                            "DUAL SIMULTANEOUS AUDIO MATRIX",
                             color = MikuPinkBright,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
                         )
                         Text(
-                            "Simultaneous audio broadcast across multiple hardware targets",
+                            "Simultaneous audio broadcast across CS43198 DAC and Bluetooth",
                             color = MikuMuted,
                             fontSize = 11.sp
                         )
@@ -693,8 +774,8 @@ fun AudioDacScreen(ctx: Context) {
                     Spacer(Modifier.height(10.dp))
 
                     Text(
-                        "SECONDARY SHARED STREAM TARGET",
-                        color = MikuTealBright,
+                        "DUAL AUDIO STREAM TARGETS",
+                        color = MikuPinkBright,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -707,13 +788,18 @@ fun AudioDacScreen(ctx: Context) {
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (isSel) MikuPinkBright.copy(alpha = 0.15f) else Color.Transparent)
+                                .border(1.dp, if (isSel) MikuPinkBright.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(10.dp))
                                 .clickable {
                                     audioShareTarget = target
                                     scope.launch { CirrusLogicManager.setAudioShareTarget(ctx, target) }
                                 }
-                                .padding(8.dp),
+                                .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(target.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                Text(target.description, color = MikuMuted, fontSize = 11.sp, lineHeight = 14.sp)
+                            }
                             RadioButton(
                                 selected = isSel,
                                 onClick = {
@@ -722,12 +808,8 @@ fun AudioDacScreen(ctx: Context) {
                                 },
                                 colors = RadioButtonDefaults.colors(selectedColor = MikuPinkBright, unselectedColor = MikuMuted)
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text(target.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(target.description, color = MikuMuted, fontSize = 11.sp, lineHeight = 14.sp)
-                            }
                         }
+                        Spacer(Modifier.height(4.dp))
                     }
                 }
             }
@@ -1424,65 +1506,20 @@ fun WirelessScreen(ctx: Context) {
 @Composable
 fun BluetoothScreen(ctx: Context) {
     val scope = rememberCoroutineScope()
-    val bm = remember { ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager }
-    val adapter = remember { bm?.adapter ?: BluetoothAdapter.getDefaultAdapter() }
     
-    var isBtEnabled by remember {
-        mutableStateOf(
-            try {
-                adapter?.isEnabled == true || Settings.Global.getInt(ctx.contentResolver, "bluetooth_on", 0) == 1
-            } catch (_: Throwable) {
-                Settings.Global.getInt(ctx.contentResolver, "bluetooth_on", 0) == 1
-            }
-        )
+    LaunchedEffect(Unit) {
+        com.miku.settings.bluetooth.MikuBluetoothController.init(ctx)
     }
-    var pairedDevices by remember {
-        mutableStateOf(
-            try {
-                if (adapter?.isEnabled == true) adapter.bondedDevices?.toList() ?: emptyList()
-                else emptyList()
-            } catch (_: Throwable) { emptyList() }
-        )
-    }
-    
+
+    val isBtEnabled by com.miku.settings.bluetooth.MikuBluetoothController.isBluetoothEnabled.collectAsState()
+    val isScanning by com.miku.settings.bluetooth.MikuBluetoothController.isScanning.collectAsState()
+    val pairedDevices by com.miku.settings.bluetooth.MikuBluetoothController.pairedDevices.collectAsState()
+    val discoveredDevices by com.miku.settings.bluetooth.MikuBluetoothController.discoveredDevices.collectAsState()
+
     val prefs = remember { ctx.getSharedPreferences("miku_bluetooth_prefs", Context.MODE_PRIVATE) }
     var ldacQuality by remember { mutableStateOf(prefs.getString("ldac_quality", "Sound Quality (990 kbps)") ?: "Sound Quality (990 kbps)") }
     var aptxEnabled by remember { mutableStateOf(prefs.getBoolean("aptx_enabled", true)) }
     var aacEnabled by remember { mutableStateOf(prefs.getBoolean("aac_enabled", true)) }
-
-    // Listen to live Bluetooth state changes
-    DisposableEffect(Unit) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    BluetoothAdapter.ACTION_STATE_CHANGED -> {
-                        val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
-                        isBtEnabled = state == BluetoothAdapter.STATE_ON
-                        if (isBtEnabled) {
-                            try {
-                                pairedDevices = adapter?.bondedDevices?.toList() ?: emptyList()
-                            } catch (_: Throwable) {}
-                        } else {
-                            pairedDevices = emptyList()
-                        }
-                    }
-                    BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
-                        try {
-                            pairedDevices = adapter?.bondedDevices?.toList() ?: emptyList()
-                        } catch (_: Throwable) {}
-                    }
-                }
-            }
-        }
-        val filter = IntentFilter().apply {
-            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
-            addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
-        }
-        ctx.registerReceiver(receiver, filter)
-        onDispose {
-            try { ctx.unregisterReceiver(receiver) } catch (_: Throwable) {}
-        }
-    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1499,7 +1536,7 @@ fun BluetoothScreen(ctx: Context) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(38.dp)
+                                .size(40.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (isBtEnabled) MikuTeal.copy(alpha = 0.25f) else Color(0x22FFFFFF))
                                 .border(1.dp, if (isBtEnabled) MikuTealBright else Color(0x33FFFFFF), RoundedCornerShape(10.dp)),
@@ -1509,7 +1546,7 @@ fun BluetoothScreen(ctx: Context) {
                                 imageVector = Icons.Default.Bluetooth,
                                 contentDescription = null,
                                 tint = if (isBtEnabled) MikuTealBright else MikuMuted,
-                                modifier = Modifier.size(22.dp)
+                                modifier = Modifier.size(24.dp)
                             )
                         }
                         Spacer(Modifier.width(12.dp))
@@ -1521,7 +1558,7 @@ fun BluetoothScreen(ctx: Context) {
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (isBtEnabled) "Active · Discoverable as ${adapter?.name ?: "Miku M500"}" else "Disabled",
+                                text = if (isBtEnabled) "Active · Hi-Res Audio Ready" else "Disabled",
                                 color = if (isBtEnabled) MikuTealBright else MikuMuted,
                                 fontSize = 11.5.sp
                             )
@@ -1531,14 +1568,7 @@ fun BluetoothScreen(ctx: Context) {
                     Switch(
                         checked = isBtEnabled,
                         onCheckedChange = { enable ->
-                            isBtEnabled = enable
-                            scope.launch(Dispatchers.IO) {
-                                try {
-                                    if (enable) adapter?.enable() else adapter?.disable()
-                                } catch (_: Throwable) {
-                                    RootShell.execFast(if (enable) "svc bluetooth enable" else "svc bluetooth disable")
-                                }
-                            }
+                            com.miku.settings.bluetooth.MikuBluetoothController.toggleBluetooth(enable)
                         },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = MikuTealBright,
@@ -1566,16 +1596,21 @@ fun BluetoothScreen(ctx: Context) {
                         )
 
                         Text(
-                            text = "+ Pair New Device",
-                            color = MikuTealBright,
+                            text = if (isScanning) "Searching..." else "+ Scan Nearby Gear",
+                            color = if (isScanning) Color(0xFFFF4081) else MikuTealBright,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
+                                .background(if (isScanning) Color(0x22FF4081) else Color(0x2200E5FF))
                                 .clickable {
-                                    openAospSettings(ctx, Settings.ACTION_BLUETOOTH_SETTINGS, "Bluetooth pairing not available")
+                                    if (isScanning) {
+                                        com.miku.settings.bluetooth.MikuBluetoothController.stopScan()
+                                    } else {
+                                        com.miku.settings.bluetooth.MikuBluetoothController.startScan()
+                                    }
                                 }
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
 
@@ -1591,7 +1626,7 @@ fun BluetoothScreen(ctx: Context) {
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "No paired Bluetooth audio gear found.\nTap '+ Pair New Device' to scan and connect.",
+                                text = "No paired Bluetooth audio gear found.\nTap '+ Scan Nearby Gear' below to find and connect.",
                                 color = MikuMuted,
                                 fontSize = 12.sp,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
@@ -1599,21 +1634,17 @@ fun BluetoothScreen(ctx: Context) {
                         }
                     } else {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            pairedDevices.forEach { dev ->
-                                val devName = try { dev.name ?: dev.address } catch (_: Throwable) { dev.address }
-                                val devAddr = dev.address
-                                val isAudio = try {
-                                    val maj = dev.bluetoothClass?.majorDeviceClass
-                                    maj == android.bluetooth.BluetoothClass.Device.Major.AUDIO_VIDEO
-                                } catch (_: Throwable) { true }
-
+                            pairedDevices.forEach { devItem ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(12.dp))
-                                        .background(MikuSurface2)
+                                        .background(if (devItem.isConnected) Color(0x2200E5FF) else MikuSurface2)
+                                        .border(1.dp, if (devItem.isConnected) MikuTealBright else Color.Transparent, RoundedCornerShape(12.dp))
                                         .clickable {
-                                            openAospSettings(ctx, Settings.ACTION_BLUETOOTH_SETTINGS, "Bluetooth settings not available")
+                                            if (!devItem.isConnected && !devItem.isConnecting) {
+                                                com.miku.settings.bluetooth.MikuBluetoothController.connectDevice(devItem.device)
+                                            }
                                         }
                                         .padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically
@@ -1626,9 +1657,15 @@ fun BluetoothScreen(ctx: Context) {
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
-                                            imageVector = if (isAudio) Icons.Default.Headphones else Icons.Default.Bluetooth,
+                                            imageVector = when (devItem.deviceType) {
+                                                DeviceType.AUDIO_HEADSET, DeviceType.AUDIO_DAC -> Icons.Default.Headphones
+                                                DeviceType.AUDIO_SPEAKER -> Icons.Default.Speaker
+                                                DeviceType.PHONE_WATCH -> Icons.Default.PhoneAndroid
+                                                DeviceType.INPUT_KEYBOARD_MOUSE -> Icons.Default.Computer
+                                                else -> Icons.Default.Bluetooth
+                                            },
                                             contentDescription = null,
-                                            tint = MikuTealBright,
+                                            tint = if (devItem.isConnected) MikuTealBright else Color.White,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -1637,7 +1674,7 @@ fun BluetoothScreen(ctx: Context) {
 
                                     Column(Modifier.weight(1f)) {
                                         Text(
-                                            text = devName,
+                                            text = devItem.name,
                                             color = Color.White,
                                             fontSize = 13.5.sp,
                                             fontWeight = FontWeight.Bold,
@@ -1645,18 +1682,54 @@ fun BluetoothScreen(ctx: Context) {
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = devAddr,
-                                            color = MikuMuted,
+                                            text = when {
+                                                devItem.isConnected -> "🟢 Active Audio Connection"
+                                                devItem.isConnecting -> "🟡 Connecting..."
+                                                else -> devItem.address
+                                            },
+                                            color = if (devItem.isConnected) MikuTealBright else if (devItem.isConnecting) Color(0xFFFFD54F) else MikuMuted,
                                             fontSize = 10.5.sp
                                         )
                                     }
 
-                                    Icon(
-                                        imageVector = Icons.Default.Settings,
-                                        contentDescription = "Settings",
-                                        tint = MikuMuted,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                    Spacer(Modifier.width(6.dp))
+
+                                    if (devItem.isConnected) {
+                                        Button(
+                                            onClick = { com.miku.settings.bluetooth.MikuBluetoothController.disconnectDevice(devItem.device) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF5252)),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.height(28.dp)
+                                        ) {
+                                            Text("Disconnect", color = Color(0xFFFF8A80), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    } else if (devItem.isConnecting) {
+                                        CircularProgressIndicator(
+                                            color = MikuTealBright,
+                                            modifier = Modifier.size(20.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                    } else {
+                                        Button(
+                                            onClick = { com.miku.settings.bluetooth.MikuBluetoothController.connectDevice(devItem.device) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = MikuTealBright),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            shape = RoundedCornerShape(8.dp),
+                                            modifier = Modifier.height(28.dp)
+                                        ) {
+                                            Text("Connect", color = Color.Black, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+
+                                    Spacer(Modifier.width(4.dp))
+
+                                    IconButton(
+                                        onClick = { com.miku.settings.bluetooth.MikuBluetoothController.unpairDevice(devItem.device) },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(Icons.Default.DeleteOutline, contentDescription = "Forget", tint = MikuMuted, modifier = Modifier.size(16.dp))
+                                    }
                                 }
                             }
                         }
@@ -1664,7 +1737,118 @@ fun BluetoothScreen(ctx: Context) {
                 }
             }
 
-            // 3. Audiophile Hi-Res Bluetooth Codec Engine
+            // 3. Live Discovered Nearby Devices
+            item {
+                Column(Modifier.mikuCard().padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "AVAILABLE NEARBY GEAR",
+                                color = MikuTealBright,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (isScanning) {
+                                Spacer(Modifier.width(8.dp))
+                                CircularProgressIndicator(
+                                    color = MikuTealBright,
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (isScanning) {
+                                    com.miku.settings.bluetooth.MikuBluetoothController.stopScan()
+                                } else {
+                                    com.miku.settings.bluetooth.MikuBluetoothController.startScan()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = if (isScanning) Color(0x33FF4081) else Color(0x3300E5FF)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 3.dp),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Text(
+                                text = if (isScanning) "Stop" else "Scan",
+                                color = if (isScanning) Color(0xFFFF80AB) else MikuTealBright,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    if (discoveredDevices.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(MikuSurface2)
+                                .padding(14.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = if (isScanning) "Scanning for headphones, DACs, and wireless gear..." else "Tap 'Scan' to search for nearby Bluetooth devices.",
+                                color = MikuMuted,
+                                fontSize = 11.5.sp
+                            )
+                        }
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            discoveredDevices.forEach { devItem ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(MikuSurface2)
+                                        .clickable {
+                                            com.miku.settings.bluetooth.MikuBluetoothController.pairDevice(devItem.device)
+                                        }
+                                        .padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = when (devItem.deviceType) {
+                                            DeviceType.AUDIO_HEADSET, DeviceType.AUDIO_DAC -> Icons.Default.Headphones
+                                            DeviceType.AUDIO_SPEAKER -> Icons.Default.Speaker
+                                            DeviceType.PHONE_WATCH -> Icons.Default.PhoneAndroid
+                                            DeviceType.INPUT_KEYBOARD_MOUSE -> Icons.Default.Computer
+                                            else -> Icons.Default.Bluetooth
+                                        },
+                                        contentDescription = null,
+                                        tint = MikuTealBright,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(devItem.name, color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${devItem.address} · Signal ${devItem.rssi} dBm", color = MikuMuted, fontSize = 10.sp)
+                                    }
+                                    Button(
+                                        onClick = { com.miku.settings.bluetooth.MikuBluetoothController.pairDevice(devItem.device) },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Text("Pair & Connect", color = MikuTealBright, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 4. Audiophile Hi-Res Bluetooth Codec Engine
             item {
                 Column(Modifier.mikuCard().padding(14.dp)) {
                     Text(
@@ -1700,6 +1884,7 @@ fun BluetoothScreen(ctx: Context) {
                                 .clickable {
                                     ldacQuality = opt
                                     prefs.edit().putString("ldac_quality", opt).apply()
+                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled, aacEnabled)
                                 }
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -1709,6 +1894,7 @@ fun BluetoothScreen(ctx: Context) {
                                 onClick = {
                                     ldacQuality = opt
                                     prefs.edit().putString("ldac_quality", opt).apply()
+                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled, aacEnabled)
                                 },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = MikuTealBright,
@@ -1742,6 +1928,7 @@ fun BluetoothScreen(ctx: Context) {
                             onCheckedChange = {
                                 aptxEnabled = it
                                 prefs.edit().putBoolean("aptx_enabled", it).apply()
+                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality, it, aacEnabled)
                             },
                             colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                         )
@@ -1764,25 +1951,47 @@ fun BluetoothScreen(ctx: Context) {
                             onCheckedChange = {
                                 aacEnabled = it
                                 prefs.edit().putBoolean("aac_enabled", it).apply()
+                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality, aptxEnabled, it)
                             },
                             colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                         )
                     }
                 }
             }
-        }
 
-        // 4. Quick System Settings Link
-        item {
-            Column(Modifier.mikuCard().padding(14.dp)) {
-                SettingsLinkRow(
-                    icon = Icons.Default.BluetoothSearching,
-                    title = "AOSP Advanced Bluetooth Settings",
-                    subtitle = "Developer audio sample rates, channel modes & AVRCP version",
-                    onClick = {
-                        openAospSettings(ctx, Settings.ACTION_BLUETOOTH_SETTINGS, "Advanced Bluetooth settings not available")
+            // 5. Hardware Pipeline & RF Telemetry
+            item {
+                Column(Modifier.mikuCard().padding(14.dp)) {
+                    Text(
+                        text = "BLUETOOTH RF & CODEC ARCHITECTURE",
+                        color = MikuTealBright,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(10.dp))
+
+                    AboutSpecRow("RF Transceiver", "Qualcomm Snapdragon 680 (WCN3988)")
+                    AboutSpecRow("Bluetooth Version", "Bluetooth 5.0 Core / Low Energy (BLE)")
+                    AboutSpecRow("Supported Codecs", "LDAC (96k/24b), aptX HD, aptX, AAC, SBC")
+                    AboutSpecRow("Audio Hardware Bridge", "Direct MasterHIFI DAC & BT Concurrent Routing")
+
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            openAospSettings(ctx, Settings.ACTION_BLUETOOTH_SETTINGS, "Connected devices not available")
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MikuSurface2),
+                        border = BorderStroke(1.dp, MikuTeal.copy(alpha = 0.3f)),
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth().height(38.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Tune, contentDescription = null, tint = MikuTealBright, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text("Advanced System Connected Devices", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
-                )
+                }
             }
         }
 

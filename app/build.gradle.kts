@@ -8,14 +8,14 @@ plugins {
 
 android {
     namespace = "com.miku.player"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.miku.player"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 332
-        versionName = "0.9.232"
+        targetSdk = 34
+        versionCode = 2234
+        versionName = "2.0.234"
 
         // Last.fm API credentials — read from local.properties (gitignored, never committed) so
         // the key/secret never live in source. Register a free app at
@@ -168,7 +168,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
+    implementation("org.videolan.android:libvlc-all:3.6.2")
+    implementation("org.videolan.android:medialibrary-all:0.13.13-rc17")
     implementation("androidx.media3:media3-session:1.4.1")
+    implementation("net.jthink:jaudiotagger:3.0.1")
     // Real backdrop blur ("Pixel glass") — Modifier.haze() marks scrollable content as a blur
     // source, Modifier.hazeChild() on an overlay panel blurs whatever's currently behind it live.
     // Pinned to 0.7.x (the API used below): newer 1.x/2.x releases pull in AndroidX versions that
@@ -178,4 +181,6 @@ dependencies {
     // Encrypted-at-rest storage for the Last.fm session key — AES256-GCM prefs file whose own
     // key lives in the Android Keystore (hardware-backed on this chipset), not app storage.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    // Android for Cars App Library for custom Android Auto interface
+    implementation("androidx.car.app:app:1.4.0")
 }

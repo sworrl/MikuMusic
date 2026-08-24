@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.miku.launcher.*
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 
 /**
  * Hatsune Miku Lifted AOSP Launcher3 Long-Press Desktop Options Menu.
@@ -48,7 +49,9 @@ fun MikuHomescreenLongpressMenu(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
                     onClick = onDismiss
-                ),
+                )
+                // System-gesture-style dismiss: swipe up starting at the bottom edge of the scrim.
+                .swipeUpFromBottomToDismiss(onDismiss = onDismiss),
             contentAlignment = Alignment.Center
         ) {
             Box(

@@ -40,6 +40,7 @@ import com.miku.player.CyberGlassBorder
 import com.miku.player.MikuCyan
 import com.miku.player.MikuNeonPink
 import com.miku.player.MikuTextSecondary
+import com.miku.player.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -284,7 +285,8 @@ fun MikuBatteryObservatoryModal(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xF502090E))
-                .clickable { onDismissRequest() },
+                .clickable { onDismissRequest() }
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
             contentAlignment = Alignment.Center
         ) {
             // Full Screen 3D Chamfered Cockpit Container (Uses 98% Width & 97% Height)

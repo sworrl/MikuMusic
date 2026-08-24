@@ -145,33 +145,23 @@ object FmRadioManager {
 
 class MikuFMRadioActivity : ComponentActivity() {
 
-    private fun hideSystemBars() {
+    private fun setupSystemBars() {
         try {
-            window.decorView.systemUiVisibility = (
-                android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+            insetsController.isAppearanceLightStatusBars = false
+            insetsController.isAppearanceLightNavigationBars = false
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
         } catch (_: Throwable) {}
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashSentinel.install(this)
         super.onCreate(savedInstanceState)
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
-        window.addFlags(
-            android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN or
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        )
-        hideSystemBars()
+        setupSystemBars()
         FmRadioManager.initAndPowerOn(this)
         setContent {
             MikuFMRadioScreen(onBack = { finish() })
@@ -180,12 +170,12 @@ class MikuFMRadioActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        hideSystemBars()
+        setupSystemBars()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
+        if (hasFocus) setupSystemBars()
     }
 
     override fun onDestroy() {

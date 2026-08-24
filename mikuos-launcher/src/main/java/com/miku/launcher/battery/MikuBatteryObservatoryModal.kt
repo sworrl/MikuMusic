@@ -41,6 +41,7 @@ import com.miku.launcher.CyberGlassBorder
 import com.miku.launcher.MikuCyan
 import com.miku.launcher.MikuNeonPink
 import com.miku.launcher.MikuTextSecondary
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -298,7 +299,9 @@ fun MikuBatteryObservatoryModal(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color(0xF502090E))
-                .clickable { onDismissRequest() },
+                .clickable { onDismissRequest() }
+                // System-gesture-style dismiss: swipe up starting at the bottom edge of the modal.
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
             contentAlignment = Alignment.Center
         ) {
             // Full Screen 3D Chamfered Cockpit Container

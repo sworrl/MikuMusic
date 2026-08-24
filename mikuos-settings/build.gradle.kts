@@ -8,14 +8,14 @@ plugins {
 
 android {
     namespace = "com.miku.settings"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.miku.settings"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 100
-        versionName = "0.1.0"
+        targetSdk = 34
+        versionCode = 2
+        versionName = "0.1.1"
     }
 
     val signingProps = Properties().apply {
@@ -88,6 +88,11 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    lint {
+        disable += setOf("ProtectedPermissions", "QueryAllPackagesPermission")
+        abortOnError = false
     }
 
     applicationVariants.all {

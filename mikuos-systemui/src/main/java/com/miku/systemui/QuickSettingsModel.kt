@@ -62,25 +62,27 @@ object QuickSettingsModel {
     }
 
     fun getBluetoothInfo(ctx: Context): Pair<Boolean, String> {
-        val bt = try { BluetoothAdapter.getDefaultAdapter() } catch (_: Throwable) { null }
-        val isEnabled = bt?.isEnabled == true
+        val bt = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull()
+        val isEnabled = runCatching { bt?.isEnabled == true }.getOrDefault(false)
         var connectedName = ""
         if (isEnabled && bt != null) {
-            try {
+            runCatching {
                 val bonded = bt.bondedDevices
-                val firstConnected = bonded?.firstOrNull() // Quick proxy or paired
+                val firstConnected = bonded?.firstOrNull()
                 if (firstConnected != null) {
-                    connectedName = firstConnected.name ?: "Paired Device"
+                    connectedName = runCatching { firstConnected.name }.getOrNull() ?: "Paired Device"
                 }
-            } catch (_: Throwable) {}
+            }
         }
         val label = if (connectedName.isNotBlank()) connectedName else if (isEnabled) "Bluetooth On" else "Bluetooth Off"
         return Pair(isEnabled, label)
     }
 
     fun toggleBluetooth(ctx: Context, enable: Boolean) {
-        val bt = try { BluetoothAdapter.getDefaultAdapter() } catch (_: Throwable) { null }
-        if (enable) bt?.enable() else bt?.disable()
+        val bt = runCatching { BluetoothAdapter.getDefaultAdapter() }.getOrNull()
+        runCatching {
+            if (enable) bt?.enable() else bt?.disable()
+        }
         RootShell.execFast("svc bluetooth " + (if (enable) "enable" else "disable"))
     }
 

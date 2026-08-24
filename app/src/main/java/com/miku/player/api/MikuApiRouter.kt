@@ -38,6 +38,15 @@ class MikuApiRouter(private val context: Context) {
         val jsonBody = try { JSONObject(bodyStr) } catch (_: Throwable) { JSONObject() }
 
         return when {
+            // Web Remote & TV Stage HTML
+            (cleanPath.isEmpty() || cleanPath == "/" || cleanPath == "/remote" || cleanPath == "/connect") && method == "GET" -> {
+                ApiResponse.html(200, MikuWebRemoteHtml.getRemoteHtml(isTvMode = false))
+            }
+
+            (cleanPath == "/tv" || cleanPath == "/stage") && method == "GET" -> {
+                ApiResponse.html(200, MikuWebRemoteHtml.getRemoteHtml(isTvMode = true))
+            }
+
             // Health Ping
             cleanPath == "/api/v1/ping" && method == "GET" -> {
                 val res = JSONObject().apply {
@@ -53,6 +62,16 @@ class MikuApiRouter(private val context: Context) {
             // Status / Telemetry
             cleanPath == "/api/v1/status" && method == "GET" -> {
                 getStatus()
+            }
+
+            // Artwork
+            cleanPath.startsWith("/api/v1/artwork") && method == "GET" -> {
+                getArtworkResponse(cleanPath)
+            }
+
+            // Audio Stream for TV / Browser / DLNA Speakers
+            cleanPath.startsWith("/api/v1/audio/stream") && method == "GET" -> {
+                getAudioStreamResponse(cleanPath)
             }
 
             // Playback Controls
@@ -83,6 +102,19 @@ class MikuApiRouter(private val context: Context) {
 
             cleanPath == "/api/v1/playback/previous" && method == "POST" -> {
                 runOnMainSync { PlayerHolder.player?.seekToPreviousMediaItem() }
+                getStatus()
+            }
+
+            cleanPath == "/api/v1/playback/like" && method == "POST" -> {
+                runOnMainSync {
+                    val trackId = jsonBody.optLong("track_id", -1L).takeIf { it > 0 }
+                        ?: PlayerHolder.player?.currentMediaItem?.mediaId?.toLongOrNull()
+                        ?: PlayerPreferences.loadLastTrackId(context)
+                    if (trackId > 0) {
+                        com.miku.player.LikeStore.init(context)
+                        com.miku.player.LikeStore.toggle(context, trackId)
+                    }
+                }
                 getStatus()
             }
 
@@ -316,6 +348,75 @@ class MikuApiRouter(private val context: Context) {
         return ApiResponse.json(200, root)
     }
 
+    private fun getCurrentTrackId(): Long {
+        var id = -1L
+        runOnMainSync {
+            id = PlayerHolder.snapshot()?.trackId ?: -1L
+        }
+        if (id <= 0L) {
+            id = PlayerPreferences.loadLastTrackId(context)
+        }
+        return id
+    }
+
+    private fun getArtworkResponse(path: String): ApiResponse {
+        val trackId = if (path.endsWith("/current")) {
+            getCurrentTrackId()
+        } else {
+            path.substringAfterLast("/").toLongOrNull() ?: getCurrentTrackId()
+        }
+
+        val cached = FastLibraryStore.loadSync(context) ?: emptyList()
+        val track = if (trackId > 0) cached.find { it.id == trackId } else null
+        val trackPath = track?.path
+
+        val bytes = if (!trackPath.isNullOrEmpty()) {
+            try {
+                val mmr = android.media.MediaMetadataRetriever()
+                mmr.setDataSource(trackPath)
+                val pic = mmr.embeddedPicture
+                mmr.release()
+                pic
+            } catch (_: Throwable) { null }
+        } else null
+
+        return if (bytes != null && bytes.isNotEmpty()) {
+            ApiResponse.bytes(200, "image/jpeg", bytes)
+        } else {
+            val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300"><rect width="300" height="300" fill="#05141c"/><circle cx="150" cy="150" r="80" fill="#08202d" stroke="#00e5ff" stroke-width="4"/><text x="150" y="160" font-family="sans-serif" font-size="28" fill="#39c5bb" text-anchor="middle">MIKU</text></svg>"""
+            ApiResponse.bytes(200, "image/svg+xml", svg.toByteArray(Charsets.UTF_8))
+        }
+    }
+
+    private fun getAudioStreamResponse(path: String): ApiResponse {
+        val trackId = if (path.endsWith("/current") || path.endsWith("/stream")) {
+            getCurrentTrackId()
+        } else {
+            path.substringAfterLast("/").toLongOrNull() ?: getCurrentTrackId()
+        }
+
+        val cached = FastLibraryStore.loadSync(context) ?: emptyList()
+        val track = if (trackId != null && trackId > 0) cached.find { it.id == trackId } else null
+        val trackPath = track?.path
+
+        if (trackPath != null) {
+            val file = java.io.File(trackPath)
+            if (file.exists() && file.canRead()) {
+                val bytes = file.readBytes()
+                val mimeType = when {
+                    trackPath.endsWith(".flac", ignoreCase = true) -> "audio/flac"
+                    trackPath.endsWith(".mp3", ignoreCase = true) -> "audio/mpeg"
+                    trackPath.endsWith(".wav", ignoreCase = true) -> "audio/wav"
+                    trackPath.endsWith(".m4a", ignoreCase = true) || trackPath.endsWith(".aac", ignoreCase = true) -> "audio/mp4"
+                    trackPath.endsWith(".dsf", ignoreCase = true) || trackPath.endsWith(".dff", ignoreCase = true) -> "audio/x-dsd"
+                    else -> "audio/octet-stream"
+                }
+                return ApiResponse.bytes(200, mimeType, bytes)
+            }
+        }
+        return ApiResponse.error(404, "Track audio file not found")
+    }
+
     private fun getDacSampleRate(): Int {
         return try {
             val c = Class.forName("android.os.SystemProperties")
@@ -363,6 +464,15 @@ data class ApiResponse(
         fun json(code: Int, json: JSONObject): ApiResponse {
             val bytes = json.toString(2).toByteArray(Charsets.UTF_8)
             return ApiResponse(code, "application/json; charset=utf-8", bytes)
+        }
+
+        fun html(code: Int, html: String): ApiResponse {
+            val bytes = html.toByteArray(Charsets.UTF_8)
+            return ApiResponse(code, "text/html; charset=utf-8", bytes)
+        }
+
+        fun bytes(code: Int, contentType: String, data: ByteArray): ApiResponse {
+            return ApiResponse(code, contentType, data)
         }
 
         fun error(code: Int, msg: String): ApiResponse {

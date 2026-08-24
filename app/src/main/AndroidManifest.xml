@@ -11,6 +11,9 @@
          BLUETOOTH/BLUETOOTH_ADMIN cover pre-31. Without CONNECT, getBondedDevices/getName
          throw SecurityException on this API-34 device. -->
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_PRIVILEGED" />
     <uses-permission android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
@@ -88,6 +91,7 @@
     <application
         android:allowBackup="true"
         android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:icon="@mipmap/ic_launcher"
         android:label="Miku Music"
@@ -262,16 +266,17 @@
             </intent-filter>
         </service>
 
-        <!-- Hardware/BT media-button routing when the app is NOT foreground. Without this, the
-             framework delivers ACTION_MEDIA_BUTTON as a broadcast with no receiver → the physical
-             Play/Pause/Next/Prev buttons only worked while MainActivity had focus. Media3's
-             MediaButtonReceiver forwards the button to PlaybackService (starting it if needed),
-             so the session's onMediaButtonEvent fires backgrounded, screen-off, and locked. -->
+        <!-- Hardware/BT media-button routing when the app is NOT foreground or screen is OFF.
+             Priority 1000 ensures immediate dispatch from framework PhoneWindowManager and AudioService.
+             Matches HiBy vendor LineCtrl receiver behavior. -->
         <receiver
-            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:name=".MikuMediaButtonReceiver"
             android:exported="true">
-            <intent-filter>
+            <intent-filter android:priority="1000">
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
+                <action android:name="hiby_media_button_action" />
+                <action android:name="ACTION_MEDIA_BUTTON" />
+                <action android:name="com.miku.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
 
@@ -339,6 +344,8 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="com.miku.player.SET_PAUSE_ON_UNPLUG" />
+                <action android:name="com.miku.player.action.TOGGLE_LIKE" />
+                <action android:name="com.miku.player.action.SET_LIKE" />
             </intent-filter>
         </receiver>
 
@@ -389,6 +396,7 @@
         </receiver>
 
         <!-- Quick Settings Tile: Pocket Lock -->
+
         <service
             android:name=".PocketLockTileService"
             android:label="Pocket Lock"
@@ -409,12 +417,17 @@
             android:excludeFromRecents="true"
             android:theme="@style/Theme.MikuPlayer" />
 
-        <!-- Standalone Background Media Library Daemon -->
+    
+        <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="1"/>
         <service
-            android:name=".LibraryDaemonService"
-            android:foregroundServiceType="dataSync"
-            android:exported="false" />
-
-
+            android:name=".car.MikuCarAppService"
+            android:label="Miku Auto"
+            android:icon="@drawable/ic_miku_music_brand"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.IOT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

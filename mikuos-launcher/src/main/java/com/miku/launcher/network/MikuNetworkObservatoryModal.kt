@@ -40,6 +40,7 @@ import com.miku.launcher.metrics.MikuMetricDatabase
 import androidx.activity.compose.rememberLauncherForActivityResult
 import com.miku.launcher.vpn.MikuWireGuardManager
 import com.miku.launcher.vpn.MikuVpnStore
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -178,6 +179,8 @@ fun MikuNetworkObservatoryModal(
             .fillMaxSize()
             .background(Color(0xEB040D12))
             .clickable { onDismissRequest() }
+            // System-gesture-style dismiss: swipe up starting at the bottom edge of the modal.
+            .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest)
     ) {
         // Outer 3D Beveled Modal Shell
         Box(
@@ -271,7 +274,7 @@ fun MikuNetworkObservatoryModal(
                                 Text(
                                     text = "ELECTRIC ANGEL TRANSCEIVER",
                                     color = Color.White,
-                                    fontSize = 11.sp,
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = AudiowideFont,
                                     letterSpacing = 0.8.sp
@@ -279,7 +282,7 @@ fun MikuNetworkObservatoryModal(
                                 Text(
                                     text = "CV01 RF Link: ${if (wifi.isConnected) "${wifi.bandLabel} (${wifi.rssiDbm}dBm)" else "Cellular ${cell.networkType}"} · Ping: ${networkState.latencyMs}ms",
                                     color = MikuCyan,
-                                    fontSize = 7.5.sp,
+                                    fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -377,7 +380,7 @@ fun MikuNetworkObservatoryModal(
                                                 Text(
                                                     text = wifi.ssid,
                                                     color = Color.White,
-                                                    fontSize = 13.sp,
+                                                    fontSize = 16.sp,
                                                     fontWeight = FontWeight.Black,
                                                     fontFamily = AudiowideFont
                                                 )
@@ -392,7 +395,7 @@ fun MikuNetworkObservatoryModal(
                                                     Text(
                                                         text = "CONNECTED // ${wifi.bssid}",
                                                         color = Color(0xFF00E676),
-                                                        fontSize = 7.5.sp,
+                                                        fontSize = 11.5.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         fontFamily = AudiowideFont
                                                     )
@@ -408,7 +411,7 @@ fun MikuNetworkObservatoryModal(
                                                     .border(0.5.dp, MikuCyan, CutCornerShape(4.dp))
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
-                                                Text("${wifi.bandLabel} Ch ${wifi.channel}", color = MikuCyan, fontSize = 7.5.sp, fontWeight = FontWeight.Black)
+                                                Text("${wifi.bandLabel} Ch ${wifi.channel}", color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
                                             }
                                             Box(
                                                 Modifier
@@ -417,7 +420,7 @@ fun MikuNetworkObservatoryModal(
                                                     .border(0.5.dp, Color(0xFF00E676), CutCornerShape(4.dp))
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
-                                                Text(wifi.standard, color = Color(0xFF00E676), fontSize = 7.5.sp, fontWeight = FontWeight.Black)
+                                                Text(wifi.standard, color = Color(0xFF00E676), fontSize = 11.5.sp, fontWeight = FontWeight.Black)
                                             }
                                         }
                                     }
@@ -449,7 +452,7 @@ fun MikuNetworkObservatoryModal(
                                         Text(
                                             text = "${wifi.rssiDbm} dBm · ${wifi.signalPct}% · Tx ${wifi.txLinkSpeedMbps}M / Rx ${wifi.rxLinkSpeedMbps}M",
                                             color = Color.White,
-                                            fontSize = 9.sp,
+                                            fontSize = 16.sp,
                                             fontWeight = FontWeight.Bold,
                                             fontFamily = AudiowideFont
                                         )
@@ -468,20 +471,20 @@ fun MikuNetworkObservatoryModal(
                                         verticalArrangement = Arrangement.spacedBy(3.dp)
                                     ) {
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("IPv4 Address:", color = MikuTextSecondary, fontSize = 8.sp)
-                                            Text(wifi.ipAddress, color = Color.White, fontSize = 8.sp, fontFamily = AudiowideFont)
+                                            Text("IPv4 Address:", color = MikuTextSecondary, fontSize = 12.sp)
+                                            Text(wifi.ipAddress, color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("Gateway Router:", color = MikuTextSecondary, fontSize = 8.sp)
-                                            Text(wifi.gateway, color = Color.White, fontSize = 8.sp, fontFamily = AudiowideFont)
+                                            Text("Gateway Router:", color = MikuTextSecondary, fontSize = 12.sp)
+                                            Text(wifi.gateway, color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("DNS Resolvers:", color = MikuTextSecondary, fontSize = 8.sp)
-                                            Text("${wifi.dns1} / ${wifi.dns2}", color = Color.White, fontSize = 8.sp, fontFamily = AudiowideFont)
+                                            Text("DNS Resolvers:", color = MikuTextSecondary, fontSize = 12.sp)
+                                            Text("${wifi.dns1} / ${wifi.dns2}", color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                            Text("Carrier Frequency:", color = MikuTextSecondary, fontSize = 8.sp)
-                                            Text("${wifi.frequencyMhz} MHz", color = MikuCyan, fontSize = 8.sp, fontFamily = AudiowideFont)
+                                            Text("Carrier Frequency:", color = MikuTextSecondary, fontSize = 12.sp)
+                                            Text("${wifi.frequencyMhz} MHz", color = MikuCyan, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                     }
 
@@ -513,7 +516,7 @@ fun MikuNetworkObservatoryModal(
                                                     .border(1.dp, Color(0xFFFF5252), CutCornerShape(5.dp)),
                                                 contentAlignment = Alignment.Center
                                             ) {
-                                                Text("DISCONNECT", color = Color(0xFFFF5252), fontSize = 8.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                                Text("DISCONNECT", color = Color(0xFFFF5252), fontSize = 12.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                             }
                                         }
 
@@ -538,7 +541,7 @@ fun MikuNetworkObservatoryModal(
                                                     .border(1.dp, CyberGlassBorder, CutCornerShape(5.dp)),
                                                 contentAlignment = Alignment.Center
                                             ) {
-                                                Text("FORGET NETWORK", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                                Text("FORGET NETWORK", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                             }
                                         }
                                     }
@@ -559,7 +562,7 @@ fun MikuNetworkObservatoryModal(
                         Text(
                             text = "AVAILABLE WI-FI ACCESS POINTS (${availableAPs.size})",
                             color = MikuCyan,
-                            fontSize = 9.sp,
+                            fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = AudiowideFont,
                             letterSpacing = 1.sp
@@ -569,7 +572,7 @@ fun MikuNetworkObservatoryModal(
                             onClick = { isAddHiddenNetworkOpen = true },
                             contentPadding = PaddingValues(0.dp)
                         ) {
-                            Text("+ ADD HIDDEN", color = MikuNeonPink, fontSize = 8.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                            Text("+ ADD HIDDEN", color = MikuNeonPink, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                         }
                     }
 
@@ -588,7 +591,7 @@ fun MikuNetworkObservatoryModal(
                             Text(
                                 text = if (wifi.isEnabled) "No other Wi-Fi networks in range · Scanning..." else "Wi-Fi is turned off.",
                                 color = MikuTextSecondary,
-                                fontSize = 8.5.sp
+                                fontSize = 12.5.sp
                             )
                         }
                     } else {
@@ -647,7 +650,7 @@ fun MikuNetworkObservatoryModal(
                                                     Text(
                                                         text = ap.ssid,
                                                         color = Color.White,
-                                                        fontSize = 10.sp,
+                                                        fontSize = 14.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         fontFamily = AudiowideFont,
                                                         maxLines = 1,
@@ -661,7 +664,7 @@ fun MikuNetworkObservatoryModal(
                                                                     .background(Color(0x3300FF7F))
                                                                     .padding(horizontal = 4.dp, vertical = 1.dp)
                                                             ) {
-                                                                Text("SAVED", color = Color(0xFF00FF7F), fontSize = 6.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                                                Text("SAVED", color = Color(0xFF00FF7F), fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                                             }
                                                         }
                                                         Box(
@@ -670,12 +673,12 @@ fun MikuNetworkObservatoryModal(
                                                                 .background(if (ap.bandLabel == "5GHz") Color(0x3300E5FF) else Color(0x22FFFFFF))
                                                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                                                         ) {
-                                                            Text(ap.bandLabel, color = if (ap.bandLabel == "5GHz") MikuCyan else Color.LightGray, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                                                            Text(ap.bandLabel, color = if (ap.bandLabel == "5GHz") MikuCyan else Color.LightGray, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                                                         }
                                                         Text(
                                                             text = "Ch ${ap.channel} · ${ap.securityType}",
                                                             color = MikuTextSecondary,
-                                                            fontSize = 7.sp,
+                                                            fontSize = 15.sp,
                                                             maxLines = 1,
                                                             overflow = TextOverflow.Ellipsis
                                                         )
@@ -705,7 +708,7 @@ fun MikuNetworkObservatoryModal(
                                                 Text(
                                                     text = "${ap.rssiDbm}dBm",
                                                     color = Color.White,
-                                                    fontSize = 8.sp,
+                                                    fontSize = 12.sp,
                                                     fontWeight = FontWeight.Bold,
                                                     fontFamily = AudiowideFont
                                                 )
@@ -725,7 +728,7 @@ fun MikuNetworkObservatoryModal(
                     Text(
                         text = "RF SPECTRUM CHANNEL CONGESTION",
                         color = MikuCyan,
-                        fontSize = 9.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = AudiowideFont,
                         letterSpacing = 1.sp
@@ -757,13 +760,13 @@ fun MikuNetworkObservatoryModal(
                                     Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("2.4 GHz Band (Channels 1-11)", color = MikuTextSecondary, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
-                                    Text("5 GHz Band (Channels 36-165)", color = MikuTextSecondary, fontSize = 7.5.sp, fontWeight = FontWeight.Bold)
+                                    Text("2.4 GHz Band (Channels 1-11)", color = MikuTextSecondary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                                    Text("5 GHz Band (Channels 36-165)", color = MikuTextSecondary, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                                 }
                                 Spacer(Modifier.height(6.dp))
 
                                 if (channelOccupancies.isEmpty()) {
-                                    Text("No AP spectrum data available yet.", color = MikuTextSecondary, fontSize = 7.5.sp)
+                                    Text("No AP spectrum data available yet.", color = MikuTextSecondary, fontSize = 11.5.sp)
                                 } else {
                                     LazyRow(
                                         Modifier.fillMaxWidth(),
@@ -784,7 +787,7 @@ fun MikuNetworkObservatoryModal(
                                                     Text(
                                                         "${ch.apCount} APs",
                                                         color = if (ch.apCount > 3) Color(0xFFFF1744) else MikuCyan,
-                                                        fontSize = 7.sp,
+                                                        fontSize = 15.sp,
                                                         fontWeight = FontWeight.Black,
                                                         fontFamily = AudiowideFont
                                                     )
@@ -804,7 +807,7 @@ fun MikuNetworkObservatoryModal(
                                                     Text(
                                                         "Ch ${ch.channel}",
                                                         color = Color.White,
-                                                        fontSize = 7.sp,
+                                                        fontSize = 15.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         fontFamily = AudiowideFont
                                                     )
@@ -825,7 +828,7 @@ fun MikuNetworkObservatoryModal(
                     Text(
                         text = "UNRESTRICTED HARDWARE WIRELESS CONTROLS",
                         color = MikuCyan,
-                        fontSize = 9.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = AudiowideFont,
                         letterSpacing = 1.sp
@@ -860,8 +863,8 @@ fun MikuNetworkObservatoryModal(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column(Modifier.weight(1f)) {
-                                        Text("Wi-Fi Power Save / Sleep Mode", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                                        Text("Dynamic 802.11 radio sleep (`iw dev wlan0 set power_save`)", color = MikuTextSecondary, fontSize = 7.sp)
+                                        Text("Wi-Fi Power Save / Sleep Mode", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        Text("Dynamic 802.11 radio sleep (`iw dev wlan0 set power_save`)", color = MikuTextSecondary, fontSize = 15.sp)
                                     }
                                     Switch(
                                         checked = wifi.isPowerSaveOn,
@@ -880,8 +883,8 @@ fun MikuNetworkObservatoryModal(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Column(Modifier.weight(1f)) {
-                                        Text("Radio Band Steering Preference", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                                        Text("Force 5GHz High-Throughput or 2.4GHz Long-Range", color = MikuTextSecondary, fontSize = 7.sp)
+                                        Text("Radio Band Steering Preference", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        Text("Force 5GHz High-Throughput or 2.4GHz Long-Range", color = MikuTextSecondary, fontSize = 15.sp)
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                         listOf("AUTO", "5G", "2.4G").forEach { mode ->
@@ -897,7 +900,7 @@ fun MikuNetworkObservatoryModal(
                                                 Text(
                                                     mode,
                                                     color = if (active) Color.Black else MikuCyan,
-                                                    fontSize = 7.sp,
+                                                    fontSize = 15.sp,
                                                     fontWeight = FontWeight.Black,
                                                     fontFamily = AudiowideFont
                                                 )
@@ -917,7 +920,7 @@ fun MikuNetworkObservatoryModal(
                     Text(
                         text = "UDR WIREGUARD SPLIT-TUNNEL (WAN BRIDGE)",
                         color = Color(0xFF00E676),
-                        fontSize = 9.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = AudiowideFont,
                         letterSpacing = 1.sp
@@ -967,7 +970,7 @@ fun MikuNetworkObservatoryModal(
                                             Text(
                                                 if (isHomeWifi) "DIRECT HOME LAN (TUNNEL BYPASSED)" else "SPLIT-TUNNEL ONLINE (4G / WAN)",
                                                 color = if (isHomeWifi) MikuCyan else Color(0xFF00E676),
-                                                fontSize = 8.5.sp,
+                                                fontSize = 12.5.sp,
                                                 fontWeight = FontWeight.Black,
                                                 fontFamily = AudiowideFont
                                             )
@@ -976,12 +979,12 @@ fun MikuNetworkObservatoryModal(
                                         Text(
                                             "WAN Endpoint: ${MikuIngestConfig.vpnEndpoint(ctx).ifBlank { "not configured" }} · Assigned IP: ${MikuIngestConfig.vpnAssignedIp(ctx).ifBlank { "auto" }}",
                                             color = MikuTextSecondary,
-                                            fontSize = 7.5.sp
+                                            fontSize = 11.5.sp
                                         )
                                         Text(
                                             "Routes: ${MikuIngestConfig.vpnRoutes(ctx).ifBlank { "not configured" }}",
                                             color = MikuTextSecondary,
-                                            fontSize = 7.sp
+                                            fontSize = 15.sp
                                         )
                                     }
 
@@ -995,7 +998,7 @@ fun MikuNetworkObservatoryModal(
                                     ) {
                                         Icon(Icons.Default.QrCode, contentDescription = null, tint = Color(0xFF00E676), modifier = Modifier.size(14.dp))
                                         Spacer(Modifier.width(4.dp))
-                                        Text("QR / CONF", color = Color(0xFF00E676), fontSize = 7.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        Text("QR / CONF", color = Color(0xFF00E676), fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                     }
                                 }
 
@@ -1013,14 +1016,14 @@ fun MikuNetworkObservatoryModal(
                                         Text(
                                             "TUNNEL POLICY & CONDITIONAL ROUTING:",
                                             color = MikuCyan,
-                                            fontSize = 7.sp,
+                                            fontSize = 15.sp,
                                             fontWeight = FontWeight.Bold,
                                             fontFamily = AudiowideFont
                                         )
                                         Text(
                                             "• On Home Wi-Fi: WireGuard is bypassed to prevent double-NAT loops.\n• On 4G LTE or External Wi-Fi: Automatically routes the configured LAN subnets back to the WAN endpoint${MikuIngestConfig.vpnEndpoint(ctx).let { if (it.isNotBlank()) " at $it" else "" }}.",
                                             color = Color.White.copy(alpha = 0.85f),
-                                            fontSize = 7.sp,
+                                            fontSize = 15.sp,
                                             lineHeight = 10.sp
                                         )
                                     }
@@ -1070,7 +1073,7 @@ fun MikuNetworkObservatoryModal(
                             Text(
                                 text = "CONNECT TO NETWORK",
                                 color = MikuCyan,
-                                fontSize = 11.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = AudiowideFont
                             )
@@ -1085,7 +1088,7 @@ fun MikuNetworkObservatoryModal(
                             Text(
                                 text = "BSSID: ${ap.bssid} · ${ap.bandLabel} Ch ${ap.channel} (${ap.securityType})",
                                 color = MikuTextSecondary,
-                                fontSize = 7.5.sp
+                                fontSize = 11.5.sp
                             )
 
                             Spacer(Modifier.height(12.dp))
@@ -1094,7 +1097,7 @@ fun MikuNetworkObservatoryModal(
                                 OutlinedTextField(
                                     value = connectPassword,
                                     onValueChange = { connectPassword = it },
-                                    label = { Text("Network Password / Key", fontSize = 9.5.sp) },
+                                    label = { Text("Network Password / Key", fontSize = 13.5.sp) },
                                     visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                                     trailingIcon = {
                                         IconButton(onClick = { showPassword = !showPassword }) {
@@ -1117,7 +1120,7 @@ fun MikuNetworkObservatoryModal(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } else {
-                                Text("This is an unencrypted Open network. No password is required.", color = Color(0xFF00E676), fontSize = 8.5.sp)
+                                Text("This is an unencrypted Open network. No password is required.", color = Color(0xFF00E676), fontSize = 12.5.sp)
                             }
 
                             Spacer(Modifier.height(14.dp))
@@ -1143,7 +1146,7 @@ fun MikuNetworkObservatoryModal(
                                             .border(1.dp, CyberGlassBorder, CutCornerShape(5.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("CANCEL", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        Text("CANCEL", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                     }
                                 }
 
@@ -1167,7 +1170,7 @@ fun MikuNetworkObservatoryModal(
                                             .border(1.dp, MikuCyan, CutCornerShape(5.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("CONNECT", color = MikuCyan, fontSize = 8.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                        Text("CONNECT", color = MikuCyan, fontSize = 12.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                     }
                                 }
                             }
@@ -1208,7 +1211,7 @@ fun MikuNetworkObservatoryModal(
                             Text(
                                 text = "ADD HIDDEN WI-FI NETWORK",
                                 color = MikuNeonPink,
-                                fontSize = 11.sp,
+                                fontSize = 15.sp,
                                 fontWeight = FontWeight.Black,
                                 fontFamily = AudiowideFont
                             )
@@ -1217,7 +1220,7 @@ fun MikuNetworkObservatoryModal(
                             OutlinedTextField(
                                 value = hiddenSsidInput,
                                 onValueChange = { hiddenSsidInput = it },
-                                label = { Text("Network SSID Name", fontSize = 9.5.sp) },
+                                label = { Text("Network SSID Name", fontSize = 13.5.sp) },
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = MikuCyan,
                                     unfocusedBorderColor = CyberGlassBorder,
@@ -1234,7 +1237,7 @@ fun MikuNetworkObservatoryModal(
                             OutlinedTextField(
                                 value = hiddenPasswordInput,
                                 onValueChange = { hiddenPasswordInput = it },
-                                label = { Text("Password (Leave blank if open)", fontSize = 9.5.sp) },
+                                label = { Text("Password (Leave blank if open)", fontSize = 13.5.sp) },
                                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                                 trailingIcon = {
                                     IconButton(onClick = { showPassword = !showPassword }) {
@@ -1280,7 +1283,7 @@ fun MikuNetworkObservatoryModal(
                                             .border(1.dp, CyberGlassBorder, CutCornerShape(5.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("CANCEL", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        Text("CANCEL", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                     }
                                 }
 
@@ -1308,7 +1311,7 @@ fun MikuNetworkObservatoryModal(
                                             .border(1.dp, MikuNeonPink, CutCornerShape(5.dp)),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        Text("CONNECT", color = MikuNeonPink, fontSize = 8.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                        Text("CONNECT", color = MikuNeonPink, fontSize = 12.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                     }
                                 }
                             }
@@ -1358,7 +1361,7 @@ fun MikuNetworkObservatoryModal(
                                 Text(
                                     text = "WIREGUARD VPN",
                                     color = Color(0xFF00E676),
-                                    fontSize = 11.sp,
+                                    fontSize = 15.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = AudiowideFont
                                 )
@@ -1412,7 +1415,7 @@ fun MikuNetworkObservatoryModal(
                                         else -> "○ Disconnected"
                                     },
                                     color = if (isUp) Color(0xFF00E676) else MikuTextSecondary,
-                                    fontSize = 10.sp,
+                                    fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Spacer(Modifier.height(8.dp))
@@ -1430,16 +1433,16 @@ fun MikuNetworkObservatoryModal(
                                             "[Interface]\nPrivateKey = $priv\nAddress = \nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = \nEndpoint = \nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25\n"
                                     },
                                     modifier = Modifier.fillMaxWidth()
-                                ) { Text("⚿ GENERATE KEYS", fontFamily = AudiowideFont, fontSize = 9.sp) }
+                                ) { Text("⚿ GENERATE KEYS", fontFamily = AudiowideFont, fontSize = 16.sp) }
 
                                 if (myPublicKey.isNotBlank()) {
                                     Spacer(Modifier.height(6.dp))
                                     Text("This device's PUBLIC key (add as a peer on your router):",
-                                        color = MikuTextSecondary, fontSize = 8.sp)
+                                        color = MikuTextSecondary, fontSize = 12.sp)
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Text(
                                             myPublicKey,
-                                            color = Color(0xFF9EE6C8), fontSize = 8.sp,
+                                            color = Color(0xFF9EE6C8), fontSize = 12.sp,
                                             maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                                             modifier = Modifier.weight(1f)
                                         )
@@ -1457,8 +1460,8 @@ fun MikuNetworkObservatoryModal(
                                 OutlinedTextField(
                                     value = confText,
                                     onValueChange = { confText = it },
-                                    label = { Text("WireGuard .conf", fontSize = 9.sp) },
-                                    textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF9EE6C8), fontSize = 9.sp),
+                                    label = { Text("WireGuard .conf", fontSize = 16.sp) },
+                                    textStyle = androidx.compose.ui.text.TextStyle(color = Color(0xFF9EE6C8), fontSize = 16.sp),
                                     modifier = Modifier.fillMaxWidth().heightIn(min = 110.dp, max = 200.dp)
                                 )
                                 Spacer(Modifier.height(6.dp))
@@ -1472,7 +1475,7 @@ fun MikuNetworkObservatoryModal(
                                         colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00A86B))
                                     )
                                     Text("Keep tunnel always-on (auto-reconnect when away)",
-                                        color = MikuTextSecondary, fontSize = 8.sp)
+                                        color = MikuTextSecondary, fontSize = 12.sp)
                                 }
                                 Spacer(Modifier.height(8.dp))
                                 Button(
@@ -1508,15 +1511,15 @@ fun MikuNetworkObservatoryModal(
                             // in Ubiquiti's WiFiman app, so we hand the link off rather than fake it.
                             run {
                                 var teleportLink by remember { mutableStateOf("") }
-                                Text("UNIFI TELEPORT", color = Color(0xFF00E676), fontSize = 10.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                Text("UNIFI TELEPORT", color = Color(0xFF00E676), fontSize = 14.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                 Text(
                                     text = "Teleport works through CGNAT but only inside WiFiman — paste your Teleport link to hand it off. For a fully in-launcher tunnel through CGNAT, point CONNECT above at a VPS relay your UDR also dials out to.",
-                                    color = MikuTextSecondary, fontSize = 8.sp
+                                    color = MikuTextSecondary, fontSize = 12.sp
                                 )
                                 Spacer(Modifier.height(6.dp))
                                 OutlinedTextField(
                                     value = teleportLink, onValueChange = { teleportLink = it },
-                                    label = { Text("Teleport / WiFiman link", fontSize = 9.sp) },
+                                    label = { Text("Teleport / WiFiman link", fontSize = 16.sp) },
                                     singleLine = true, modifier = Modifier.fillMaxWidth()
                                 )
                                 Spacer(Modifier.height(6.dp))
@@ -1533,7 +1536,7 @@ fun MikuNetworkObservatoryModal(
                                         }
                                     },
                                     modifier = Modifier.fillMaxWidth()
-                                ) { Text("OPEN IN WIFIMAN", fontFamily = AudiowideFont, fontSize = 9.sp) }
+                                ) { Text("OPEN IN WIFIMAN", fontFamily = AudiowideFont, fontSize = 16.sp) }
                             }
                         }
                     }

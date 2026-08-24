@@ -12,10 +12,13 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.session.CommandButton
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService.LibraryParams
 import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -107,9 +110,82 @@ class MikuLibraryCallback(context: Context) : MediaLibrarySession.Callback {
         controller: MediaSession.ControllerInfo
     ): MediaSession.ConnectionResult {
         MikuCarAudioRouter.onControllerConnected(appContext, controller.packageName)
-        // Same as the default MediaLibrarySession.Callback.onConnect (default session + player
-        // commands) — we only override it to run the routing side-effect above.
-        return MediaSession.ConnectionResult.AcceptedResultBuilder(session).build()
+
+        val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
+            .add(SessionCommand(ACTION_REWIND_15, Bundle.EMPTY))
+            .add(SessionCommand(ACTION_FAST_FORWARD_15, Bundle.EMPTY))
+            .add(SessionCommand(ACTION_TOGGLE_LIKE, Bundle.EMPTY))
+            .add(SessionCommand(ACTION_SHUFFLE_MODE, Bundle.EMPTY))
+            .build()
+
+        val customLayout = buildCustomLayout()
+
+        return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+            .setAvailableSessionCommands(sessionCommands)
+            .setCustomLayout(customLayout)
+            .build()
+    }
+
+    override fun onCustomCommand(
+        session: MediaSession,
+        controller: MediaSession.ControllerInfo,
+        customCommand: SessionCommand,
+        args: Bundle
+    ): ListenableFuture<SessionResult> {
+        val p = PlayerHolder.player
+        when (customCommand.customAction) {
+            ACTION_REWIND_15 -> {
+                p?.let { it.seekTo(maxOf(0L, it.currentPosition - 15_000L)) }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            ACTION_FAST_FORWARD_15 -> {
+                p?.let { it.seekTo(minOf(it.duration, it.currentPosition + 15_000L)) }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            ACTION_TOGGLE_LIKE -> {
+                val tid = p?.currentMediaItem?.mediaId?.toLongOrNull() ?: PlayerPreferences.loadLastTrackId(appContext)
+                if (tid > 0) {
+                    LikeStore.init(appContext)
+                    LikeStore.toggle(appContext, tid)
+                    session.setCustomLayout(buildCustomLayout())
+                }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+            ACTION_SHUFFLE_MODE -> {
+                p?.let {
+                    val next = !it.shuffleModeEnabled
+                    it.shuffleModeEnabled = next
+                    PlayerPreferences.saveShuffle(appContext, next)
+                }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
+        }
+        return super.onCustomCommand(session, controller, customCommand, args)
+    }
+
+    private fun buildCustomLayout(): ImmutableList<CommandButton> {
+        val tid = PlayerHolder.player?.currentMediaItem?.mediaId?.toLongOrNull() ?: PlayerPreferences.loadLastTrackId(appContext)
+        val isLiked = if (tid > 0) LikeStore.isLiked(tid) else false
+
+        val btnRewind = CommandButton.Builder()
+            .setDisplayName("Rewind 15s")
+            .setIconResId(android.R.drawable.ic_media_rew)
+            .setSessionCommand(SessionCommand(ACTION_REWIND_15, Bundle.EMPTY))
+            .build()
+
+        val btnFF = CommandButton.Builder()
+            .setDisplayName("Forward 15s")
+            .setIconResId(android.R.drawable.ic_media_ff)
+            .setSessionCommand(SessionCommand(ACTION_FAST_FORWARD_15, Bundle.EMPTY))
+            .build()
+
+        val btnLike = CommandButton.Builder()
+            .setDisplayName(if (isLiked) "Liked ♥" else "Like ♡")
+            .setIconResId(if (isLiked) android.R.drawable.btn_star_big_on else android.R.drawable.btn_star_big_off)
+            .setSessionCommand(SessionCommand(ACTION_TOGGLE_LIKE, Bundle.EMPTY))
+            .build()
+
+        return ImmutableList.of(btnRewind, btnFF, btnLike)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -562,6 +638,12 @@ class MikuLibraryCallback(context: Context) : MediaLibrarySession.Callback {
         private const val MODE_REPEAT_ALL = "[mode]repeat_all"
         private const val MODE_REPEAT_ONE = "[mode]repeat_one"
         private const val MODE_TAPE = "[mode]tape"
+
+        // Android Auto custom command action identifiers
+        const val ACTION_REWIND_15 = "com.miku.player.action.REWIND_15"
+        const val ACTION_FAST_FORWARD_15 = "com.miku.player.action.FF_15"
+        const val ACTION_TOGGLE_LIKE = "com.miku.player.action.TOGGLE_LIKE"
+        const val ACTION_SHUFFLE_MODE = "com.miku.player.action.TOGGLE_SHUFFLE"
 
         // Android Auto content-style hint keys (raw string keys → no androidx.media dependency).
         private const val CONTENT_STYLE_SUPPORTED = "android.media.browse.CONTENT_STYLE_SUPPORTED"

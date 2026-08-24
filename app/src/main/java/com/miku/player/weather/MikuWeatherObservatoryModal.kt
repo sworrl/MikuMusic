@@ -41,6 +41,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.miku.player.R
 import com.miku.player.*
 import com.miku.player.metrics.MikuMetricDatabase
+import com.miku.player.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
@@ -78,6 +79,7 @@ fun MikuWeatherObservatoryModal(
             .fillMaxSize()
             .background(Color(0xEB040D12))
             .clickable { onDismissRequest() }
+            .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest)
     ) {
         // Outer 3D Beveled Modal Shell
         Box(

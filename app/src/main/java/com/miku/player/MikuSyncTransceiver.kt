@@ -129,10 +129,15 @@ object MikuSyncTransceiver {
 
     private val scope = CoroutineScope(MikuBrain.NetworkDispatcher + SupervisorJob())
     private var monitorJob: Job? = null
+    private val wakeSignal = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.CONFLATED)
 
     // Thread-safe candidate list dynamically populated with loopback and local subnet gateway
     private val candidateHosts = CopyOnWriteArraySet(listOf("127.0.0.1"))
     @Volatile private var activeHost = "127.0.0.1"
+
+    fun wake() {
+        wakeSignal.trySend(Unit)
+    }
 
     /** Real used/free/total for the two physical volumes, resolved at runtime (no hardcoded sizes/UUIDs). */
     data class VolumeStats(
@@ -191,8 +196,26 @@ object MikuSyncTransceiver {
         return VolumeStats(sdFree, sdTotal, sdPath, internalFree, internalTotal)
     }
 
+    private var networkCallbackRegistered = false
+
     fun startMonitoring(ctx: Context) {
         if (monitorJob != null) return
+        
+        if (!networkCallbackRegistered) {
+            try {
+                val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                if (cm != null) {
+                    val request = android.net.NetworkRequest.Builder().build()
+                    cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
+                        override fun onAvailable(network: android.net.Network) { wake() }
+                        override fun onLost(network: android.net.Network) { wake() }
+                        override fun onCapabilitiesChanged(network: android.net.Network, networkCapabilities: NetworkCapabilities) { wake() }
+                    })
+                    networkCallbackRegistered = true
+                }
+            } catch (_: Throwable) {}
+        }
+
         monitorJob = scope.launch {
             var lastDiscoveryTime = 0L
             var lastStatFsTime = 0L
@@ -249,18 +272,26 @@ object MikuSyncTransceiver {
                         activeHost = activeHost
                     )
 
-                    // Adaptive polling rate: 750ms during live data sync, 3000ms when idle, 5000ms when offline
+                    // Adaptive polling rate: fast when active, slow when idle, deepest sleep when complete
+                    val isLibraryFullAndComplete = daemon.online && !isTransfer && daemon.filesTotal > 0 && daemon.filesDone >= daemon.filesTotal
+                    
                     nextDelayMs = when {
                         isTransfer -> 750L
+                        isLibraryFullAndComplete -> 30000L // Deep sleep if fully caught up
                         daemon.online -> 3000L
-                        else -> 5000L
+                        else -> 12000L // Offline slow poll
                     }
 
                 } catch (e: Throwable) {
                     Log.w(TAG, "Sync monitoring tick: ${e.message}")
                     nextDelayMs = 4000L
                 }
-                delay(nextDelayMs)
+                
+                try {
+                    withTimeoutOrNull(nextDelayMs) {
+                        wakeSignal.receive()
+                    }
+                } catch (_: Throwable) {}
             }
         }
     }

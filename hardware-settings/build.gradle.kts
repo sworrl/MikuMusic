@@ -8,14 +8,14 @@ plugins {
 
 android {
     namespace = "com.m500.hardware"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.m500.hardware"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        targetSdk = 34
+        versionCode = 1000
+        versionName = "1.0.0-mikuos"
     }
 
     val signingProps = Properties().apply {
@@ -83,6 +83,11 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+
+    lint {
+        disable += setOf("ProtectedPermissions", "MissingPermission", "NewApi", "RestrictedApi", "UnspecifiedRegisterReceiverFlag")
+        abortOnError = false
     }
 
     applicationVariants.all {

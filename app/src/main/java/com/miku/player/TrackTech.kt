@@ -354,6 +354,179 @@ object TrackTech {
         }
         return if (n == 0) null else (sum / n).coerceIn(0f, 1f)
     }
+
+    /**
+     * Determines whether an audio track is sourced from a Vinyl / LP rip based on
+     * path, folder naming, title, and album metadata tags.
+     */
+    fun isVinyl(track: Track): Boolean = isVinyl(track.path, track.album, track.title)
+
+    fun isVinyl(path: String, album: String = "", title: String = ""): Boolean {
+        val target = "$path $album $title".lowercase()
+        return target.contains("vinyl") ||
+               target.contains("needledrop") ||
+               target.contains("needle drop") ||
+               target.contains("lp rip") ||
+               target.contains("lp_rip") ||
+               target.contains("lp-rip") ||
+               target.contains("analog rip") ||
+               target.contains("analog_rip") ||
+               target.contains("[lp]") ||
+               target.contains("(lp)") ||
+               target.contains("12\" single") ||
+               target.contains("12\" vinyl") ||
+               target.contains("7\" single") ||
+               target.contains("7\" vinyl") ||
+               target.contains("turntable") ||
+               target.contains("dmm rip")
+    }
+
+    data class QualityBreakdown(
+        val maxBits: Int,
+        val maxSampleRateHz: Int,
+        val maxBitrateKbps: Int,
+        val dominantFormat: String,
+        val totalTracks: Int,
+        val masterCount: Int,      // 176.4k+, 32-bit, DSD
+        val studioHiResCount: Int, // 24-bit or 88.2k-96k
+        val cdLosslessCount: Int,  // 16-bit 44.1k/48k FLAC/WAV/ALAC
+        val lossyCount: Int,       // MP3, AAC, OGG
+        val masterFraction: Float,
+        val studioHiResFraction: Float,
+        val cdLosslessFraction: Float,
+        val lossyFraction: Float,
+        val highestTier: Int,      // 1..4
+        val summaryTag: String,
+        val detailSummary: String,
+        val specTag: String = "16-BIT · 44.1kHz FLAC",
+        val badgeSymbol: String = "✧",
+        val isVinylRip: Boolean = false
+    )
+
+    /**
+     * Calculates the comprehensive relative quality distribution across an entire Album or Artist.
+     * Computes exact breakdown fractions for Master (192k+/32-bit/DSD), Studio Hi-Res (24-bit/96k),
+     * CD Lossless (16-bit/44.1k), and Lossy (MP3/AAC).
+     */
+    fun computeQualityBreakdown(ctx: Context, tracks: List<Track>): QualityBreakdown {
+        if (tracks.isEmpty()) {
+            return QualityBreakdown(
+                maxBits = 0, maxSampleRateHz = 0, maxBitrateKbps = 0, dominantFormat = "FLAC",
+                totalTracks = 0, masterCount = 0, studioHiResCount = 0, cdLosslessCount = 0,
+                lossyCount = 0, masterFraction = 0f, studioHiResFraction = 0f, cdLosslessFraction = 0f,
+                lossyFraction = 0f, highestTier = 1, summaryTag = "Standard", detailSummary = "No tracks",
+                specTag = "No audio", badgeSymbol = "♪", isVinylRip = false
+            )
+        }
+
+        var maxBits = 0
+        var maxSr = 0
+        var maxBr = 0
+        var master = 0
+        var studio = 0
+        var cd = 0
+        var lossy = 0
+        var vinylCount = 0
+
+        val formatCounts = mutableMapOf<String, Int>()
+
+        for (t in tracks) {
+            val bits = bitsFor(ctx, t) ?: 16
+            val sr = sampleRateFor(ctx, t) ?: 44100
+            val fmt = t.mime.substringAfterLast('/').uppercase().ifBlank { "AUDIO" }
+            formatCounts[fmt] = (formatCounts[fmt] ?: 0) + 1
+
+            if (bits > maxBits) maxBits = bits
+            if (sr > maxSr) maxSr = sr
+            if (t.bitrateKbps > maxBr) maxBr = t.bitrateKbps
+            if (isVinyl(t)) vinylCount++
+
+            val isLossless = formatTier(t.mime) >= 3
+            when {
+                sr >= 176400 || bits >= 32 || fmt in listOf("DSD", "DSF", "DFF") -> master++
+                sr >= 88200 || bits >= 24 -> studio++
+                isLossless -> cd++
+                else -> lossy++
+            }
+        }
+
+        val total = tracks.size.toFloat().coerceAtLeast(1f)
+        val mFrac = master / total
+        val sFrac = studio / total
+        val cdFrac = cd / total
+        val lFrac = lossy / total
+        val isVinylRip = vinylCount > 0
+
+        val dominantFmt = formatCounts.maxByOrNull { it.value }?.key ?: "FLAC"
+
+        val highestTier = when {
+            master > 0 -> 4
+            studio > 0 -> 3
+            cd > 0 -> 2
+            else -> 1
+        }
+
+        val losslessPct = ((master + studio + cd) / total * 100).toInt()
+
+        val summaryTag = when {
+            isVinylRip && master > 0 -> "VINYL MASTER · ${formatSampleRate(maxSr)}"
+            isVinylRip && studio > 0 -> "VINYL HI-RES · 24-BIT"
+            isVinylRip -> "VINYL RIP · $dominantFmt"
+            master > 0 && master == tracks.size -> "100% STUDIO MASTER"
+            master > 0 -> "UP TO ${if (maxBits > 0) "$maxBits-BIT " else ""}${formatSampleRate(maxSr)}"
+            studio > 0 && studio == tracks.size -> "100% HI-RES 24-BIT"
+            studio > 0 -> "UP TO ${formatSampleRate(maxSr)} 24-BIT"
+            cd == tracks.size -> "100% LOSSLESS $dominantFmt"
+            losslessPct > 0 -> "$losslessPct% LOSSLESS"
+            else -> "$dominantFmt ${maxBr}k"
+        }
+
+        val detailSummary = when {
+            isVinylRip -> "$vinylCount of ${tracks.size} tracks Analog Vinyl Rip (${if (maxBits > 0) "$maxBits-bit/" else ""}${formatSampleRate(maxSr)})"
+            master > 0 -> "$master of ${tracks.size} tracks Master Tier (${formatSampleRate(maxSr)}/24+ bit)"
+            studio > 0 -> "$studio of ${tracks.size} tracks Studio Hi-Res (24-bit/96kHz)"
+            cd > 0 -> "$cd of ${tracks.size} tracks 16-bit/44.1kHz Bit-Perfect"
+            else -> "${tracks.size} tracks standard audio"
+        }
+
+        val baseSpecTag = when {
+            master > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else ""}${formatSampleRate(maxSr)} $dominantFmt"
+            studio > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else "24-BIT · "}${formatSampleRate(maxSr)} $dominantFmt"
+            cd > 0 -> "16-BIT · ${formatSampleRate(maxSr)} $dominantFmt"
+            else -> "$dominantFmt · ${maxBr}kbps"
+        }
+        val specTag = if (isVinylRip) "$baseSpecTag · ⊚ VINYL" else baseSpecTag
+
+        val badgeSymbol = when {
+            isVinylRip -> "⊚"
+            highestTier == 4 -> "💎"
+            highestTier == 3 -> "👑"
+            highestTier == 2 -> "✧"
+            else -> "♪"
+        }
+
+        return QualityBreakdown(
+            maxBits = maxBits,
+            maxSampleRateHz = maxSr,
+            maxBitrateKbps = maxBr,
+            dominantFormat = dominantFmt,
+            totalTracks = tracks.size,
+            masterCount = master,
+            studioHiResCount = studio,
+            cdLosslessCount = cd,
+            lossyCount = lossy,
+            masterFraction = mFrac,
+            studioHiResFraction = sFrac,
+            cdLosslessFraction = cdFrac,
+            lossyFraction = lFrac,
+            highestTier = highestTier,
+            summaryTag = summaryTag,
+            detailSummary = detailSummary,
+            specTag = specTag,
+            badgeSymbol = badgeSymbol,
+            isVinylRip = isVinylRip
+        )
+    }
 }
 
 /**

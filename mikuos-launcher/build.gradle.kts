@@ -29,14 +29,14 @@ fun localProp(key: String) = localProps.getProperty(key, "")
 
 android {
     namespace = "com.miku.launcher"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         applicationId = "com.miku.launcher"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 32
-        versionName = "0.1.22"
+        targetSdk = 34
+        versionCode = 23
+        versionName = "0.1.23"
 
         buildConfigField("String", "ARCO_HMAC_KEY_ID", "\"${arcoProp("ARCO_HMAC_KEY_ID")}\"")
         buildConfigField("String", "ARCO_HMAC_SECRET", "\"${arcoProp("ARCO_HMAC_SECRET")}\"")
@@ -133,7 +133,8 @@ android {
         // Correct-by-design for a platform-signed system launcher — not defects:
         //  QueryAllPackagesPermission: a launcher legitimately enumerates all apps.
         //  ProtectedPermissions: system/signature permissions on our own ROM.
-        disable += setOf("QueryAllPackagesPermission", "ProtectedPermissions")
+        //  RestrictedApi: dispatchKeyEvent on Activity subclasses.
+        disable += setOf("QueryAllPackagesPermission", "ProtectedPermissions", "RestrictedApi")
         // Accept remaining known issues (NewApi on API-34-only device, pre-granted runtime perms,
         // framework false-positives) via a baseline; NEW issues still fail the build.
         baseline = file("lint-baseline.xml")

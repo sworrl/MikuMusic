@@ -54,6 +54,8 @@ class LibraryScanService : Service() {
         val roots = LinkedHashSet<String>()
         android.os.Environment.getExternalStorageDirectory()?.absolutePath?.let { roots.add(it) }
         externalCacheDirs.forEach { d -> d?.absolutePath?.substringBefore("/Android")?.let { roots.add(it) } }
+        File("/storage").listFiles()?.forEach { if (it.isDirectory && it.name != "self" && it.name != "emulated") roots.add(it.absolutePath) }
+        File("/mnt/media_rw").listFiles()?.forEach { if (it.isDirectory) roots.add(it.absolutePath) }
         ScanProgress.reset()
         PulsarLight.startHddActivity()
 
@@ -105,11 +107,26 @@ class LibraryScanService : Service() {
                     ScanProgress.phase = "Finalizing library…"
                     val after = runCatching { LibraryCounts.countTracks(app) }.getOrDefault(before)
                     val delta = after - before
-                    val msg = if (delta > 0) "✓ Found $delta new track${if (delta == 1) "" else "s"}"
+                    val msg = if (delta > 0) "✓ Found $delta new track${if (delta == 1) "" else "s"} · Total $after"
                               else "✓ Library up to date · $after tracks"
                     val albums = runCatching { LibraryCounts.countDistinct(app, MediaStore.Audio.Media.ALBUM) }.getOrDefault(0)
                     val artists = runCatching { LibraryCounts.countDistinct(app, MediaStore.Audio.Media.ARTIST) }.getOrDefault(0)
-                    ScanProgress.finish(delta, after, albums, artists)
+                    val formats = runCatching {
+                        val extMap = mutableMapOf<String, Int>()
+                        app.contentResolver.query(
+                            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                            arrayOf(MediaStore.Audio.Media.DATA), "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
+                        )?.use { c ->
+                            val col = c.getColumnIndexOrThrow(MediaStore.Audio.Media.DATA)
+                            while (c.moveToNext()) {
+                                val p = c.getString(col) ?: continue
+                                val ext = p.substringAfterLast('.', "").uppercase()
+                                if (ext.isNotBlank()) extMap[ext] = (extMap[ext] ?: 0) + 1
+                            }
+                        }
+                        extMap.entries.sortedByDescending { it.value }.take(4).joinToString(" · ") { "${it.key} (${it.value})" }
+                    }.getOrDefault("")
+                    ScanProgress.finish(delta, after, albums, artists, formats)
                     main.post { android.widget.Toast.makeText(app, msg, android.widget.Toast.LENGTH_SHORT).show() }
                 } finally {
                     checkpoint.flush(); checkpoint.close()
@@ -205,17 +222,25 @@ class LibraryScanService : Service() {
                                 app,
                                 batch.toTypedArray(),
                                 null
-                            ) { path, _ ->
+                            ) { path, uri ->
                                 if (path != null) {
+                                    val ext = path.substringAfterLast('.', "").lowercase()
+                                    val isExotic = ext in listOf("dsf", "dff", "ape", "wv", "mpc", "tta")
+                                    // Fallback for exotic formats that MediaStore misses
+                                    if (uri == null || isExotic) {
+                                        JaudiotaggerScanner.fallbackParseAndInsert(app, path)
+                                    }
                                     checkpoint.record(path)
-                                    ScanProgress.tagsScanned.incrementAndGet()
+                                    val count = ScanProgress.tagsScanned.incrementAndGet()
+                                    ScanProgress.updateProgress(path.substringAfterLast('/'), count, totalNew)
                                     maybeRefreshUi()
                                 }
                             }
                             // Yield CPU time to audio playback decoder & ALSA buffer threads
                             Thread.sleep(12)
                         } catch (_: Throwable) {
-                            ScanProgress.tagsScanned.addAndGet(batch.size)
+                            val count = ScanProgress.tagsScanned.addAndGet(batch.size)
+                            ScanProgress.updateProgress("", count, totalNew)
                             maybeRefreshUi()
                         } finally {
                             scanGate.release()

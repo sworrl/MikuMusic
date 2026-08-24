@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "com.caf.fmradio"
-    compileSdk = 35
+    compileSdk = 34
 
     defaultConfig {
         // CRITICAL: the package name MUST be com.caf.fmradio — the device's SELinux
@@ -17,9 +17,9 @@ android {
         // other applicationId gets untrusted_app and every tuner open() is denied.
         applicationId = "com.caf.fmradio"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 100
-        versionName = "14.9-miku"
+        targetSdk = 34
+        versionCode = 1000
+        versionName = "1.0.0-mikuos"
     }
 
     // Platform signing (seinfo=platform is required alongside the package name).

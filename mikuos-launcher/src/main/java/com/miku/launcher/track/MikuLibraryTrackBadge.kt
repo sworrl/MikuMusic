@@ -32,12 +32,12 @@ fun MikuLibraryTrackBadge(
 
     Box(
         modifier = modifier
-            .height(20.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .height(24.dp)
+            .clip(RoundedCornerShape(12.dp))
             .background(Color(0xFF04181C))
-            .border(0.9.dp, MikuCyan.copy(alpha = 0.75f), RoundedCornerShape(10.dp))
+            .border(1.dp, MikuCyan.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
             .clickable { onClick() }
-            .padding(horizontal = 6.dp),
+            .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(
@@ -46,15 +46,15 @@ fun MikuLibraryTrackBadge(
         ) {
             Box(
                 Modifier
-                    .size(4.5.dp)
+                    .size(6.dp)
                     .clip(CircleShape)
                     .background(MikuCyan)
             )
-            Spacer(Modifier.width(3.5.dp))
+            Spacer(Modifier.width(4.dp))
             Text(
                 text = "♫ ${libraryState.abbreviatedTracks}",
                 color = MikuCyan,
-                fontSize = 7.5.sp,
+                fontSize = 11.5.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = AudiowideFont,
                 letterSpacing = 0.3.sp

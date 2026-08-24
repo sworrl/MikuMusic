@@ -30,6 +30,7 @@ import com.miku.player.CyberDarkBg
 import com.miku.player.CyberGlassBorder
 import com.miku.player.MikuCyan
 import com.miku.player.MikuNeonPink
+import com.miku.player.ui.swipeUpFromBottomToDismiss
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -75,7 +76,8 @@ fun MikuMonitorModal(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 indication = null,
                 onClick = onDismissRequest
-            ),
+            )
+            .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
         contentAlignment = Alignment.Center
     ) {
         // Outer 3D Beveled Modal Shell

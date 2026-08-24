@@ -28,6 +28,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.miku.launcher.AudiowideFont
 import com.miku.launcher.MikuCyan
 import com.miku.launcher.MikuNeonPink
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.launch
 
 /**
@@ -54,7 +55,9 @@ fun MikuUsbHostModal(
                 .clickable(
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                     indication = null
-                ) { onDismissRequest() },
+                ) { onDismissRequest() }
+                // System-gesture-style dismiss: swipe up starting at the bottom edge of the modal.
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
             contentAlignment = Alignment.Center
         ) {
             Box(

@@ -254,13 +254,16 @@ class QualcommFmHardwareEngine(private val context: Context) {
     private fun configureAudioHal(enable: Boolean, freqKHz: Int) {
         try {
             val status = if (enable) "1" else "0"
-            audioManager.setParameters("fm_status=$status;fm_volume=1.0;fm_mute=0;fm_freq=$freqKHz")
+            audioManager.setParameters("handle_fm=$status;fm_status=$status;fm_volume=1.0;fm_mute=0;fm_freq=$freqKHz;fm_active=$status")
             audioManager.setParameters(if (enable) "fm_route=playback" else "fm_route=off")
+            audioManager.setParameters("vendor.audio.hw.fm.mode=$status")
 
             RootShell.execFast(
                 "setprop vendor.audio.hw.fm.mode $status; " +
                 "setprop vendor.audio.fm.route $status; " +
-                "setprop vendor.audio.fm.freq $freqKHz"
+                "setprop vendor.audio.fm.freq $freqKHz; " +
+                "setprop vendor.audio.fm.status $status; " +
+                "setprop vendor.audio.fm.mute 0"
             )
         } catch (t: Throwable) {
             Log.e(TAG, "Audio HAL parameter configuration error", t)

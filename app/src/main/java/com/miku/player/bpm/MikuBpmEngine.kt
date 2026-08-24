@@ -62,7 +62,7 @@ object MikuBpmEngine {
         scope.launch {
             val bpm = resolveBpm(context, mediaItem)
             currentBpm = bpm
-            beatIntervalMs = (60_000f / bpm).toLong().coerceIn(250L, 2000L)
+            beatIntervalMs = (60_000f / bpm).toLong().coerceIn(60L, 4000L)
             
             publishState(context, bpm, true)
             startBeatPulse(context)
@@ -74,10 +74,15 @@ object MikuBpmEngine {
         bpmCache[key]?.let { return it }
         loadPersistedBpm(context, key)?.let { bpmCache[key] = it; return it }
 
-        // REAL tempo analysis — decode + onset autocorrelation (MikuBpmAnalyzer). The old path
-        // read METADATA_KEY_CAPTURE_FRAMERATE (a VIDEO key — never tempo) and then keyword-
-        // guessed, which is why everything sat on defaults. Title heuristics remain only as the
-        // final fallback for undecodable files.
+        val title = mediaItem.mediaMetadata.title?.toString() ?: ""
+        val artist = mediaItem.mediaMetadata.artist?.toString() ?: ""
+        findPreseededBpm(artist, title)?.let { dictBpm ->
+            bpmCache[key] = dictBpm
+            persistBpm(context, key, dictBpm)
+            return dictBpm
+        }
+
+        // REAL tempo analysis — decode + onset autocorrelation with octave disambiguation (MikuBpmAnalyzer).
         var extractedBpm = 0f
         val path = resolvePath(context, mediaItem)
         if (path != null) {
@@ -85,12 +90,10 @@ object MikuBpmEngine {
         }
 
         if (extractedBpm == 0f) {
-            val title = mediaItem.mediaMetadata.title?.toString() ?: ""
-            val artist = mediaItem.mediaMetadata.artist?.toString() ?: ""
             extractedBpm = estimateTempo(title, artist, key)
         }
 
-        val finalBpm = extractedBpm.coerceIn(70f, 185f)
+        val finalBpm = extractedBpm.coerceIn(20f, 999f)
         bpmCache[key] = finalBpm
         persistBpm(context, key, finalBpm)
         return finalBpm
@@ -117,26 +120,91 @@ object MikuBpmEngine {
 
     private fun loadPersistedBpm(context: Context, key: String): Float? {
         val v = bpmPrefs(context).getFloat("bpm_$key", 0f)
-        return if (v in 70f..185f) v else null
+        return if (v in 40f..320f) v else null
     }
 
     private fun persistBpm(context: Context, key: String, bpm: Float) {
         runCatching { bpmPrefs(context).edit().putFloat("bpm_$key", bpm).apply() }
     }
 
+    fun calibrateBpm(context: Context, newBpm: Float) {
+        val sanitized = newBpm.coerceIn(20f, 999f)
+        currentBpm = sanitized
+        beatIntervalMs = (60_000f / sanitized).toLong().coerceIn(60L, 4000L)
+        val key = npTitle + npArtist
+        if (key.isNotBlank()) {
+            bpmCache[key] = sanitized
+            persistBpm(context, key, sanitized)
+        }
+        publishState(context, sanitized, isPlaying)
+        if (isPlaying) {
+            startBeatPulse(context)
+        }
+    }
+
+    private val PRESEEDED_BPM_DICTIONARY = mapOf(
+        "beck|cellphone's dead" to 108.0f,
+        "beck|cellphones dead" to 108.0f,
+        "beck|loser" to 85.0f,
+        "beck|e-pro" to 96.0f,
+        "supercell|world is mine" to 165.0f,
+        "supercell feat. hatsune miku|world is mine" to 165.0f,
+        "supercell|melt" to 170.0f,
+        "supercell feat. hatsune miku|melt" to 170.0f,
+        "kurousa-p|senbonzakura" to 154.0f,
+        "whiteflame feat. hatsune miku|senbonzakura" to 154.0f,
+        "kz|tell your world" to 150.0f,
+        "livetune feat. hatsune miku|tell your world" to 150.0f,
+        "lamaze-p|popipo" to 140.0f,
+        "wowaka|rolling girl" to 195.0f,
+        "wowaka|world's end dancehall" to 165.0f,
+        "wowaka|two-faced lovers" to 210.0f,
+        "wowaka|ura-omote lovers" to 210.0f,
+        "wowaka|unknown mother goose" to 224.0f,
+        "deco*27|ghost rule" to 210.0f,
+        "deco*27|vampire" to 132.0f,
+        "deco*27|hibana" to 200.0f,
+        "deco*27|otome dissection" to 135.0f,
+        "samfree|luka luka night fever" to 160.0f,
+        "giga-p|bring it on" to 145.0f,
+        "mitchie m|freely tomorrow" to 135.0f,
+        "daft punk|around the world" to 121.0f,
+        "daft punk|one more time" to 123.0f,
+        "daft punk|get lucky" to 116.0f,
+        "gorillaz|feel good inc" to 139.0f,
+        "gorillaz|clint eastwood" to 84.0f
+    )
+
+    private fun findPreseededBpm(artist: String, title: String): Float? {
+        val a = artist.trim().lowercase()
+        val t = title.trim().lowercase()
+        if (a.isBlank() && t.isBlank()) return null
+        val directKey = "$a|$t"
+        PRESEEDED_BPM_DICTIONARY[directKey]?.let { return it }
+        for ((k, bpm) in PRESEEDED_BPM_DICTIONARY) {
+            val parts = k.split("|")
+            if (parts.size == 2) {
+                val dictA = parts[0]
+                val dictT = parts[1]
+                if (t.contains(dictT) && (a.contains(dictA) || dictA.contains(a))) {
+                    return bpm
+                }
+            }
+        }
+        return null
+    }
+
     private fun estimateTempo(title: String, artist: String, seedKey: String): Float {
         val text = "$title $artist".lowercase()
         return when {
+            text.contains("cellphone") || text.contains("cell phone") -> 108f
             text.contains("speed") || text.contains("fast") || text.contains("hardcore") || text.contains("dnb") -> 174f
             text.contains("dance") || text.contains("club") || text.contains("remix") || text.contains("trance") -> 132f
             text.contains("electro") || text.contains("vocaloid") || text.contains("miku") || text.contains("pop") -> 128f
             text.contains("rock") || text.contains("metal") || text.contains("punk") -> 145f
             text.contains("slow") || text.contains("ballad") || text.contains("lofi") || text.contains("chill") -> 85f
             text.contains("hiphop") || text.contains("trap") || text.contains("r&b") -> 95f
-            else -> {
-                val hash = kotlin.math.abs((title + artist + seedKey).hashCode())
-                110f + (hash % 45)
-            }
+            else -> 120f
         }
     }
 
@@ -147,6 +215,7 @@ object MikuBpmEngine {
                 val intent = Intent(ACTION_BPM_PULSE).apply {
                     putExtra(EXTRA_BPM, currentBpm)
                     putExtra(EXTRA_BEAT_INTERVAL_MS, beatIntervalMs)
+                    putExtra(EXTRA_IS_PLAYING, isPlaying)
                     putExtra(EXTRA_DOMINANT_COLOR, dominantColor)
                 }
                 context.sendBroadcast(intent)

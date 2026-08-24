@@ -65,6 +65,7 @@ import com.miku.launcher.MikuCyan
 import com.miku.launcher.MikuGold
 import com.miku.launcher.MikuNeonPink
 import com.miku.launcher.MikuTextSecondary
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.launch
 
 /**
@@ -120,6 +121,8 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onDismissRequest)
+            // System-gesture-style dismiss: swipe up starting at the bottom edge of the sheet.
+            .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest)
             .background(Color(0xCC040D12)),
         contentAlignment = Alignment.TopEnd
     ) {

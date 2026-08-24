@@ -38,6 +38,9 @@ class LibraryDaemonService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification("Monitoring audio library · Real-time sync"))
         registerMediaObserver()
         MikuSyncTransceiver.startMonitoring(this)
+        try {
+            com.miku.player.api.MikuApiServer.start(this)
+        } catch (_: Throwable) {}
 
         scope.launch {
             MikuSyncTransceiver.state.collect { sync ->
@@ -90,10 +93,15 @@ class LibraryDaemonService : Service() {
             try {
                 updateNotification("Syncing audio library…")
                 val tracks = queryTracksFast()
+                val countChanged = lastTrackCount != tracks.size
                 lastTrackCount = tracks.size
 
-                FastLibraryStore.saveAsync(applicationContext, tracks)
-                ScanProgress.generation.incrementAndGet()
+                if (countChanged || tracks.isNotEmpty()) {
+                    FastLibraryStore.saveAsync(applicationContext, tracks)
+                    if (countChanged) {
+                        ScanProgress.generation.incrementAndGet()
+                    }
+                }
                 Log.i(TAG, "Daemon synced ${tracks.size} tracks ($triggerReason)")
 
                 updateNotification("Monitoring ${tracks.size} tracks · Live audio sync")

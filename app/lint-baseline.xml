@@ -129,7 +129,7 @@
         errorLine2="                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2031"
+            line="2039"
             column="29"/>
     </issue>
 
@@ -140,7 +140,7 @@
         errorLine2="                                                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2065"
+            line="2073"
             column="60"/>
     </issue>
 
@@ -151,7 +151,7 @@
         errorLine2="                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2102"
+            line="2110"
             column="32"/>
     </issue>
 
@@ -162,7 +162,7 @@
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5097"
+            line="5105"
             column="25"/>
     </issue>
 
@@ -173,7 +173,7 @@
         errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5172"
+            line="5180"
             column="25"/>
     </issue>
 
@@ -184,7 +184,7 @@
         errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5458"
+            line="5466"
             column="40"/>
     </issue>
 
@@ -217,7 +217,7 @@
         errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MikuMonitorModal.kt"
-            line="348"
+            line="350"
             column="50"/>
     </issue>
 
@@ -228,7 +228,7 @@
         errorLine2="                                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MikuMonitorModal.kt"
-            line="685"
+            line="687"
             column="38"/>
     </issue>
 
@@ -272,7 +272,7 @@
         errorLine2="                                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5500"
+            line="5508"
             column="56"/>
     </issue>
 
@@ -338,7 +338,7 @@
         errorLine2="                                                                                                  ~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5479"
+            line="5487"
             column="99"/>
     </issue>
 
@@ -624,7 +624,7 @@
         errorLine2="                ~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="731"
+            line="749"
             column="17"/>
     </issue>
 
@@ -833,7 +833,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2817"
+            line="2825"
             column="5"/>
     </issue>
 
@@ -844,7 +844,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="3012"
+            line="3020"
             column="5"/>
     </issue>
 
@@ -855,7 +855,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="3061"
+            line="3069"
             column="5"/>
     </issue>
 
@@ -866,7 +866,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="3454"
+            line="3462"
             column="5"/>
     </issue>
 
@@ -877,7 +877,7 @@
         errorLine2="                                            ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="4283"
+            line="4291"
             column="45"/>
     </issue>
 
@@ -888,7 +888,7 @@
         errorLine2="                                                                                                                                            ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="6345"
+            line="6353"
             column="141"/>
     </issue>
 
@@ -899,7 +899,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/network/MikuNetworkObservatoryModal.kt"
-            line="54"
+            line="55"
             column="5"/>
     </issue>
 
@@ -1009,7 +1009,7 @@
         errorLine2="         ~~~~~~~~">
         <location
             file="src/main/AndroidManifest.xml"
-            line="324"
+            line="337"
             column="10"/>
     </issue>
 
@@ -1075,7 +1075,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="1335"
+            line="1373"
             column="3"/>
     </issue>
 
@@ -1086,7 +1086,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="1525"
+            line="1566"
             column="3"/>
     </issue>
 
@@ -1097,7 +1097,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="1770"
+            line="1811"
             column="3"/>
     </issue>
 
@@ -1108,7 +1108,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="1775"
+            line="1816"
             column="3"/>
     </issue>
 
@@ -1119,7 +1119,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="1815"
+            line="1856"
             column="3"/>
     </issue>
 
@@ -1130,7 +1130,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="1875"
+            line="1916"
             column="3"/>
     </issue>
 
@@ -1141,7 +1141,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="2224"
+            line="2317"
             column="5"/>
     </issue>
 
@@ -1152,7 +1152,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="2258"
+            line="2351"
             column="5"/>
     </issue>
 
@@ -1163,7 +1163,7 @@
         errorLine2="    ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="2268"
+            line="2361"
             column="5"/>
     </issue>
 
@@ -1174,7 +1174,7 @@
         errorLine2="  ~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/androidx/media3/exoplayer/audio/MikuDirectAudioSink.java"
-            line="2323"
+            line="2416"
             column="3"/>
     </issue>
 
@@ -1372,7 +1372,7 @@
         errorLine2="                                  ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="797"
+            line="800"
             column="35"/>
     </issue>
 
@@ -1383,7 +1383,7 @@
         errorLine2="                                  ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="1328"
+            line="1336"
             column="35"/>
     </issue>
 
@@ -1394,7 +1394,7 @@
         errorLine2="                            ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2781"
+            line="2789"
             column="29"/>
     </issue>
 
@@ -1405,7 +1405,7 @@
         errorLine2="                                    ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="4659"
+            line="4667"
             column="37"/>
     </issue>
 
@@ -1416,7 +1416,7 @@
         errorLine2="                                 ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="4660"
+            line="4668"
             column="34"/>
     </issue>
 
@@ -1427,7 +1427,7 @@
         errorLine2="                                     ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="4661"
+            line="4669"
             column="38"/>
     </issue>
 
@@ -1438,7 +1438,7 @@
         errorLine2="                                 ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5039"
+            line="5047"
             column="34"/>
     </issue>
 
@@ -1449,7 +1449,7 @@
         errorLine2="                                ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5041"
+            line="5049"
             column="33"/>
     </issue>
 
@@ -1460,7 +1460,7 @@
         errorLine2="                           ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5594"
+            line="5602"
             column="28"/>
     </issue>
 
@@ -1471,7 +1471,7 @@
         errorLine2="                             ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5595"
+            line="5603"
             column="30"/>
     </issue>
 
@@ -1482,7 +1482,7 @@
         errorLine2="                                    ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5599"
+            line="5607"
             column="37"/>
     </issue>
 
@@ -1493,7 +1493,7 @@
         errorLine2="                                    ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5600"
+            line="5608"
             column="37"/>
     </issue>
 
@@ -1504,7 +1504,7 @@
         errorLine2="                          ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="6089"
+            line="6097"
             column="27"/>
     </issue>
 
@@ -1515,7 +1515,7 @@
         errorLine2="                          ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="6090"
+            line="6098"
             column="27"/>
     </issue>
 
@@ -2606,7 +2606,7 @@
         errorLine2="                     ~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2418"
+            line="2426"
             column="22"/>
     </issue>
 
@@ -2617,7 +2617,7 @@
         errorLine2="                     ~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2962"
+            line="2970"
             column="22"/>
     </issue>
 
@@ -2628,7 +2628,7 @@
         errorLine2="                     ~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="2983"
+            line="2991"
             column="22"/>
     </issue>
 
@@ -2639,7 +2639,7 @@
         errorLine2="                 ~~~~~~">
         <location
             file="src/main/java/com/miku/player/MainActivity.kt"
-            line="5969"
+            line="5977"
             column="18"/>
     </issue>
 

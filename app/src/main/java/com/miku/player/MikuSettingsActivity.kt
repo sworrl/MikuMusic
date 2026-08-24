@@ -3,6 +3,7 @@ package com.miku.player
 import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
+import com.miku.player.bluetooth.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
@@ -61,33 +62,23 @@ import java.util.Locale
 
 class MikuSettingsActivity : ComponentActivity() {
 
-    private fun hideSystemBars() {
+    private fun setupSystemBars() {
         try {
-            window.decorView.systemUiVisibility = (
-                android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
+            insetsController.isAppearanceLightStatusBars = false
+            insetsController.isAppearanceLightNavigationBars = false
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
         } catch (_: Throwable) {}
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashSentinel.install(this)
         super.onCreate(savedInstanceState)
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
-        window.addFlags(
-            android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN or
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        )
-        hideSystemBars()
+        setupSystemBars()
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
@@ -109,12 +100,12 @@ class MikuSettingsActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        hideSystemBars()
+        setupSystemBars()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
+        if (hasFocus) setupSystemBars()
     }
 }
 
@@ -872,15 +863,15 @@ fun MikuDisplaySettingsModal(onDismissRequest: () -> Unit) {
 @Composable
 fun MikuBluetoothSettingsModal(onDismissRequest: () -> Unit) {
     val ctx = LocalContext.current
-    val btAdapter = remember { BluetoothAdapter.getDefaultAdapter() }
-    var isBtEnabled by remember { mutableStateOf(btAdapter?.isEnabled == true) }
-    var pairedDevices by remember {
-        mutableStateOf(
-            try {
-                btAdapter?.bondedDevices?.toList() ?: emptyList()
-            } catch (_: Throwable) { emptyList() }
-        )
+
+    LaunchedEffect(Unit) {
+        com.miku.player.bluetooth.MikuBluetoothController.init(ctx)
     }
+
+    val isBtEnabled by com.miku.player.bluetooth.MikuBluetoothController.isBluetoothEnabled.collectAsState()
+    val isScanning by com.miku.player.bluetooth.MikuBluetoothController.isScanning.collectAsState()
+    val pairedDevices by com.miku.player.bluetooth.MikuBluetoothController.pairedDevices.collectAsState()
+    val discoveredDevices by com.miku.player.bluetooth.MikuBluetoothController.discoveredDevices.collectAsState()
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -899,7 +890,7 @@ fun MikuBluetoothSettingsModal(onDismissRequest: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
 
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    // Master Bluetooth Switch Card
+                    // 1. Master Bluetooth Switch Card
                     item {
                         Column(
                             Modifier
@@ -916,19 +907,12 @@ fun MikuBluetoothSettingsModal(onDismissRequest: () -> Unit) {
                             ) {
                                 Column(Modifier.weight(1f)) {
                                     Text("Bluetooth Master Power", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
-                                    Text(if (isBtEnabled) "🔵 Transceiver Online" else "⚪ Radio Powered Down", color = if (isBtEnabled) Color(0xFF2979FF) else MikuTextSecondary, fontSize = 10.5.sp)
+                                    Text(if (isBtEnabled) "🔵 Transceiver Online · Hi-Res Ready" else "⚪ Radio Powered Down", color = if (isBtEnabled) Color(0xFF2979FF) else MikuTextSecondary, fontSize = 10.5.sp)
                                 }
                                 Switch(
                                     checked = isBtEnabled,
                                     onCheckedChange = { next ->
-                                        isBtEnabled = next
-                                        if (next) {
-                                            try { btAdapter?.enable() } catch (_: Throwable) {}
-                                            RootShell.execFast("svc bluetooth enable")
-                                        } else {
-                                            try { btAdapter?.disable() } catch (_: Throwable) {}
-                                            RootShell.execFast("svc bluetooth disable")
-                                        }
+                                        com.miku.player.bluetooth.MikuBluetoothController.toggleBluetooth(next)
                                     },
                                     colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = Color(0xFF2979FF))
                                 )
@@ -936,58 +920,246 @@ fun MikuBluetoothSettingsModal(onDismissRequest: () -> Unit) {
                         }
                     }
 
-                    // Hi-Res Audio Codecs Priority
-                    item {
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(CyberGlassCard)
-                                .border(1.dp, CyberGlassBorder, RoundedCornerShape(14.dp))
-                                .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text("Hi-Res Codec Priority", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            listOf(
-                                "LDAC (990 / 660 / 330 kbps 96kHz/24-Bit)" to Color(0xFF00E676),
-                                "Qualcomm aptX HD (576 kbps 48kHz/24-Bit)" to Color(0xFF00E5FF),
-                                "aptX Adaptive (Low Latency / Dynamic)" to Color(0xFF2979FF),
-                                "AAC / SBC (Standard Audio Codec)" to MikuTextSecondary
-                            ).forEach { (codec, col) ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(Modifier.size(8.dp).clip(CircleShape).background(col))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(codec, color = Color.White, fontSize = 10.5.sp)
+                    if (isBtEnabled) {
+                        // 2. Paired Devices Card
+                        item {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(CyberGlassCard)
+                                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(14.dp))
+                                    .padding(12.dp)
+                            ) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("PAIRED BLUETOOTH DEVICES (${pairedDevices.size})", color = Color(0xFF2979FF), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                    
+                                    Button(
+                                        onClick = {
+                                            if (isScanning) {
+                                                com.miku.player.bluetooth.MikuBluetoothController.stopScan()
+                                            } else {
+                                                com.miku.player.bluetooth.MikuBluetoothController.startScan()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = if (isScanning) Color(0x33FF4081) else Color(0x332979FF)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Text(if (isScanning) "Stop Scan" else "+ Scan Nearby", color = if (isScanning) Color(0xFFFF80AB) else Color(0xFF2979FF), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                if (pairedDevices.isEmpty()) {
+                                    Text("No paired wireless gear found.", color = MikuTextSecondary, fontSize = 11.sp)
+                                } else {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        pairedDevices.forEach { devItem ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(if (devItem.isConnected) Color(0x222979FF) else Color(0x11FFFFFF))
+                                                    .border(1.dp, if (devItem.isConnected) Color(0xFF2979FF) else Color.Transparent, RoundedCornerShape(10.dp))
+                                                    .clickable {
+                                                        if (!devItem.isConnected && !devItem.isConnecting) {
+                                                            com.miku.player.bluetooth.MikuBluetoothController.connectDevice(devItem.device)
+                                                        }
+                                                    }
+                                                    .padding(10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = when (devItem.deviceType) {
+                                                        DeviceType.AUDIO_HEADSET, DeviceType.AUDIO_DAC -> Icons.Default.Headphones
+                                                        DeviceType.AUDIO_SPEAKER -> Icons.Default.Speaker
+                                                        DeviceType.PHONE_WATCH -> Icons.Default.PhoneAndroid
+                                                        DeviceType.INPUT_KEYBOARD_MOUSE -> Icons.Default.Computer
+                                                        else -> Icons.Default.Bluetooth
+                                                    },
+                                                    contentDescription = null,
+                                                    tint = if (devItem.isConnected) Color(0xFF00E5FF) else Color.White,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                                Spacer(Modifier.width(10.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(devItem.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text(
+                                                        text = when {
+                                                            devItem.isConnected -> "🟢 Active Audio Connection"
+                                                            devItem.isConnecting -> "🟡 Connecting..."
+                                                            else -> devItem.address
+                                                        },
+                                                        color = if (devItem.isConnected) Color(0xFF00E5FF) else if (devItem.isConnecting) Color(0xFFFFD54F) else MikuTextSecondary,
+                                                        fontSize = 9.5.sp
+                                                    )
+                                                }
+
+                                                Spacer(Modifier.width(6.dp))
+
+                                                if (devItem.isConnected) {
+                                                    Button(
+                                                        onClick = { com.miku.player.bluetooth.MikuBluetoothController.disconnectDevice(devItem.device) },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF5252)),
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.height(26.dp)
+                                                    ) {
+                                                        Text("Disconnect", color = Color(0xFFFF8A80), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                    }
+                                                } else if (devItem.isConnecting) {
+                                                    CircularProgressIndicator(
+                                                        color = Color(0xFF2979FF),
+                                                        modifier = Modifier.size(18.dp),
+                                                        strokeWidth = 2.dp
+                                                    )
+                                                } else {
+                                                    Button(
+                                                        onClick = { com.miku.player.bluetooth.MikuBluetoothController.connectDevice(devItem.device) },
+                                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2979FF)),
+                                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                        shape = RoundedCornerShape(8.dp),
+                                                        modifier = Modifier.height(26.dp)
+                                                    ) {
+                                                        Text("Connect", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                    }
+                                                }
+
+                                                Spacer(Modifier.width(4.dp))
+
+                                                IconButton(
+                                                    onClick = { com.miku.player.bluetooth.MikuBluetoothController.unpairDevice(devItem.device) },
+                                                    modifier = Modifier.size(26.dp)
+                                                ) {
+                                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Forget", tint = MikuTextSecondary, modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // Paired Devices
-                    item {
-                        Text("PAIRED BLUETOOTH DEVICES", color = Color(0xFF2979FF), fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, letterSpacing = 1.sp)
-                    }
-
-                    if (pairedDevices.isEmpty()) {
+                        // 3. Live Discovered Nearby Gear
                         item {
-                            Text("No paired accessories found.", color = MikuTextSecondary, fontSize = 11.sp)
-                        }
-                    } else {
-                        items(pairedDevices) { dev ->
-                            Box(
+                            Column(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
+                                    .clip(RoundedCornerShape(14.dp))
                                     .background(CyberGlassCard)
-                                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(12.dp))
-                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(14.dp))
+                                    .padding(12.dp)
                             ) {
-                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.Headphones, contentDescription = null, tint = Color(0xFF2979FF), modifier = Modifier.size(22.dp))
-                                    Spacer(Modifier.width(10.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text(dev.name ?: "Unknown Device", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        Text(dev.address, color = MikuTextSecondary, fontSize = 9.5.sp)
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text("AVAILABLE NEARBY GEAR", color = Color(0xFF2979FF), fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        if (isScanning) {
+                                            Spacer(Modifier.width(6.dp))
+                                            CircularProgressIndicator(color = Color(0xFF2979FF), modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                                        }
+                                    }
+
+                                    Button(
+                                        onClick = {
+                                            if (isScanning) {
+                                                com.miku.player.bluetooth.MikuBluetoothController.stopScan()
+                                            } else {
+                                                com.miku.player.bluetooth.MikuBluetoothController.startScan()
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = if (isScanning) Color(0x33FF4081) else Color(0x332979FF)),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Text(if (isScanning) "Stop" else "Scan", color = if (isScanning) Color(0xFFFF80AB) else Color(0xFF2979FF), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                if (discoveredDevices.isEmpty()) {
+                                    Text(if (isScanning) "Scanning for headphones, IEMs & wireless DACs..." else "Tap 'Scan' to discover nearby devices.", color = MikuTextSecondary, fontSize = 11.sp)
+                                } else {
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        discoveredDevices.forEach { devItem ->
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clip(RoundedCornerShape(10.dp))
+                                                    .background(Color(0x11FFFFFF))
+                                                    .clickable {
+                                                        com.miku.player.bluetooth.MikuBluetoothController.pairDevice(devItem.device)
+                                                    }
+                                                    .padding(10.dp),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Icon(
+                                                    imageVector = when (devItem.deviceType) {
+                                                        DeviceType.AUDIO_HEADSET, DeviceType.AUDIO_DAC -> Icons.Default.Headphones
+                                                        DeviceType.AUDIO_SPEAKER -> Icons.Default.Speaker
+                                                        DeviceType.PHONE_WATCH -> Icons.Default.PhoneAndroid
+                                                        DeviceType.INPUT_KEYBOARD_MOUSE -> Icons.Default.Computer
+                                                        else -> Icons.Default.Bluetooth
+                                                    },
+                                                    contentDescription = null,
+                                                    tint = Color(0xFF2979FF),
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(Modifier.width(10.dp))
+                                                Column(Modifier.weight(1f)) {
+                                                    Text(devItem.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text("${devItem.address} · Signal ${devItem.rssi} dBm", color = MikuTextSecondary, fontSize = 9.5.sp)
+                                                }
+                                                Button(
+                                                    onClick = { com.miku.player.bluetooth.MikuBluetoothController.pairDevice(devItem.device) },
+                                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x332979FF)),
+                                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    modifier = Modifier.height(26.dp)
+                                                ) {
+                                                    Text("Pair & Connect", color = Color(0xFF82B1FF), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 4. Hi-Res Audio Codecs Priority
+                        item {
+                            Column(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(CyberGlassCard)
+                                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(14.dp))
+                                    .padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("Hi-Res Codec Pipeline", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                listOf(
+                                    "LDAC (990 / 660 / 330 kbps 96kHz/24-Bit)" to Color(0xFF00E676),
+                                    "Qualcomm aptX HD (576 kbps 48kHz/24-Bit)" to Color(0xFF00E5FF),
+                                    "aptX Adaptive (Low Latency / Dynamic)" to Color(0xFF2979FF),
+                                    "AAC / SBC (Standard Audio Codec)" to MikuTextSecondary
+                                ).forEach { (codec, col) ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(Modifier.size(8.dp).clip(CircleShape).background(col))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(codec, color = Color.White, fontSize = 10.5.sp)
                                     }
                                 }
                             }

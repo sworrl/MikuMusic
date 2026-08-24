@@ -2001,7 +2001,7 @@ private fun MoldedRainbowHeart(
 
     Box(
         modifier = modifier
-            .size(42.dp)
+            .size(48.dp)
             .drawBehind {
                 if (!liked) drawCircle(
                     brush = Brush.radialGradient(listOf(theme.accent.copy(alpha = glowAlpha), Color.Transparent)),
@@ -2012,7 +2012,7 @@ private fun MoldedRainbowHeart(
     ) {
     Box(
         modifier = Modifier
-            .size(32.dp)
+            .size(38.dp)
             .clip(CircleShape)
             .semantics {
                 contentDescription = if (liked) "Unlike" else "Like"
@@ -2032,44 +2032,63 @@ private fun MoldedRainbowHeart(
                 )
             )
             .border(
-                width = 0.75.dp,
+                width = 1.dp,
                 brush = Brush.verticalGradient(
                     listOf(
-                        theme.bevelLo.copy(alpha = 0.85f),
-                        theme.bevelHi.copy(alpha = 0.55f)
+                        theme.bevelLo.copy(alpha = 0.90f),
+                        theme.bevelHi.copy(alpha = 0.60f)
                     )
                 ),
                 shape = CircleShape
             ),
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.size(17.dp).scale(pulse)) {
+        Canvas(Modifier.size(24.dp).scale(pulse)) {
             val w = size.width
             val h = size.height
             val hp = Path().apply {
-                moveTo(0.5f * w, 0.86f * h)
-                cubicTo(0.34f * w, 0.72f * h, 0.06f * w, 0.54f * h, 0.06f * w, 0.31f * h)
-                cubicTo(0.06f * w, 0.11f * h, 0.33f * w, 0.06f * h, 0.5f * w, 0.27f * h)
-                cubicTo(0.67f * w, 0.06f * h, 0.94f * w, 0.11f * h, 0.94f * w, 0.31f * h)
-                cubicTo(0.94f * w, 0.54f * h, 0.66f * w, 0.72f * h, 0.5f * w, 0.86f * h)
+                moveTo(0.5f * w, 0.88f * h)
+                cubicTo(0.32f * w, 0.73f * h, 0.05f * w, 0.53f * h, 0.05f * w, 0.30f * h)
+                cubicTo(0.05f * w, 0.10f * h, 0.31f * w, 0.05f * h, 0.5f * w, 0.26f * h)
+                cubicTo(0.69f * w, 0.05f * h, 0.95f * w, 0.10f * h, 0.95f * w, 0.30f * h)
+                cubicTo(0.95f * w, 0.53f * h, 0.68f * w, 0.73f * h, 0.5f * w, 0.88f * h)
                 close()
             }
 
             if (liked) {
-                // Drop shadow inside the recessed mold well
-                drawPath(hp, Color(0x66000000), style = Stroke(2.0f))
+                // 3D Physical Drop Shadow inside the mold
+                drawContext.canvas.save()
+                drawContext.canvas.translate(0f, 2.5f)
+                drawPath(hp, Color(0x90000000))
+                drawContext.canvas.restore()
 
                 // Flowing multi-stop rainbow spectrum
                 val cols = (0..6).map { Color.hsv(((it * 52) + phase) % 360f, 0.90f, 1f) }
                 drawPath(hp, Brush.linearGradient(cols, Offset(0f, h), Offset(w, 0f)))
 
-                // Glossy surface specular reflection
-                drawPath(hp, Color.White.copy(alpha = 0.20f))
-                drawPath(hp, Color.White.copy(alpha = 0.50f), style = Stroke(0.8f))
+                // 3D Embossed Specular Crest & Shadow Rims
+                val highlightBrush = Brush.linearGradient(
+                    listOf(Color.White.copy(alpha = 0.90f), Color.White.copy(alpha = 0.30f), Color.Transparent),
+                    Offset(0f, 0f), Offset(w, h)
+                )
+                drawPath(hp, highlightBrush, style = Stroke(width = 2.0f))
+                val shadowBrush = Brush.linearGradient(
+                    listOf(Color.Transparent, Color(0x75000000)),
+                    Offset(0f, 0f), Offset(w, h)
+                )
+                drawPath(hp, shadowBrush, style = Stroke(width = 1.8f))
+
+                // Glossy dome sheen
+                drawPath(hp, Color.White.copy(alpha = 0.18f))
             } else {
-                // Debossed engraved unliked heart outline melted into plastic
-                drawPath(hp, Color(0x66000000), style = Stroke(1.2f))
-                drawPath(hp, theme.engrave.copy(alpha = 0.65f), style = Stroke(0.85f))
+                // 3D Debossed engraved unliked heart cavity
+                drawContext.canvas.save()
+                drawContext.canvas.translate(0f, 1.5f)
+                drawPath(hp, Color(0x80000000))
+                drawContext.canvas.restore()
+
+                drawPath(hp, Color(0x60000000), style = Stroke(1.4f))
+                drawPath(hp, theme.engrave.copy(alpha = 0.85f), style = Stroke(1.0f))
             }
         }
     }

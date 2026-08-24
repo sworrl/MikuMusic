@@ -5,10 +5,10 @@
     <translate
         android:fromYDelta="0"
         android:toYDelta="-100%p"
-        android:duration="280"
+        android:duration="320"
         android:interpolator="@android:interpolator/accelerate_cubic" />
     <alpha
         android:fromAlpha="1.0"
-        android:toAlpha="0.4"
+        android:toAlpha="0.0"
         android:duration="280" />
 </set>

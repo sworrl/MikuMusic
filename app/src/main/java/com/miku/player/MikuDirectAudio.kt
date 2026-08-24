@@ -100,21 +100,38 @@ object MikuDirectAudio {
      * curve (DEFAULT_MEDIA_VOLUME_CURVE, 0 dB at index 100) then rules the whole range.
      */
     fun ensureFullVolumeRange(ctx: Context) {
-        if (Settings.Global.getString(ctx.contentResolver, KEY_VOLUME_LOCK) != "no") {
-            val ok = runCatching {
-                Settings.Global.putString(ctx.contentResolver, KEY_VOLUME_LOCK, "no")
-            }.getOrDefault(false)
-            if (!ok || Settings.Global.getString(ctx.contentResolver, KEY_VOLUME_LOCK) != "no") {
-                RootShell.execFast("settings put global $KEY_VOLUME_LOCK no")
-                RootShell.execFast("setprop $KEY_VOLUME_LOCK no")
-            }
-            Log.i(TAG, "ensureFullVolumeRange: volume_lock=${Settings.Global.getString(ctx.contentResolver, KEY_VOLUME_LOCK)}")
+        val cr = ctx.contentResolver
+        runCatching {
+            Settings.Global.putString(cr, KEY_VOLUME_LOCK, "no")
+            Settings.Global.putString(cr, "volum_tips_ce_flag", "yes")
+            Settings.Global.putInt(cr, "audio_safe_volume_state", 0)
+            Settings.System.putInt(cr, "max_volume_value", 100)
+            Settings.System.putInt(cr, "max_volume_value_preout", 100)
+            Settings.System.putInt(cr, "volume_music_headphone", 100)
+            Settings.System.putInt(cr, "volume_music_speaker", 100)
+            Settings.System.putInt(cr, "volume_music_headset", 100)
         }
+        RootShell.execFast(
+            "settings put global $KEY_VOLUME_LOCK no; " +
+            "settings put global volum_tips_ce_flag yes; " +
+            "settings put global audio_safe_volume_state 0; " +
+            "settings put system max_volume_value 100; " +
+            "settings put system max_volume_value_preout 100; " +
+            "settings put system volume_music_headphone 100; " +
+            "settings put system volume_music_speaker 100; " +
+            "settings put system volume_music_headset 100; " +
+            "setprop $KEY_VOLUME_LOCK no"
+        )
         // Live-apply: push the unlock into the audio HAL (what SystemUI's own receiver does) and
         // poke HibyBarTool's registered "volume_lock_state_update" receiver so the running
         // SystemUI drops its 35/40 cap without a reboot.
         pushToHal(ctx, KEY_VOLUME_LOCK, "no")
-        runCatching { ctx.sendBroadcast(Intent("volume_lock_state_update")) }
+        pushToHal(ctx, "volum_tips_ce_flag", "yes")
+        runCatching {
+            ctx.sendBroadcast(Intent("volume_lock_state_update"))
+            ctx.sendBroadcast(Intent("volum_tips_ce_flag_change"))
+            ctx.sendBroadcast(Intent("com.android.settings.action.MAX_VOLUME_CHANGED"))
+        }
     }
 
     /** Read the HAL's live direct-output state back for truthful verification. */

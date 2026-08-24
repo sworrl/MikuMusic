@@ -1,6 +1,7 @@
 package com.miku.player
 
 import android.content.Context
+import android.content.Intent
 import androidx.compose.runtime.mutableStateListOf
 
 /**
@@ -57,6 +58,23 @@ object LikeStore {
         val nowLiked = if (liked.contains(id)) { liked.remove(id); false } else { liked.add(id); true }
         PlayerPreferences.saveLikedTrack(ctx, id, nowLiked)
         if (nowLiked) PulsarLight.indicateHearted(ctx)
+        try {
+            android.provider.Settings.Global.putString(
+                ctx.contentResolver,
+                "miku_current_track_liked",
+                if (nowLiked) "1" else "0"
+            )
+            android.provider.Settings.Global.putLong(
+                ctx.contentResolver,
+                "miku_current_liked_track_id",
+                id
+            )
+            val out = Intent("com.miku.player.action.LIKE_STATE_CHANGED").apply {
+                putExtra("track_id", id)
+                putExtra("is_liked", nowLiked)
+            }
+            ctx.sendBroadcast(out)
+        } catch (_: Throwable) {}
         return nowLiked
     }
 

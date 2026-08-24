@@ -103,6 +103,25 @@ object MikuApiSecurity {
         headers: Map<String, String>,
         body: ByteArray
     ): AuthResult {
+        val cleanPath = path.substringBefore("?").trimEnd('/')
+
+        // Allow public Web Remote, TV Stage, Artwork, and Audio streaming endpoints
+        if (cleanPath.isEmpty() ||
+            cleanPath == "/remote" ||
+            cleanPath == "/connect" ||
+            cleanPath == "/tv" ||
+            cleanPath == "/stage" ||
+            cleanPath == "/favicon.ico" ||
+            cleanPath.startsWith("/api/v1/artwork") ||
+            cleanPath.startsWith("/api/v1/audio") ||
+            cleanPath.startsWith("/api/v1/status") ||
+            cleanPath.startsWith("/api/v1/playback") ||
+            cleanPath.startsWith("/api/v1/queue") ||
+            cleanPath.startsWith("/api/v1/library")
+        ) {
+            return AuthResult(true, "Public Web Remote / Media endpoint")
+        }
+
         if (!isAuthRequired(context)) {
             return AuthResult(true, "Authentication disabled")
         }

@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.miku.launcher.*
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -85,6 +86,8 @@ fun MikuAnatomicalObservatoryModal(
             Modifier
                 .fillMaxWidth(0.96f)
                 .fillMaxHeight(0.94f)
+                // System-gesture-style dismiss: swipe up starting at the bottom edge of the card.
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest)
                 .clip(CutCornerShape(16.dp))
                 .background(Color(0xFF030D12))
                 .border(

@@ -20,6 +20,14 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Permanently ensure Android framework recognizes device provisioning & user setup complete
+        // (AOSP MediaSessionService drops all global hardware media buttons if user_setup_complete == 0)
+        try {
+            val cr = applicationContext.contentResolver
+            android.provider.Settings.Secure.putInt(cr, "user_setup_complete", 1)
+            android.provider.Settings.Global.putInt(cr, "device_provisioned", 1)
+        } catch (_: Throwable) {}
+
         // Register the session up front. We drive the ExoPlayer directly from the Activity (no
         // MediaController), so onGetSession never fires on its own — without addSession() the
         // notification manager would never observe the player and no lockscreen control posts.
@@ -29,6 +37,14 @@ class PlaybackService : MediaLibraryService() {
         } catch (e: Throwable) {
             android.util.Log.e("PlaybackService", "Failed to start MikuApiServer", e)
         }
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == Intent.ACTION_MEDIA_BUTTON || intent?.action == "hiby_media_button_action") {
+            PlayerHolder.ensureSession(this)
+            PlayerHolder.ensureControllerConnected(this)
+        }
+        return super.onStartCommand(intent, flags, startId)
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession =

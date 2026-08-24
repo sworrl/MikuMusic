@@ -59,33 +59,11 @@
     <issue
         id="DefaultLocale"
         message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="                                text = String.format(&quot;%.1f&quot;, liveBpm),"
-        errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/bpm/MikuBpmObservatoryModal.kt"
-            line="266"
-            column="40"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
-        errorLine1="            text = if (calculatedBpm != null) &quot;✨ TAP BPM: ${String.format(&quot;%.1f&quot;, calculatedBpm)}&quot; else &quot;Tap in rhythm to calibrate live tempo&quot;,"
-        errorLine2="                                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/bpm/MikuBpmObservatoryModal.kt"
-            line="637"
-            column="61"/>
-    </issue>
-
-    <issue
-        id="DefaultLocale"
-        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
         errorLine1="                            Text(&quot;${String.format(&quot;%.2f&quot;, voltageMv / 1000f)}V&quot;, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)"
         errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/battery/MikuFullscreenChargingModal.kt"
-            line="305"
+            line="300"
             column="37"/>
     </issue>
 
@@ -96,7 +74,7 @@
         errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/battery/MikuFullscreenChargingModal.kt"
-            line="337"
+            line="332"
             column="37"/>
     </issue>
 
@@ -107,7 +85,7 @@
         errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/battery/MikuFullscreenChargingModal.kt"
-            line="358"
+            line="353"
             column="41"/>
     </issue>
 
@@ -140,7 +118,7 @@
         errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/thermal/MikuThermalObservatoryModal.kt"
-            line="261"
+            line="264"
             column="39"/>
     </issue>
 
@@ -162,7 +140,7 @@
         errorLine2="                                  ~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="3130"
+            line="3154"
             column="35"/>
     </issue>
 
@@ -800,7 +778,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="152"
+            line="153"
             column="20"/>
     </issue>
 
@@ -811,7 +789,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="157"
+            line="158"
             column="20"/>
     </issue>
 
@@ -822,7 +800,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="158"
+            line="159"
             column="20"/>
     </issue>
 
@@ -833,7 +811,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="159"
+            line="160"
             column="20"/>
     </issue>
 
@@ -844,7 +822,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="160"
+            line="161"
             column="20"/>
     </issue>
 
@@ -855,7 +833,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="167"
+            line="168"
             column="20"/>
     </issue>
 
@@ -866,7 +844,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="168"
+            line="169"
             column="20"/>
     </issue>
 
@@ -877,7 +855,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="169"
+            line="170"
             column="20"/>
     </issue>
 
@@ -888,7 +866,7 @@
         errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
-            line="174"
+            line="175"
             column="20"/>
     </issue>
 
@@ -948,61 +926,6 @@
     </issue>
 
     <issue
-        id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`MikuPlayer`)"
-        errorLine1="    override fun dispatchKeyEvent(event: KeyEvent): Boolean {"
-        errorLine2="                 ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/lockscreen/MikuLockscreenActivity.kt"
-            line="360"
-            column="18"/>
-    </issue>
-
-    <issue
-        id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`MikuPlayer`)"
-        errorLine1="            return super.dispatchKeyEvent(event)"
-        errorLine2="                         ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/lockscreen/MikuLockscreenActivity.kt"
-            line="362"
-            column="26"/>
-    </issue>
-
-    <issue
-        id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`MikuPlayer`)"
-        errorLine1="            return super.dispatchKeyEvent(event)"
-        errorLine2="                                          ~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/lockscreen/MikuLockscreenActivity.kt"
-            line="362"
-            column="43"/>
-    </issue>
-
-    <issue
-        id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`MikuPlayer`)"
-        errorLine1="        return super.dispatchKeyEvent(event)"
-        errorLine2="                     ~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/lockscreen/MikuLockscreenActivity.kt"
-            line="368"
-            column="22"/>
-    </issue>
-
-    <issue
-        id="RestrictedApi"
-        message="ComponentActivity.dispatchKeyEvent can only be called from within the same library group prefix (referenced groupId=`androidx.core` with prefix androidx from groupId=`MikuPlayer`)"
-        errorLine1="        return super.dispatchKeyEvent(event)"
-        errorLine2="                                      ~~~~~">
-        <location
-            file="src/main/java/com/miku/launcher/lockscreen/MikuLockscreenActivity.kt"
-            line="368"
-            column="39"/>
-    </issue>
-
-    <issue
         id="ModifierFactoryExtensionFunction"
         message="Modifier factory functions should be extensions on Modifier"
         errorLine1="private fun arcoCardModifier(accent: Color) = Modifier"
@@ -1031,7 +954,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="4392"
+            line="4416"
             column="5"/>
     </issue>
 
@@ -1042,7 +965,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="4444"
+            line="4468"
             column="5"/>
     </issue>
 
@@ -1053,7 +976,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/lockscreen/MikuLockscreenActivity.kt"
-            line="989"
+            line="999"
             column="5"/>
     </issue>
 
@@ -1064,7 +987,7 @@
         errorLine2="    ~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/network/MikuNetworkObservatoryModal.kt"
-            line="58"
+            line="59"
             column="5"/>
     </issue>
 
@@ -1203,11 +1126,33 @@
     <issue
         id="ObsoleteSdkInt"
         message="Unnecessary; SDK_INT is always >= 26"
+        errorLine1="                                                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {"
+        errorLine2="                                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/launcher/bpm/MikuBpmObservatoryModal.kt"
+            line="611"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 26"
+        errorLine1="                                                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {"
+        errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/launcher/bpm/MikuBpmObservatoryModal.kt"
+            line="728"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 26"
         errorLine1="                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {"
         errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/bpm/MikuBpmObservatoryModal.kt"
-            line="581"
+            line="1015"
             column="33"/>
     </issue>
 
@@ -1269,11 +1214,22 @@
     <issue
         id="AutoboxingStateCreation"
         message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
+        errorLine1="    var steadiness by remember { mutableStateOf(0f) }   // 0..1, higher = more even taps"
+        errorLine2="                                 ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/miku/launcher/bpm/MikuBpmObservatoryModal.kt"
+            line="903"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="AutoboxingStateCreation"
+        message="Prefer `mutableFloatStateOf` instead of `mutableStateOf`"
         errorLine1="    var cpuTempC by remember { mutableStateOf(34.0f) }"
         errorLine2="                               ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="715"
+            line="739"
             column="32"/>
     </issue>
 
@@ -1284,7 +1240,7 @@
         errorLine2="                                   ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="716"
+            line="740"
             column="36"/>
     </issue>
 
@@ -1295,7 +1251,7 @@
         errorLine2="        ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="4905"
+            line="4929"
             column="9"/>
     </issue>
 
@@ -1306,7 +1262,7 @@
         errorLine2="        ~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="4915"
+            line="4939"
             column="9"/>
     </issue>
 
@@ -2431,7 +2387,7 @@
         errorLine2="                                 ~~~~~~">
         <location
             file="src/main/java/com/miku/launcher/MikuLauncherActivity.kt"
-            line="2152"
+            line="2176"
             column="34"/>
     </issue>
 

@@ -20,9 +20,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Icon
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.IconButton
+import androidx.compose.ui.composed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -201,3 +203,61 @@ fun HapticIconButton(
         content = content
     )
 }
+
+/**
+ * Universal tactile press & release spring bounce modifier.
+ * Applies a smooth hardware-feel spring compression (0.92f) when pressed,
+ * bounces back smoothly on release, and triggers haptic tick.
+ */
+fun Modifier.mikuTactile(
+    hapticTick: Boolean = true,
+    pressedScale: Float = 0.92f,
+    onClick: (() -> Unit)? = null
+): Modifier = composed {
+    val ctx = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = 1200f),
+        label = "mikuTactileScale"
+    )
+
+    this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .then(
+            if (onClick != null) {
+                Modifier.clickable(
+                    interactionSource = interaction,
+                    indication = null
+                ) {
+                    if (hapticTick) {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        Haptics.tick(ctx)
+                    }
+                    onClick()
+                }
+            } else Modifier
+        )
+}
+
+fun Modifier.mikuBounce(
+    interactionSource: MutableInteractionSource,
+    pressedScale: Float = 0.93f
+): Modifier = composed {
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = 0.65f, stiffness = 1200f),
+        label = "mikuBounceScale"
+    )
+    this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
+}
+

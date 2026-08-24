@@ -110,6 +110,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -137,21 +138,21 @@ private val MikuColors = darkColorScheme(
 // kept at Material3's own defaults — only the typeface changes.
 private val MikuTypography = Typography().let { d ->
     d.copy(
-        displayLarge = d.displayLarge.copy(fontFamily = AudiowideFont),
-        displayMedium = d.displayMedium.copy(fontFamily = AudiowideFont),
-        displaySmall = d.displaySmall.copy(fontFamily = AudiowideFont),
-        headlineLarge = d.headlineLarge.copy(fontFamily = RighteousFont),
-        headlineMedium = d.headlineMedium.copy(fontFamily = RighteousFont),
-        headlineSmall = d.headlineSmall.copy(fontFamily = RighteousFont),
-        titleLarge = d.titleLarge.copy(fontFamily = RighteousFont),
-        titleMedium = d.titleMedium.copy(fontFamily = RighteousFont),
-        titleSmall = d.titleSmall.copy(fontFamily = RighteousFont),
-        bodyLarge = d.bodyLarge.copy(fontFamily = Baloo2Font),
-        bodyMedium = d.bodyMedium.copy(fontFamily = Baloo2Font),
-        bodySmall = d.bodySmall.copy(fontFamily = Baloo2Font),
-        labelLarge = d.labelLarge.copy(fontFamily = OrbitronFont),
-        labelMedium = d.labelMedium.copy(fontFamily = OrbitronFont),
-        labelSmall = d.labelSmall.copy(fontFamily = OrbitronFont),
+        displayLarge = d.displayLarge.copy(fontFamily = AudiowideFont, fontSize = 62.sp),
+        displayMedium = d.displayMedium.copy(fontFamily = AudiowideFont, fontSize = 50.sp),
+        displaySmall = d.displaySmall.copy(fontFamily = AudiowideFont, fontSize = 42.sp),
+        headlineLarge = d.headlineLarge.copy(fontFamily = RighteousFont, fontSize = 38.sp),
+        headlineMedium = d.headlineMedium.copy(fontFamily = RighteousFont, fontSize = 34.sp),
+        headlineSmall = d.headlineSmall.copy(fontFamily = RighteousFont, fontSize = 29.sp),
+        titleLarge = d.titleLarge.copy(fontFamily = RighteousFont, fontSize = 27.sp),
+        titleMedium = d.titleMedium.copy(fontFamily = RighteousFont, fontSize = 21.sp),
+        titleSmall = d.titleSmall.copy(fontFamily = RighteousFont, fontSize = 19.sp),
+        bodyLarge = d.bodyLarge.copy(fontFamily = Baloo2Font, fontSize = 21.sp),
+        bodyMedium = d.bodyMedium.copy(fontFamily = Baloo2Font, fontSize = 18.5.sp),
+        bodySmall = d.bodySmall.copy(fontFamily = Baloo2Font, fontSize = 16.sp),
+        labelLarge = d.labelLarge.copy(fontFamily = OrbitronFont, fontSize = 18.5.sp),
+        labelMedium = d.labelMedium.copy(fontFamily = OrbitronFont, fontSize = 16.5.sp),
+        labelSmall = d.labelSmall.copy(fontFamily = OrbitronFont, fontSize = 15.sp),
     )
 }
 
@@ -192,11 +193,13 @@ fun Modifier.pressableGlassCard(
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ): Modifier {
+    val ctx = LocalContext.current
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        if (pressed) 0.965f else 1f,
-        spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow),
+        targetValue = if (pressed) 0.935f else 1f,
+        animationSpec = spring(dampingRatio = 0.60f, stiffness = 1200f),
         label = "cardPress"
     )
     return this
@@ -205,8 +208,18 @@ fun Modifier.pressableGlassCard(
         .combinedClickable(
             interactionSource = interaction,
             indication = LocalIndication.current,
-            onLongClick = onLongClick,
-            onClick = onClick
+            onLongClick = onLongClick?.let {
+                {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    Haptics.tick(ctx)
+                    it()
+                }
+            },
+            onClick = {
+                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                Haptics.tick(ctx)
+                onClick()
+            }
         )
 }
 
@@ -357,9 +370,9 @@ class MainActivity : ComponentActivity() {
         if (intent?.getBooleanExtra(UpdateManager.EXTRA_JUST_UPDATED, false) == true) {
             UpdateOverlay.mode.value = UpdateOverlayMode.RESUMING
         }
-        requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         player = PlayerHolder.ensure(this)
         PlayerHolder.ensureSession(this)                                  // branded lockscreen/notification control
+        PlayerHolder.ensureControllerConnected(this)                      // keep service foreground & active for screen-off hardware keys
         try {
             com.miku.player.api.MikuApiServer.start(this)
         } catch (e: Throwable) {
@@ -388,31 +401,27 @@ class MainActivity : ComponentActivity() {
             }
         }.also { player.addListener(it) }
         LibraryDaemonService.start(this)
-        // Wire app-wide hardware/UX managers once at startup (previously implemented but never started).
+        // Permanently ensure Android framework recognizes device provisioning & user setup complete
+        // (AOSP MediaSessionService drops all global hardware media buttons if user_setup_complete == 0)
+        try {
+            val cr = applicationContext.contentResolver
+            android.provider.Settings.Secure.putInt(cr, "user_setup_complete", 1)
+            android.provider.Settings.Global.putInt(cr, "device_provisioned", 1)
+        } catch (_: Throwable) {}
+
         try { MikuPocketLockManager.init(this) } catch (t: Throwable) { android.util.Log.e("MainActivity", "MikuPocketLockManager.init failed", t) }
         try { com.miku.player.volume.MikuVolumeManager.init(this) } catch (t: Throwable) { android.util.Log.e("MainActivity", "MikuVolumeManager.init failed", t) }
+        try { com.miku.player.screentime.MikuSmartScreenTimeEngine.init(this) } catch (t: Throwable) { android.util.Log.e("MainActivity", "MikuSmartScreenTimeEngine.init failed", t) }
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         window.statusBarColor = android.graphics.Color.TRANSPARENT
-        // NOTE: do NOT set FLAG_FULLSCREEN here — it force-hides the status bar, which makes a
-        // swipe from the top edge reveal only a transient bar instead of pulling down the system
-        // notification shade / quick settings. We keep the layout edge-to-edge (NO_LIMITS + the
-        // transparent status bar set above) but leave the status bar itself available.
-        window.addFlags(
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        )
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        window.decorView.setOnSystemUiVisibilityChangeListener { visibility ->
-            // Re-hide only the navigation bar when it reappears; the status bar stays available so
-            // the notification shade can be pulled down from the top edge.
-            if ((visibility and android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) == 0) {
-                hideSystemBars()
-            }
-        }
-        hideSystemBars()
+        val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.isAppearanceLightStatusBars = false
+        insetsController.isAppearanceLightNavigationBars = false
         setContent {
             MaterialTheme(colorScheme = MikuColors, typography = MikuTypography) {
                 var granted by remember { mutableStateOf(hasAudioPermission()) }
@@ -423,26 +432,24 @@ class MainActivity : ComponentActivity() {
                 Surface(color = Ground, modifier = Modifier.fillMaxSize()) {
                     if (granted) {
                         var refresh by remember { mutableStateOf(0) }
-                        // LibraryScanService now drives the actual scan (see rescan()'s doc
-                        // comment) independently of whether this Activity is even in the
-                        // foreground, so the UI can't rely solely on a completion callback out of
-                        // scan code anymore — it polls ScanProgress.generation instead, the same
-                        // counter the service bumps on every live-progress refresh and on finish.
                         var lastSeenGen by remember { mutableStateOf(ScanProgress.generation.get()) }
                         LaunchedEffect(Unit) {
                             while (true) {
                                 val g = ScanProgress.generation.get()
-                                if (g != lastSeenGen) { lastSeenGen = g; refresh++ }
-                                delay(500)
+                                if (g != lastSeenGen) {
+                                    lastSeenGen = g
+                                    refresh++
+                                }
+                                delay(2500L)
                             }
                         }
-                        // Instant binary cache for 0ms cold start (<10ms for 20k tracks)
+                        // Instant binary cache for 0ms cold start
                         val cachedTracks = remember { FastLibraryStore.loadSync(this@MainActivity) ?: emptyList() }
                         var hasLoadedOnce by remember { mutableStateOf(cachedTracks.isNotEmpty()) }
                         val tracks by produceState(initialValue = cachedTracks, refresh) {
                             val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { queryTracks() }
                             hasLoadedOnce = true
-                            if (value.isEmpty() || result.size != value.size || result.firstOrNull()?.id != value.firstOrNull()?.id || result.lastOrNull()?.id != value.lastOrNull()?.id) {
+                            if (value.isEmpty() || result.size != value.size || (result.isNotEmpty() && value.isNotEmpty() && (result.first().id != value.first().id || result.last().id != value.last().id))) {
                                 value = result
                                 FastLibraryStore.saveAsync(this@MainActivity, result)
                             }
@@ -454,6 +461,12 @@ class MainActivity : ComponentActivity() {
                             App(tracks, player, loading = !hasLoadedOnce, onScan = { rescan {} }) { list, i -> play(list, i) }
                             if (idleTier == IdleTier.AMBIENT || idleTier == IdleTier.OFF) AmbientOverlay(player, Modifier.fillMaxSize())
                             UpdateOverlayScreen(Modifier.fillMaxSize())
+                            com.miku.player.volume.MikuCyberVolumeHudOverlay(
+                                ctx = this@MainActivity,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(top = 92.dp, end = 4.dp)
+                            )
                         }
                     } else PermissionPrompt { launcher.launch(permissionsToRequest()) }
                 }
@@ -478,27 +491,18 @@ class MainActivity : ComponentActivity() {
         sustainedPerfListener?.let { player.removeListener(it) }
         runCatching { unregisterReceiver(updateStartingReceiver) }
         runCatching { unregisterReceiver(screenOffReceiver) }
-        // Safety net alongside onPause below — never leave every core pinned at max clock if the
-        // process is going away, root or not (RootShell/CpuPerformance no-op cleanly without root).
+        try { com.miku.player.screentime.MikuSmartScreenTimeEngine.stop() } catch (_: Throwable) {}
         kotlinx.coroutines.MainScope().launch { CpuPerformance.onBackground(this@MainActivity) }
         super.onDestroy()
     }
 
-    // Releases the CPU-performance pin (if the root-gated Settings toggle has it on) the instant
-    // the app leaves the foreground — pinning every core at max clock while backgrounded is pure
-    // battery/thermal waste with zero benefit. onResume below reapplies it if still enabled.
     override fun onPause() {
         super.onPause()
+        try { com.miku.player.screentime.MikuSmartScreenTimeEngine.stop() } catch (_: Throwable) {}
         lifecycleScope.launch { CpuPerformance.onBackground(this@MainActivity) }
         lifecycleScope.launch(Dispatchers.IO) { TrackTech.flushPending() }
     }
 
-    // Real system memory pressure, confirmed live: lowmemorykiller reaping this whole process
-    // (audio playback included) rather than negotiating — "critical pressure, device is low on
-    // memory" while the projectM visualizer alone was tracking ~185MB of native/GL/EGL memory.
-    // React BEFORE that happens: tear the GL surface down ourselves so the OS doesn't have to kill
-    // the process to reclaim it. RUNNING_LOW/RUNNING_CRITICAL are level 10/15 (foreground process
-    // trim scale) — exactly the range this device was hitting while actively being looked at.
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
@@ -507,22 +511,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hideSystemBars() {
-        // Draw edge-to-edge behind TRANSPARENT system bars, but DO NOT hide the
-        // navigation bar. On this device the OS uses gesture navigation (mode 2),
-        // whose swipe-back / swipe-up-home live in the navigation-bar inset region —
-        // hiding that bar (the old IMMERSIVE_STICKY + hide(navigationBars())) removed
-        // all OS navigation from Miku Music (user couldn't get back/home). Keep the
-        // bars present (they're just invisible gesture areas in gesture mode) so nav
-        // works, while content still renders full-bleed via setDecorFitsSystemWindows(false).
         try {
-            window.decorView.systemUiVisibility = (
-                android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            )
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
             insetsController.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
         } catch (_: Throwable) {}
     }
 
@@ -532,12 +526,8 @@ class MainActivity : ComponentActivity() {
         VisualizerMemoryGuard.release()
         IdleController.loadPrefs(this)
         IdleController.poke(this)
-        // Defensive, redundant with screenOffReceiver: if the process was killed/crashed between
-        // ScreenOffHelper shrinking the timeout and the screen actually turning off, this is the
-        // self-heal — never leave the user's real system screen-off timeout wrong indefinitely.
+        try { com.miku.player.screentime.MikuSmartScreenTimeEngine.start(this) } catch (_: Throwable) {}
         ScreenOffHelper.restore(this)
-        // Reapply the CPU-performance pin if the user has it on (onPause released it while
-        // backgrounded); no-op without root either way.
         lifecycleScope.launch {
             CpuPerformance.applyIfEnabled(this@MainActivity)
             CpuPerformance.restoreIfStranded(this@MainActivity)
@@ -557,9 +547,15 @@ class MainActivity : ComponentActivity() {
         IdleController.poke(this)
     }
 
-    // Hardware transport keys (M500 side buttons / headset)
+    // Hardware transport keys & gesture chords (M500 side buttons / headset)
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         IdleController.poke(this)
+        if (com.miku.player.volume.MikuVolumeManager.handleKeyDown(keyCode, this)) {
+            return true
+        }
+        if (MikuHardwareGestureEngine.onKeyDown(keyCode, event, this)) {
+            return true
+        }
         when (keyCode) {
             android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
             android.view.KeyEvent.KEYCODE_HEADSETHOOK -> {
@@ -591,6 +587,13 @@ class MainActivity : ComponentActivity() {
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: android.view.KeyEvent?): Boolean {
+        if (MikuHardwareGestureEngine.onKeyUp(keyCode, event)) {
+            return true
+        }
+        return super.onKeyUp(keyCode, event)
     }
 
     private fun isSupportedDevice(): Boolean {
@@ -791,6 +794,9 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
             controller.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
         }
     }
+    LaunchedEffect(showFullNowPlaying, showTape) {
+        com.miku.player.screentime.MikuSmartScreenTimeEngine.isNowPlayingOrTapeActive = showFullNowPlaying || showTape
+    }
     val appScope = rememberCoroutineScope()
 
     var isPlaying by remember { mutableStateOf(false) }
@@ -928,6 +934,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
         val l = object : Player.Listener {
             override fun onIsPlayingChanged(p: Boolean) {
                 isPlaying = p
+                com.miku.player.screentime.MikuSmartScreenTimeEngine.isAudioPlaying = p
                 PlayerPreferences.saveWasPlaying(ctx, p)
                 if (currentTrack != null) {
                     PlayerPreferences.saveLastPlayback(ctx, currentTrack!!.id, player.currentPosition)
@@ -1033,19 +1040,9 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
             tab == Tab.SONGS -> tab = Tab.GENRES
         }
     }
-    // System back — hardware key AND the Pixel-style edge-swipe gesture — previously fell straight
-    // through to the Activity default (minimize/exit) from every one of these nested screens, since
-    // navigation here is plain state, not a NavController with its own back stack.
-    // (showScanDialog isn't listed — Compose's Dialog already intercepts back on its own.)
+    // System back — hardware key AND the Pixel-style edge-swipe gesture — smoothly pops nested screens
+    // and falls back to system gesture navigation / minimize to launcher when at root.
     androidx.activity.compose.BackHandler(enabled = canGoBack, onBack = performBack)
-    androidx.activity.compose.BackHandler(enabled = !canGoBack) {
-        val act = ctx as? android.app.Activity
-        if (act != null) {
-            if (!act.moveTaskToBack(false)) {
-                act.finish()
-            }
-        }
-    }
 
     // Header + tab bar now float over the scrolling content as a real frosted-glass panel
     // (genuine Haze backdrop blur of whatever's currently scrolled underneath them) instead of
@@ -1141,62 +1138,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 onArtistClick = openArtistByName,
                 onAlbumClick = openAlbumByName
             )
-
-            // Bottom gesture handle: swiping up from bottom returns home on ANY system (stock M500 or MikuOS)
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(28.dp)
-                    .pointerInput(Unit) {
-                        var totalY = 0f
-                        detectDragGestures(
-                            onDragStart = { totalY = 0f },
-                            onDragEnd = {
-                                if (totalY < -20f) {
-                                    val act = ctx as? android.app.Activity
-                                    if (act != null) {
-                                        if (!act.moveTaskToBack(false)) {
-                                            act.finish()
-                                        }
-                                    }
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                totalY += dragAmount.y
-                            }
-                        )
-                    }
-            )
         }
-        // Top gesture zone: swiping down from top edge pulls down notification shade / quick settings
-        Box(
-            Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .height(36.dp)
-                .pointerInput(Unit) {
-                    var totalY = 0f
-                    detectVerticalDragGestures(
-                        onDragStart = { totalY = 0f },
-                        onDragEnd = {
-                            if (totalY > 15f) {
-                                expandNotificationShade(ctx)
-                            }
-                        },
-                        onVerticalDrag = { change, dragAmount ->
-                            if (dragAmount > 0) {
-                                totalY += dragAmount
-                                if (totalY > 20f) {
-                                    change.consume()
-                                    expandNotificationShade(ctx)
-                                    totalY = 0f
-                                }
-                            }
-                        }
-                    )
-                }
-        )
         Column(
             Modifier
                 .align(Alignment.TopStart)
@@ -2145,9 +2087,14 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
     var newFound by remember { mutableIntStateOf(0) }
     var tagsScanned by remember { mutableIntStateOf(0) }
     var tagsTotal by remember { mutableIntStateOf(0) }
+    var currentFile by remember { mutableStateOf("") }
+    var speed by remember { mutableFloatStateOf(0f) }
     var resultDelta by remember { mutableIntStateOf(0) }
+    var resultTotal by remember { mutableIntStateOf(0) }
     var resultAlbums by remember { mutableIntStateOf(0) }
     var resultArtists by remember { mutableIntStateOf(0) }
+    var formatSummary by remember { mutableStateOf("") }
+
     LaunchedEffect(Unit) {
         while (true) {
             active = ScanProgress.active
@@ -2156,23 +2103,22 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
             newFound = ScanProgress.newFound.get()
             tagsScanned = ScanProgress.tagsScanned.get()
             tagsTotal = ScanProgress.tagsTotal
+            currentFile = ScanProgress.currentFile
+            speed = ScanProgress.speedTracksPerSec
             resultDelta = ScanProgress.resultDelta
+            resultTotal = ScanProgress.resultTotal
             resultAlbums = ScanProgress.resultAlbums
             resultArtists = ScanProgress.resultArtists
-            delay(120)
+            formatSummary = ScanProgress.formatSummary
+            delay(80L)
         }
     }
-    // Once the scan finishes, leave the result up briefly so it actually gets read, then close
-    // itself — still closeable early via the X at any point.
-    LaunchedEffect(active) { if (!active) { delay(2500); onDismissRequest() } }
-    // Was a system Dialog(), which draws to its own separate Android window — Haze can't blur
-    // "through" to another window's content, only within the same composition. Now a plain
-    // in-app overlay sharing App()'s own hazeState, so the card behind it is REAL blur of
-    // whatever's on screen, not a system Dialog's default dim scrim. Back press still dismisses.
+    // Once scan completes, keep result visible for 4s so user can read complete breakdown
+    LaunchedEffect(active) { if (!active) { delay(4000L); onDismissRequest() } }
     androidx.activity.compose.BackHandler(onBack = onDismissRequest)
     Box(
         Modifier.fillMaxSize()
-            .background(Color(0x59000000))
+            .background(Color(0x77000000))
             .clickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                 indication = null
@@ -2185,93 +2131,152 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 .clickable(
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
                     indication = null
-                ) {}   // swallow taps so they don't fall through to the dismiss-scrim below
+                ) {}
         ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 240.dp)
-                .hazeChild(
-                    state = hazeState,
-                    shape = RoundedCornerShape(20.dp),
-                    style = HazeMaterials.thick(Color(0xFF14122A))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 260.dp)
+                    .hazeChild(
+                        state = hazeState,
+                        shape = RoundedCornerShape(22.dp),
+                        style = HazeMaterials.thick(Color(0xFF0F1522))
+                    )
+                    .border(1.5.dp, Brush.horizontalGradient(listOf(MikuCyan.copy(alpha = 0.8f), MikuNeonPink.copy(alpha = 0.6f))), RoundedCornerShape(22.dp))
+            ) {
+                androidx.compose.foundation.Image(
+                    painter = androidx.compose.ui.res.painterResource(MikuArt.djMegaphone),
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    alignment = Alignment.TopCenter,
+                    alpha = 0.22f,
+                    modifier = Modifier.matchParentSize().clip(RoundedCornerShape(22.dp))
                 )
-                .border(1.2.dp, Brush.horizontalGradient(listOf(MikuTealBright.copy(alpha = 0.6f), MikuPink.copy(alpha = 0.5f))), RoundedCornerShape(20.dp))
-        ) {
-            // Mascot as a semi-transparent texture baked INTO the card background, not a foreground
-            // sticker bolted on top — legible (art itself, not just a silhouette) but low-alpha
-            // enough that it never competes with the actual scan status text drawn over it. Card
-            // now has a floor on its height (was collapsing to fit its short text content, which
-            // made a very wide/short crop window that chopped the square art's centered subject
-            // down to an off-looking strip) and the art is top-anchored, not center-cropped, so her
-            // face/upper body always survives the crop regardless of how short the card gets.
-            androidx.compose.foundation.Image(
-                painter = androidx.compose.ui.res.painterResource(MikuArt.djMegaphone),
-                contentDescription = null,
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                alignment = Alignment.TopCenter,
-                alpha = 0.26f,
-                modifier = Modifier.matchParentSize().clip(RoundedCornerShape(20.dp))
-            )
-            Column(modifier = Modifier.padding(18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    if (active) Icons.Default.Refresh else Icons.Default.Check,
-                    contentDescription = null, tint = MikuTealBright, modifier = Modifier.size(20.dp)
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    if (active) "Scanning Library" else "Scan Complete",
-                    color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f)
-                )
-                HapticIconButton(onClick = onDismissRequest) {
-                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(20.dp))
+                Column(modifier = Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            if (active) Icons.Default.Refresh else Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = if (active) MikuCyan else Color(0xFF00E676),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            if (active) "Ingesting Audio Library" else "Library Ingestion Complete",
+                            color = Color.White,
+                            fontSize = 15.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont,
+                            modifier = Modifier.weight(1f)
+                        )
+                        HapticIconButton(onClick = onDismissRequest) {
+                            Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Color.White.copy(alpha = 0.8f), modifier = Modifier.size(20.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    if (!active) {
+                        Text(
+                            if (resultDelta > 0) "✓ Added $resultDelta new track${if (resultDelta == 1) "" else "s"}" else "✓ Library fully synchronized",
+                            color = MikuCyan,
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontFamily = AudiowideFont
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "📊 $resultTotal total tracks · $resultAlbums albums · $resultArtists artists",
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        if (formatSummary.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "🎵 $formatSummary",
+                                color = Color(0xFF80D8FF),
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    } else {
+                        val isIndexing = tagsTotal > 0
+                        val progressFraction = if (isIndexing) (tagsScanned.toFloat() / tagsTotal.toFloat()).coerceIn(0f, 1f) else 0f
+                        val pct = (progressFraction * 100f).toInt()
+
+                        Text(
+                            if (isIndexing) "Indexing audio tags & metadata ($pct%)" else phase,
+                            color = MikuCyan,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        if (isIndexing) {
+                            LinearProgressIndicator(
+                                progress = { progressFraction },
+                                modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(3.5.dp)),
+                                color = MikuCyan,
+                                trackColor = Color(0xFF10323C)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    "$tagsScanned / $tagsTotal tracks indexed",
+                                    color = Color.White.copy(alpha = 0.95f),
+                                    fontSize = 12.5.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (speed > 0) {
+                                    Text(
+                                        "⚡ ${String.format(java.util.Locale.US, "%.0f", speed)} trk/s",
+                                        color = MikuNeonPink,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontFamily = AudiowideFont
+                                    )
+                                }
+                            }
+                        } else {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(3.5.dp)),
+                                color = MikuCyan,
+                                trackColor = Color(0xFF10323C)
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "🔍 Walked $visited files · Discovered $newFound new files",
+                                color = Color.White.copy(alpha = 0.9f),
+                                fontSize = 12.5.sp,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+
+                        if (currentFile.isNotBlank()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text(
+                                "📄 $currentFile",
+                                color = Color.White.copy(alpha = 0.65f),
+                                fontSize = 10.5.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Background ingestion running · Zero audio playback stutter.",
+                            color = Color.White.copy(alpha = 0.45f),
+                            fontSize = 10.sp
+                        )
+                    }
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            if (!active) {
-                Text(
-                    if (resultDelta > 0) "✓ Found $resultDelta new track${if (resultDelta == 1) "" else "s"}" else "✓ Library up to date",
-                    color = MikuTealBright, fontSize = 14.sp, fontWeight = FontWeight.Bold
-                )
-                if (resultAlbums > 0 || resultArtists > 0) {
-                    Spacer(Modifier.height(3.dp))
-                    Text(
-                        "$resultAlbums album${if (resultAlbums == 1) "" else "s"} · $resultArtists artist${if (resultArtists == 1) "" else "s"}",
-                        color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp
-                    )
-                }
-            } else {
-                Text(phase, color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
-                Spacer(Modifier.height(8.dp))
-                if (phase == "Reading tags…" && tagsTotal > 0) {
-                    LinearProgressIndicator(
-                        progress = { tagsScanned.toFloat() / tagsTotal.toFloat() },
-                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                        color = MikuTealBright,
-                        trackColor = Color(0xFF12383A)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("$tagsScanned / $tagsTotal tracks tagged", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
-                } else {
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                        color = MikuTealBright,
-                        trackColor = Color(0xFF12383A)
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("$visited files checked", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
-                    Text("$newFound new tracks found so far", color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
-                }
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "Runs in the background — closing this doesn't stop it.",
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = 11.sp
-                )
-            }
-            }
-        }
         }
     }
 }
@@ -2434,8 +2439,8 @@ private fun tabColor(t: Tab): Color = when (t) {
             androidx.compose.material3.Tab(
                 selected = t == sel,
                 onClick = { if (t != sel) Haptics.tick(ctx); onSel(t) },
-                modifier = Modifier.height(36.dp),
-                text = { Text(t.label, color = labelColor, fontWeight = if (t == sel) FontWeight.Bold else FontWeight.Normal, fontFamily = RighteousFont, fontSize = 13.5.sp, letterSpacing = 0.5.sp) })
+                modifier = Modifier.height(42.dp).mikuTactile(hapticTick = false, pressedScale = 0.90f),
+                text = { Text(t.label, color = labelColor, fontWeight = if (t == sel) FontWeight.Bold else FontWeight.Normal, fontFamily = RighteousFont, fontSize = 18.sp, letterSpacing = 0.5.sp) })
         }
     }
 }
@@ -2551,6 +2556,11 @@ private fun tabColor(t: Tab): Color = when (t) {
                     onClick = { if (highlight.tracks.isNotEmpty()) onPlay(highlight.tracks, 0) }
                 )
             }
+        }
+
+        // 1.5. "What vibe are you feeling?" / Vibe Alchemist Prompt Bar & Randomizer
+        item {
+            MikuVibePromptCard(tracks = tracks, onPlay = onPlay)
         }
 
         // 2. Daily Highlight Tracks Carousel
@@ -3257,23 +3267,49 @@ fun MikuEmptyState(
                         val a = filteredArtists[i]
                         val rowCtx = LocalContext.current
                         val reprTrack = a.coverTrack(rowCtx)
+                        val aQuality = remember(a.tracks) { TrackTech.computeQualityBreakdown(rowCtx, a.tracks) }
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)
                                 .pressableGlassCard { onOpen(a) }
                                 .padding(horizontal = 12.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (reprTrack != null) {
-                                AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(50)), trackPath = reprTrack.path)
-                            } else {
-                                CircleArt()
+                            Box(Modifier.size(48.dp)) {
+                                if (reprTrack != null) {
+                                    AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(50)), trackPath = reprTrack.path)
+                                } else {
+                                    CircleArt()
+                                }
+                                // Circular Glanceable Quality Symbol Overlay (over bottom-end of avatar)
+                                AudioQualityCrestOverlay(
+                                    breakdown = aQuality,
+                                    modifier = Modifier.align(Alignment.BottomEnd).offset(x = 2.dp, y = 2.dp),
+                                    size = 18.dp
+                                )
                             }
                             Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) {
                                 Text(a.name, color = if (LikeStore.isArtistLiked(a.name, rowCtx)) MikuTeal else Color(0xFFE8F4F2), fontSize = 16.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontFamily = Baloo2Font)
-                                Text("${a.tracks.size} tracks · ${a.albumCount} albums", color = Muted, fontSize = 12.5.sp, fontFamily = Baloo2Font)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text("${a.tracks.size} tracks · ${a.albumCount} albums", color = Muted, fontSize = 12.5.sp, fontFamily = Baloo2Font)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("·", color = Muted.copy(alpha = 0.5f), fontSize = 12.sp)
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        aQuality.specTag,
+                                        color = when (aQuality.highestTier) {
+                                            4 -> Color(0xFFDFB8FF)
+                                            3 -> Color(0xFFFFD166)
+                                            2 -> MikuTealBright
+                                            else -> Muted
+                                        },
+                                        fontSize = 11.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
-                            QualityGauge(TrackTech.weightedQuality(rowCtx, a.tracks), modifier = Modifier.size(20.dp))
                             Spacer(Modifier.width(6.dp))
                             HapticIconButton(onClick = { onShuffle(a) }) {
                                 Icon(Icons.Default.Shuffle, "Shuffle Artist", tint = MikuTealBright, modifier = Modifier.size(20.dp))
@@ -3553,6 +3589,11 @@ private fun ArtistSortSettingsModal(
                         fontWeight = FontWeight.Medium
                     )
 
+                    // Glanceable Audio Fidelity Spec Line for Artist
+                    val artistQualityBreakdown = remember(a.tracks) { TrackTech.computeQualityBreakdown(ctx, a.tracks) }
+                    Spacer(Modifier.height(6.dp))
+                    AudioQualitySpecLine(artistQualityBreakdown)
+
                     Spacer(Modifier.height(10.dp))
 
                     // Action Row: Play All, Shuffle, Rainbow Heart
@@ -3604,12 +3645,10 @@ private fun ArtistSortSettingsModal(
                     albums.forEachIndexed { i, al ->
                         val albumRepr = al.tracks.firstOrNull()
                         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                        val alQuality = remember(al.tracks) { TrackTech.computeQualityBreakdown(ctx, al.tracks) }
                         Column(
                             Modifier.width(112.dp).padding(vertical = 2.dp).combinedClickable(
                                 onClick = { onAlbum(al) },
-                                // Long-press to pin THIS album's art as the artist's cover — the
-                                // default (whatever track sorts first) is often not the album the
-                                // user actually associates with the artist.
                                 onLongClick = {
                                     if (albumRepr != null) {
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
@@ -3632,11 +3671,29 @@ private fun ArtistSortSettingsModal(
                                     Icon(Icons.Default.PushPin, "Pinned as cover", tint = MikuPink,
                                         modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(16.dp))
                                 }
+                                // Glanceable Quality Crest Overlay
+                                AudioQualityCrestOverlay(
+                                    breakdown = alQuality,
+                                    modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp),
+                                    size = 22.dp
+                                )
                             }
                             Spacer(Modifier.height(6.dp))
                             Text(al.name, color = Color(0xFFE8F4F2), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             val yr = al.tracks.firstOrNull { it.year > 0 }?.year ?: 0
-                            Text("${al.tracks.size} tracks${if (yr > 0) " · $yr" else ""}", color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(
+                                alQuality.specTag,
+                                color = when (alQuality.highestTier) {
+                                    4 -> Color(0xFFDFB8FF)
+                                    3 -> Color(0xFFFFD166)
+                                    2 -> MikuTealBright
+                                    else -> Muted
+                                },
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
@@ -3710,12 +3767,15 @@ private fun ArtistSortSettingsModal(
                                 )
                                 .padding(8.dp)
                         ) {
-                            val bestBitsTrack = remember(al.tracks) { al.tracks.maxByOrNull { TrackTech.bitsFor(ctx, it) ?: -1 } }
-                            val bestSrTrack = remember(al.tracks) { al.tracks.maxByOrNull { TrackTech.sampleRateFor(ctx, it) ?: -1 } }
-                            val tileBits = bestBitsTrack?.let { TrackTech.bitsFor(ctx, it) }
-                            val tileSr = bestSrTrack?.let { TrackTech.sampleRateFor(ctx, it) }
-
-                            Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))) {
+                            val alQuality = remember(al.tracks) { TrackTech.computeQualityBreakdown(ctx, al.tracks) }
+                            // Album Art Box with Overlays
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(1f)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0xFF0F2B2E))
+                            ) {
                                 if (reprTrack != null) {
                                     AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize(), trackPath = reprTrack.path)
                                 } else {
@@ -3724,66 +3784,39 @@ private fun ArtistSortSettingsModal(
                                     }
                                 }
 
-                                // Bit-depth / sample-rate badges overlaid directly in the bottom-start of the album art to save space
-                                if ((tileBits != null && tileBits > 0) || (tileSr != null && tileSr > 0)) {
-                                    Row(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomStart)
-                                            .padding(4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        if (tileBits != null && tileBits > 0) {
-                                            val tier = TrackTech.bitTier(tileBits)
-                                            val isRainbow = tier >= 3
-                                            TechBadgeChip(
-                                                text = "$tileBits-BIT",
-                                                tier = tier,
-                                                glyph = TrackTech.glyphForBitTier(tier),
-                                                brush = TrackTech.bitBrush(tileBits),
-                                                glowColor = TrackTech.color(tileBits),
-                                                shape = TrackTech.bitShape(tileBits),
-                                                fontSize = 7.5.sp,
-                                                isRainbow = isRainbow
-                                            )
-                                        }
-                                        if (tileSr != null && tileSr > 0) {
-                                            if (tileBits != null && tileBits > 0) Spacer(Modifier.width(3.dp))
-                                            val tier = TrackTech.rateTier(tileSr)
-                                            val isRainbow = tier >= 3
-                                            TechBadgeChip(
-                                                text = TrackTech.formatSampleRate(tileSr).uppercase(),
-                                                tier = tier,
-                                                glyph = TrackTech.glyphForRateTier(tier),
-                                                brush = TrackTech.rateBrush(tileSr),
-                                                glowColor = TrackTech.rateColor(tileSr),
-                                                shape = TrackTech.rateShape(tileSr),
-                                                fontSize = 7.5.sp,
-                                                isRainbow = isRainbow
-                                            )
-                                        }
-                                    }
-                                }
+                                // Glanceable Quality Symbol Overlay (Bottom-Start Corner)
+                                AudioQualityCrestOverlay(
+                                    breakdown = alQuality,
+                                    modifier = Modifier
+                                        .align(Alignment.BottomStart)
+                                        .padding(5.dp),
+                                    size = 22.dp
+                                )
 
                                 // Quick Shuffle Button Overlay
                                 Box(
                                     modifier = Modifier
                                         .align(Alignment.BottomEnd)
-                                        .padding(6.dp)
-                                        .size(32.dp)
-                                        .clip(RoundedCornerShape(16.dp))
+                                        .padding(5.dp)
+                                        .size(30.dp)
+                                        .clip(RoundedCornerShape(15.dp))
                                         .background(Color(0xDD041416))
-                                        .border(1.dp, MikuTeal.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                                        .border(1.dp, MikuTeal.copy(alpha = 0.5f), RoundedCornerShape(15.dp))
                                         .clickable { onShuffle(al) },
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(Icons.Default.Shuffle, "Shuffle Album", tint = MikuTealBright, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.Default.Shuffle, "Shuffle Album", tint = MikuTealBright, modifier = Modifier.size(15.dp))
                                 }
                             }
-                            Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(al.name, color = Color(0xFFE8F4F2), fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                                Spacer(Modifier.width(4.dp))
-                                QualityGauge(TrackTech.weightedQuality(ctx, al.tracks), modifier = Modifier.size(16.dp))
-                            }
+                            Text(
+                                al.name,
+                                color = Color(0xFFE8F4F2),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 6.dp)
+                            )
                             val yr = remember(al.tracks) {
                                 al.tracks.firstNotNullOfOrNull { TrackYear.yearFor(ctx, it)?.takeIf { y -> y > 0 } ?: it.year.takeIf { y -> y > 0 } } ?: 0
                             }
@@ -3793,12 +3826,19 @@ private fun ArtistSortSettingsModal(
                             releaseTag(al.name)?.let { tag ->
                                 DataChip(tag, ReleaseTagColor)
                             }
-                            val fmt = al.tracks.mapNotNull { it.mime.substringAfterLast('/').uppercase().ifBlank { null } }
-                                .groupingBy { it }.eachCount().maxByOrNull { it.value }?.key ?: ""
-                            val maxBr = al.tracks.maxOfOrNull { it.bitrateKbps } ?: 0
-                            if (fmt.isNotEmpty()) Text(
-                                fmt + if (maxBr > 0) "  ·  ${maxBr}k" else "",
-                                color = formatColor(al.tracks.first().mime), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1
+                            Text(
+                                alQuality.specTag,
+                                color = when {
+                                    alQuality.isVinylRip -> Color(0xFFFFB300)
+                                    alQuality.highestTier == 4 -> Color(0xFFDFB8FF)
+                                    alQuality.highestTier == 3 -> Color(0xFFFFD166)
+                                    alQuality.highestTier == 2 -> MikuTealBright
+                                    else -> formatColor(al.tracks.first().mime)
+                                },
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -3866,14 +3906,21 @@ private fun ArtistSortSettingsModal(
                         .hazeChild(state = hazeState, style = HazeMaterials.regular(Color(0xFF041416)))
                         .statusBarsPadding().padding(16.dp)
                 ) {
+                    val albumQualityBreakdown = remember(sortedTracks) { TrackTech.computeQualityBreakdown(ctx, sortedTracks) }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        // Large Cover Artwork (120x120dp)
+                        // Large Cover Artwork (120x120dp) with Glanceable Quality Crest Overlay
                         Box(Modifier.size(120.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFF0C2B2E))) {
                             if (reprTrack != null) {
                                 AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize(), trackPath = reprTrack.path)
                             } else {
                                 Icon(Icons.Default.Album, null, tint = MikuTeal, modifier = Modifier.size(50.dp).align(Alignment.Center))
                             }
+                            // Quality Emblem Overlay (Bottom-End Corner)
+                            AudioQualityCrestOverlay(
+                                breakdown = albumQualityBreakdown,
+                                modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
+                                size = 26.dp
+                            )
                         }
 
                         Spacer(Modifier.width(16.dp))
@@ -3903,19 +3950,13 @@ private fun ArtistSortSettingsModal(
                             val yearText = if (year > 0) "$year  ·  " else ""
                             Text("$yearText${sortedTracks.size} tracks${if (totalPlays > 0) "  ·  ▶ $totalPlays plays" else ""}", color = Muted, fontSize = 12.sp)
 
-                            // Tech Spec Pills — format now uses the same neon hexagon badge as
-                            // bit-depth/sample-rate instead of a plain colored Text, so this row
-                            // doesn't mix one flat-text metric in with two badge-styled ones.
-                            if (reprTrack != null) {
-                                Spacer(Modifier.height(4.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TechBadgeRow(ctx, reprTrack, fontSize = 9.sp, spacing = 4.dp, includeFormat = true)
-                                }
-                            }
+                            // Glanceable Data Metric Text Spec Line
+                            Spacer(Modifier.height(4.dp))
+                            AudioQualitySpecLine(albumQualityBreakdown)
                         }
                     }
 
-                    Spacer(Modifier.height(14.dp))
+                    Spacer(Modifier.height(10.dp))
 
                     // Play & Shuffle Action Row
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4069,7 +4110,7 @@ private fun ArtistSortSettingsModal(
                 val path = Path().apply { addOutline(outline) }
 
                 // 1. Soft depth drop shadow
-                translate(top = 1.4f) { drawPath(path, Color(0x66000000)) }
+                translate(top = 1.0f) { drawPath(path, Color(0x66000000)) }
 
                 // 2. Crystal glass core background
                 val glassFill = if (isRainbow) {
@@ -4081,71 +4122,66 @@ private fun ArtistSortSettingsModal(
                 }
                 drawPath(path, glassFill)
 
-                // 3. Ambient inner radial glow in tier color — bigger/hotter for the top tier
+                // 3. Subtle ambient inner radial glow in tier color (controlled so text is never washed out)
                 if (isRainbow) {
                     drawCircle(
                         Brush.radialGradient(
-                            listOf(Color(0x55FF3399), Color(0x4400F5D4), Color(0x229D4EDD), Color.Transparent),
-                            radius = size.maxDimension * 1.05f
+                            listOf(Color(0x35FF3399), Color(0x2500F5D4), Color.Transparent),
+                            radius = size.maxDimension * 0.75f
                         ),
                         center = Offset(size.width * 0.5f, size.height * 0.5f)
                     )
                 } else {
                     drawCircle(
                         Brush.radialGradient(
-                            listOf(glowColor.copy(alpha = 0.20f), Color.Transparent),
-                            radius = size.maxDimension * 0.75f
+                            listOf(glowColor.copy(alpha = 0.12f), Color.Transparent),
+                            radius = size.maxDimension * 0.60f
                         ),
                         center = Offset(size.width * 0.5f, size.height * 0.5f)
                     )
                 }
 
-                // 4. Layered glowing neon strokes — top tier runs hotter/thicker across all three
-                // layers, so the rainbow tier reads as visibly more "turned up" than gold or teal,
-                // not just a different hue at the same intensity.
-                val haloW = if (isRainbow) 7.5f else 5.2f
-                val midW = if (isRainbow) 3.6f else 2.8f
-                val coreW = if (isRainbow) 1.7.dp.toPx() else 1.3.dp.toPx()
+                // 4. Layered glowing neon strokes — dynamically scaled by fontSize for razor-sharp precision
+                val scaleFactor = (fontSize.value / 10.0f).coerceIn(0.7f, 1.3f)
+                val haloW = (if (isRainbow) 4.0f else 3.0f) * scaleFactor
+                val midW = (if (isRainbow) 2.2f else 1.6f) * scaleFactor
+                val coreW = (if (isRainbow) 1.2.dp.toPx() else 0.95.dp.toPx()) * scaleFactor
+
                 // Outer soft halo
-                drawPath(path, effectiveBrush, alpha = if (isRainbow) 0.24f else 0.16f, style = Stroke(haloW, cap = StrokeCap.Round))
+                drawPath(path, effectiveBrush, alpha = if (isRainbow) 0.16f else 0.10f, style = Stroke(haloW, cap = StrokeCap.Round))
                 // Mid glow
-                drawPath(path, effectiveBrush, alpha = if (isRainbow) 0.5f else 0.38f, style = Stroke(midW, cap = StrokeCap.Round))
+                drawPath(path, effectiveBrush, alpha = if (isRainbow) 0.38f else 0.28f, style = Stroke(midW, cap = StrokeCap.Round))
                 // Crisp bright core rim
-                drawPath(path, effectiveBrush, alpha = 0.95f, style = Stroke(coreW, cap = StrokeCap.Round))
+                drawPath(path, effectiveBrush, alpha = 0.92f, style = Stroke(coreW, cap = StrokeCap.Round))
 
                 // 5. Specular curved glass sheen / glint
                 clipPath(path) {
                     drawCircle(
                         Brush.radialGradient(
-                            listOf(Color(0x55FFFFFF), Color(0x10FFFFFF), Color.Transparent),
+                            listOf(Color(0x40FFFFFF), Color(0x0CFFFFFF), Color.Transparent),
                             radius = size.minDimension * 0.65f
                         ),
                         radius = size.minDimension * 0.55f,
                         center = Offset(size.width * 0.5f, size.height * 0.12f)
                     )
 
-                    // Prismatic rainbow shimmer streak for top tier — sweeps left-to-right on a
-                    // loop instead of sitting static, a little holographic-card glint.
+                    // Prismatic rainbow shimmer streak for top tier
                     if (isRainbow) {
                         val sx = size.width * shimmerPos
                         drawLine(
                             Brush.linearGradient(
-                                listOf(Color(0x00FFFFFF), Color(0xAAFFFFFF), Color(0x00FFFFFF)),
+                                listOf(Color(0x00FFFFFF), Color(0x88FFFFFF), Color(0x00FFFFFF)),
                                 start = Offset(sx - size.width * 0.18f, 0f),
                                 end = Offset(sx + size.width * 0.18f, size.height)
                             ),
                             start = Offset(sx - size.width * 0.18f, 0f),
                             end = Offset(sx + size.width * 0.18f, size.height),
-                            strokeWidth = 1.6.dp.toPx()
+                            strokeWidth = 1.2.dp.toPx()
                         )
                     }
 
-                    // 6. Cut-gem facet texture — thin lines radiating from the center out toward
-                    // the shape's corners, like light catching the internal facets of an actual
-                    // cut stone. Same diamond/pentagon/hexagon silhouette throughout (design is
-                    // untouched); this only enriches the SURFACE for higher tiers, so a better
-                    // value visibly looks like a more elaborately cut gem, not just a brighter one.
-                    val facetCount = when { isRainbow -> 8; tier >= 2 -> 5; else -> 3 }
+                    // 6. Cut-gem facet texture
+                    val facetCount = when { isRainbow -> 6; tier >= 2 -> 4; else -> 3 }
                     val cx = size.width * 0.5f
                     val cy = size.height * 0.5f
                     val facetReach = size.maxDimension * 0.62f
@@ -4153,33 +4189,28 @@ private fun ArtistSortSettingsModal(
                         val a = (2.0 * Math.PI * i / facetCount) + (Math.PI / 6)
                         val fx = cx + (facetReach * kotlin.math.cos(a)).toFloat()
                         val fy = cy + (facetReach * kotlin.math.sin(a)).toFloat()
-                        drawLine(Color.White.copy(alpha = if (isRainbow) 0.22f else 0.14f), Offset(cx, cy), Offset(fx, fy), 0.6.dp.toPx())
+                        drawLine(Color.White.copy(alpha = if (isRainbow) 0.18f else 0.11f), Offset(cx, cy), Offset(fx, fy), 0.5.dp.toPx())
                     }
-                    // Tiny sparkle points at a couple of facet junctions — only the top tier earns
-                    // actual glints, not just lines, so it reads as visibly more "finished".
                     if (isRainbow) {
                         val sparkleAngles = listOf(0.4, 2.6, 4.3)
                         for (a in sparkleAngles) {
                             val px = cx + (facetReach * 0.72f * kotlin.math.cos(a)).toFloat()
                             val py = cy + (facetReach * 0.72f * kotlin.math.sin(a)).toFloat()
-                            drawCircle(Color.White.copy(alpha = 0.85f), radius = 0.9.dp.toPx(), center = Offset(px, py))
+                            drawCircle(Color.White.copy(alpha = 0.75f), radius = 0.75.dp.toPx(), center = Offset(px, py))
                         }
                     }
                 }
             }
-            .padding(horizontal = 7.dp, vertical = 3.dp),
+            .padding(horizontal = 6.dp, vertical = 2.5.dp),
         contentAlignment = Alignment.Center
     ) {
-        // The ✧/✦/♥ glyph that used to sit left of the text is gone — it was pulling the actual
-        // text off dead-center (same issue as the old icon-prefix design), and the shape+color
-        // escalation already carries the tier signal on its own. Text alone, truly centered now.
         Text(
             text,
             color = Color.White,
             fontSize = fontSize,
             fontWeight = FontWeight.Black,
             fontFamily = OrbitronFont,
-            letterSpacing = 0.35.sp
+            letterSpacing = 0.3.sp
         )
     }
 }
@@ -4212,6 +4243,24 @@ private fun ArtistSortSettingsModal(
 }
 
 /** Sample-rate + bit-depth chips together with full Kawaii Miku tiered styling. */
+/** Dedicated Retro-Analog Gold & Obsidian Vinyl Rip Badge Chip. */
+@Composable fun VinylBadgeChip(
+    fontSize: androidx.compose.ui.unit.TextUnit = 9.5.sp,
+    isCompact: Boolean = false
+) {
+    TechBadgeChip(
+        text = if (isCompact) "VINYL" else "VINYL RIP",
+        tier = 3,
+        glyph = "⊚",
+        brush = Brush.horizontalGradient(listOf(Color(0xFFFFD54F), Color(0xFFFF9800), Color(0xFFFF6D00))),
+        glowColor = Color(0xFFFF9800),
+        shape = BadgeShapes.kawaiiHexGem,
+        fontSize = fontSize,
+        isRainbow = false
+    )
+}
+
+/** Sample-rate + bit-depth chips together with full Kawaii Miku tiered styling & Vinyl Rip detection. */
 @Composable fun TechBadgeRow(
     ctx: android.content.Context,
     track: Track,
@@ -4222,13 +4271,16 @@ private fun ArtistSortSettingsModal(
     val bits = TrackTech.bitsFor(ctx, track)
     val sr = TrackTech.sampleRateFor(ctx, track)
     val fmt = track.mime.substringAfterLast('/').uppercase().ifBlank { null }
+    val isVinyl = remember(track.path, track.album, track.title) { TrackTech.isVinyl(track) }
     var shown = false
 
+    if (isVinyl) {
+        VinylBadgeChip(fontSize = fontSize)
+        shown = true
+    }
+
     if (includeFormat && fmt != null) {
-        // Same tier-escalation treatment as the bit/rate badges now (see TrackTech.formatTier) —
-        // a lossless FLAC/WAV/ALAC/DSD file gets the full rainbow/gem treatment just like a 32-bit
-        // or 192kHz file does, instead of always sitting flat at the plain tier-1 look regardless
-        // of whether it's an MP3 or a lossless master.
+        if (shown) Spacer(Modifier.width(spacing))
         val fmtTier = TrackTech.formatTier(track.mime)
         TechBadgeChip(
             text = fmt,
@@ -4301,6 +4353,159 @@ private fun ArtistSortSettingsModal(
     }
 }
 
+/**
+ * Highly glanceable Audio Quality Crest / Emblem Symbol Overlay.
+ * Designed to overlay directly on album covers and artist circular avatars.
+ *
+ * Tiers:
+ *  - Vinyl Rip: ⊚ Warm Analog Amber & Gold Seal
+ *  - 4 (Master Hi-Res / 192k+ / 32-bit / DSD): 💎 Diamond Violet/Holographic Seal
+ *  - 3 (Studio Hi-Res / 96k / 24-bit): 👑 Crown Gold Seal
+ *  - 2 (CD Bit-Perfect Lossless / 44.1k / 16-bit FLAC): ✧ Star Miku Mint Seal
+ *  - 1 (Standard MP3 / AAC): ♪ Slate Ring
+ */
+@Composable
+fun AudioQualityCrestOverlay(
+    breakdown: TrackTech.QualityBreakdown,
+    modifier: Modifier = Modifier,
+    size: Dp = 24.dp
+) {
+    if (breakdown.totalTracks == 0) return
+
+    val tier = breakdown.highestTier
+    val (primaryColor, glowColor, symbol) = when {
+        breakdown.isVinylRip -> Triple(Color(0xFFFFB300), Color(0x66FF8F00), "⊚")
+        tier == 4 -> Triple(Color(0xFFDFB8FF), Color(0x669C27B0), "💎")
+        tier == 3 -> Triple(Color(0xFFFFD166), Color(0x66FF9800), "👑")
+        tier == 2 -> Triple(MikuTealBright, Color(0x6600B4D8), "✧")
+        else -> Triple(Color(0xFFB0BEC5), Color(0x44546E7A), "♪")
+    }
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(if (breakdown.isVinylRip) Color(0xEE160E04) else Color(0xEE031215))
+            .border(
+                1.5.dp,
+                when {
+                    breakdown.isVinylRip -> Brush.radialGradient(listOf(Color(0xFFFFD54F), Color(0xFFFF6D00)))
+                    tier == 4 -> MikuBadgePalette.RainbowBrush
+                    else -> Brush.radialGradient(listOf(primaryColor, primaryColor.copy(alpha = 0.6f)))
+                },
+                CircleShape
+            ),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize(0.75f)
+                .clip(CircleShape)
+                .background(glowColor)
+        )
+        val fontSp = (size.value * 0.52f).sp
+        Text(
+            text = symbol,
+            fontSize = fontSp,
+            textAlign = TextAlign.Center,
+            lineHeight = fontSp
+        )
+    }
+}
+
+/**
+ * High-contrast, glanceable audio data metric line (e.g. "✦ 24-BIT · 96kHz FLAC · HI-RES").
+ */
+@Composable
+fun AudioQualitySpecLine(
+    breakdown: TrackTech.QualityBreakdown,
+    modifier: Modifier = Modifier
+) {
+    if (breakdown.totalTracks == 0) return
+
+    val tier = breakdown.highestTier
+    val accentColor = when {
+        breakdown.isVinylRip -> Color(0xFFFFB300)
+        tier == 4 -> Color(0xFFDFB8FF)
+        tier == 3 -> Color(0xFFFFD166)
+        tier == 2 -> MikuTealBright
+        else -> Color(0xFFB0BEC5)
+    }
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AudioQualityCrestOverlay(breakdown = breakdown, size = 18.dp)
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = breakdown.specTag,
+            color = accentColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        if (breakdown.isVinylRip) {
+            Spacer(Modifier.width(6.dp))
+            VinylBadgeChip(fontSize = 9.sp, isCompact = true)
+        } else if (tier >= 2) {
+            Spacer(Modifier.width(6.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(accentColor.copy(alpha = 0.2f))
+                    .border(0.8.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(5.dp))
+                    .padding(horizontal = 5.dp, vertical = 1.dp)
+            ) {
+                Text(
+                    text = when (tier) {
+                        4 -> "MASTER"
+                        3 -> "HI-RES"
+                        else -> "LOSSLESS"
+                    },
+                    color = accentColor,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = AudiowideFont
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Compact relative fidelity strip for Album Cards in the grid and Artist rows in the list.
+ */
+@Composable fun MiniQualitySpectrumStrip(
+    breakdown: TrackTech.QualityBreakdown,
+    modifier: Modifier = Modifier
+) {
+    if (breakdown.totalTracks == 0) return
+    Box(
+        modifier = modifier
+            .width(42.dp)
+            .height(4.dp)
+            .clip(RoundedCornerShape(2.dp))
+            .background(Color(0xFF0F1E24))
+    ) {
+        Row(Modifier.fillMaxSize()) {
+            if (breakdown.masterFraction > 0f) {
+                Box(Modifier.weight(breakdown.masterFraction).fillMaxHeight().background(Color(0xFFB388FF)))
+            }
+            if (breakdown.studioHiResFraction > 0f) {
+                Box(Modifier.weight(breakdown.studioHiResFraction).fillMaxHeight().background(Color(0xFFFFD166)))
+            }
+            if (breakdown.cdLosslessFraction > 0f) {
+                Box(Modifier.weight(breakdown.cdLosslessFraction).fillMaxHeight().background(MikuTeal))
+            }
+            if (breakdown.lossyFraction > 0f) {
+                Box(Modifier.weight(breakdown.lossyFraction).fillMaxHeight().background(Color(0xFF455A64)))
+            }
+        }
+    }
+}
+
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable private fun TrackRow(t: Track, showTrackNumber: Boolean = false, onClick: () -> Unit) {
     val ctx = LocalContext.current
@@ -4350,24 +4555,24 @@ private fun ArtistSortSettingsModal(
             Text(
                 t.title,
                 color = if (isCurrent) MikuTeal else Color(0xFFE8F4F2),
-                fontSize = 15.sp,
+                fontSize = 19.5.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 fontWeight = FontWeight.SemiBold,
                 fontFamily = Baloo2Font
             )
             Spacer(Modifier.height(1.dp))
-            Text(meta, fontSize = 12.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = Baloo2Font)
+            Text(meta, fontSize = 16.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = Baloo2Font)
             Spacer(Modifier.height(2.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(metrics, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = OrbitronFont, modifier = Modifier.weight(1f, fill = false))
+                Text(metrics, fontSize = 14.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = OrbitronFont, modifier = Modifier.weight(1f, fill = false))
                 // Bit-depth + sample-rate chips, each with their own bespoke color/shape — resolves
                 // async from the header cache, appears when known.
                 Spacer(Modifier.width(6.dp))
                 TechBadgeRow(ctx, t)
                 if (playCount > 0) {
                     Spacer(Modifier.width(6.dp))
-                    Text("▶ $playCount", color = MikuTealBright, fontSize = 10.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont)
+                    Text("▶ $playCount", color = MikuTealBright, fontSize = 13.5.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont)
                 }
             }
         }
@@ -4522,6 +4727,234 @@ private fun relTime(then: Long): String {
         Spacer(Modifier.height(5.dp))
         Text(title, color = Color(0xFFE8F4F2), fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(subtitle, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/**
+ * "What are you feeling?" / Offline Vibe Alchemy Prompt Bar & Randomizer
+ */
+@Composable
+private fun MikuVibePromptCard(
+    tracks: List<Track>,
+    onPlay: (List<Track>, Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var promptText by remember { mutableStateOf("") }
+    var isSynthesizing by remember { mutableStateOf(false) }
+    var vibeProgress by remember { mutableStateOf(0f) }
+    var vibeStatus by remember { mutableStateOf("") }
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+
+    val executeVibe: (String) -> Unit = { query ->
+        if (!isSynthesizing) {
+            focusManager.clearFocus()
+            isSynthesizing = true
+            vibeProgress = 0f
+            vibeStatus = "Initiating Vibe Alchemy Engine..."
+
+            scope.launch {
+                val result = if (query.isBlank()) {
+                    com.miku.player.vibe.MikuVibeAlchemyEngine.generateRandomVibe(ctx, tracks) { processed, total, status ->
+                        vibeProgress = if (total > 0) processed.toFloat() / total.toFloat() else 0f
+                        vibeStatus = status
+                    }
+                } else {
+                    com.miku.player.vibe.MikuVibeAlchemyEngine.synthesizeFromPrompt(ctx, tracks, query) { processed, total, status ->
+                        vibeProgress = if (total > 0) processed.toFloat() / total.toFloat() else 0f
+                        vibeStatus = status
+                    }
+                }
+
+                isSynthesizing = false
+                if (result.playlist.isNotEmpty()) {
+                    android.widget.Toast.makeText(ctx, "✨ ${result.vibeTitle} (${result.playlist.size} tracks)", android.widget.Toast.LENGTH_SHORT).show()
+                    onPlay(result.playlist, 0)
+                } else {
+                    android.widget.Toast.makeText(ctx, "No matching tracks found in library", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF131828))
+            .border(1.2.dp, Brush.horizontalGradient(listOf(MikuCyan.copy(alpha = 0.7f), MikuNeonPink.copy(alpha = 0.5f))), RoundedCornerShape(18.dp))
+            .padding(14.dp)
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.FlashOn,
+                        contentDescription = null,
+                        tint = if (isSynthesizing) Color(0xFFFFD54F) else MikuCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = if (isSynthesizing) "Synthesizing Vibe Mix..." else "What vibe are you feeling?",
+                        color = Color.White,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = AudiowideFont
+                    )
+                }
+
+                // 🎲 Random Surprise Button
+                Button(
+                    onClick = { executeVibe("") },
+                    enabled = !isSynthesizing,
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(28.dp)
+                ) {
+                    Text("🎲 Random", color = Color(0xFFFF80AB), fontSize = 11.sp, fontWeight = FontWeight.ExtraBold)
+                }
+            }
+
+            // Live Synthesizer Progress Bar (Smart OS Reporting)
+            if (isSynthesizing) {
+                Spacer(Modifier.height(8.dp))
+                Column(Modifier.fillMaxWidth()) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = vibeStatus,
+                            color = MikuCyan,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "${(vibeProgress * 100).toInt()}%",
+                            color = Color(0xFFFF80AB),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { vibeProgress },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = MikuCyan,
+                        trackColor = Color(0x2800E5FF)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Input Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                androidx.compose.foundation.text.BasicTextField(
+                    value = promptText,
+                    onValueChange = { promptText = it },
+                    enabled = !isSynthesizing,
+                    singleLine = true,
+                    textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = androidx.compose.ui.text.input.ImeAction.Search),
+                    keyboardActions = androidx.compose.foundation.text.KeyboardActions(onSearch = { executeVibe(promptText) }),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MikuCyan),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(38.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF1E2538))
+                        .padding(horizontal = 10.dp),
+                    decorationBox = { innerTextField ->
+                        Box(contentAlignment = Alignment.CenterStart, modifier = Modifier.fillMaxSize()) {
+                            if (promptText.isEmpty()) {
+                                Text(
+                                    "e.g. Heavy metal riffs, late night drive, 80s anime...",
+                                    color = Color.White.copy(alpha = 0.4f),
+                                    fontSize = 11.5.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            innerTextField()
+                        }
+                    }
+                )
+
+                Spacer(Modifier.width(8.dp))
+
+                Button(
+                    onClick = { executeVibe(promptText) },
+                    enabled = !isSynthesizing,
+                    colors = ButtonDefaults.buttonColors(containerColor = MikuCyan),
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.height(38.dp)
+                ) {
+                    if (isSynthesizing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.Black,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Mix", color = Color.Black, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Suggestion feeling pills
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                val chips = listOf(
+                    "🤘 Heavy Metal" to "metal heavy thrash progressive guitar solo breakdown",
+                    "⚡ Cyber Hype" to "cyberpunk edm fast electronic hype",
+                    "🌙 Midnight Lo-Fi" to "night chill lofi ambient slow calm",
+                    "🎧 Master Hi-Res" to "audiophile dsd flac lossless acoustic",
+                    "🌸 Kawaii Anime" to "miku vocaloid anime cute jpop",
+                    "🏃 Cardio 140+" to "workout running gym rhythm pump 140 bpm",
+                    "📻 80s City Pop" to "city pop 80s retro synthwave vintage",
+                    "🌧️ Rainy Melancholy" to "sad slow acoustic tears emotional rain",
+                    "☕ Deep Focus" to "study focus coffee lofi jazz instrumental"
+                )
+                items(chips) { (label, query) ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF222B42))
+                            .clickable(enabled = !isSynthesizing) {
+                                promptText = label.substringAfter(' ')
+                                executeVibe(query)
+                            }
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Text(label, color = Color(0xFFB0BEC5), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -6106,28 +6539,46 @@ object TransportShapes {
     // between samples so it reads as continuous playback, not a ticking gauge.
     val targetProgress = (pos.toFloat() / dur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
     val progress by animateFloatAsState(targetProgress, tween(520, easing = LinearEasing), label = "barProgress")
+    val artBm = remember(track.id) { AlbumArtCache.get(track.id) }
+    val palette = remember(artBm) { extractArtPalette(artBm) }
+
     // Flush-to-bottom cyber docked NowPlayingBar
     Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
-                // Raised panel, not a flat fill: drop shadow below + a top specular hairline, the
-                // same emboss language as the scan pill / DataChip / every hardware-style control.
+                // Raised panel drop shadow + top specular hairline
                 .drawBehind {
                     val rr = CornerRadius(16.dp.toPx(), 16.dp.toPx())
                     drawRoundRect(Color(0x66000000), topLeft = Offset(0f, 3.dp.toPx()), size = size, cornerRadius = rr)
                 }
-                .border(1.dp, Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x00FFFFFF)), endY = 0.5f), RoundedCornerShape(16.dp))
-                .clickable { Haptics.tick(ctx); onBarClick() }
-                // Swipe-up = expand to full Now Playing, same as tap: the bar docks at the screen
-                // bottom, so an upward fling on it reads as "pull the big screen up". Only upward
-                // movement is consumed — downward drags pass through untouched, and the detector
-                // arms after touch slop so plain taps still land on the clickable above. Nothing
-                // here touches the system edges (bottom-home strip / top shade zones own those).
+                .border(
+                    1.dp,
+                    Brush.verticalGradient(
+                        listOf(
+                            palette.color1.copy(alpha = 0.65f),
+                            Color(0x25FFFFFF),
+                            Color.Transparent
+                        )
+                    ),
+                    RoundedCornerShape(16.dp)
+                )
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) {
+                    Haptics.tick(ctx)
+                    onBarClick()
+                }
                 .pointerInput(Unit) {
                     var totalY = 0f
                     detectVerticalDragGestures(
                         onDragStart = { totalY = 0f },
-                        onDragEnd = { if (totalY < -24f) { Haptics.tick(ctx); onBarClick() } },
+                        onDragEnd = {
+                            if (totalY < -45f) {
+                                Haptics.tick(ctx)
+                                onBarClick()
+                            }
+                        },
                         onVerticalDrag = { change, dy ->
                             if (dy < 0) change.consume()
                             totalY += dy
@@ -6136,91 +6587,188 @@ object TransportShapes {
                 }
         ) {
             Box {
-                // Themed inlay background: the current track's own album art, blurred + scrimmed —
-                // was a flat two-tone gradient regardless of what was playing, reads as inert chrome
-                // rather than a "now playing" surface tied to the track.
+                // Dynamic Themed Inlay Background: Full album art inlay + dynamic palette color modding + vignette
                 AlbumArtImage(
                     track.id,
-                    Modifier.matchParentSize().blur(28.dp),
+                    Modifier.matchParentSize().blur(20.dp),
                     trackPath = track.path,
                     contentScale = ContentScale.Crop
                 )
                 Box(
                     Modifier.matchParentSize().background(
-                        Brush.horizontalGradient(listOf(Color(0xE6124247), Color(0xE60B2A2D)))
+                        Brush.horizontalGradient(
+                            listOf(
+                                palette.color2.copy(alpha = 0.88f),
+                                palette.color1.copy(alpha = 0.20f),
+                                Color(0xF2051114),
+                                Color(0xFA02080A)
+                            )
+                        )
+                    )
+                )
+                Box(
+                    Modifier.matchParentSize().background(
+                        Brush.verticalGradient(
+                            listOf(
+                                Color(0x35000000),
+                                Color(0x75000000)
+                            )
+                        )
                     )
                 )
                 Column(Modifier.fillMaxWidth()) {
-                    // live progress line
+                    // Live playback progress line
                     Box(Modifier.fillMaxWidth().height(3.dp).background(Color(0xFF07201F))) {
-                        Box(Modifier.fillMaxWidth(progress).height(3.dp)
-                            .background(Brush.horizontalGradient(listOf(MikuTeal, MikuTealBright))))
+                        Box(
+                            Modifier.fillMaxWidth(progress).height(3.dp)
+                                .background(Brush.horizontalGradient(listOf(palette.color1, MikuTealBright)))
+                        )
                     }
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        AlbumArtImage(track.id, Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).clickable { onBarClick() }, trackPath = track.path)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f).clickable { onBarClick() }) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 2x Enlarged Hero Album Art Presentation
+                        Box(
+                            Modifier
+                                .size(76.dp)
+                                .drawBehind {
+                                    val rr = CornerRadius(12.dp.toPx(), 12.dp.toPx())
+                                    drawRoundRect(
+                                        Color(0x77000000),
+                                        topLeft = Offset(0f, 2.5.dp.toPx()),
+                                        size = size,
+                                        cornerRadius = rr
+                                    )
+                                }
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(
+                                    1.2.dp,
+                                    Brush.linearGradient(
+                                        listOf(
+                                            palette.color1.copy(alpha = 0.85f),
+                                            Color(0x55FFFFFF),
+                                            palette.color3.copy(alpha = 0.65f)
+                                        )
+                                    ),
+                                    RoundedCornerShape(12.dp)
+                                )
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    Haptics.tick(ctx)
+                                    onBarClick()
+                                }
+                        ) {
+                            AlbumArtImage(
+                                track.id,
+                                Modifier.fillMaxSize(),
+                                trackPath = track.path,
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+
+                        // Middle Track Information Column (Tightened Touch Zone)
+                        Column(
+                            Modifier
+                                .weight(1f)
+                                .padding(horizontal = 8.dp)
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null
+                                ) {
+                                    Haptics.tick(ctx)
+                                    onBarClick()
+                                }
+                        ) {
                             Text(
-                                track.title, color = Color(0xFFEAF6F4), fontSize = 14.sp, maxLines = 1,
-                                fontWeight = FontWeight.SemiBold,
+                                track.title,
+                                color = Color(0xFFEAF6F4),
+                                fontSize = 17.sp,
+                                maxLines = 1,
+                                fontWeight = FontWeight.Bold,
                                 modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
                             )
+                            Spacer(Modifier.height(1.dp))
                             Text(
                                 track.artist,
-                                color = MikuTealBright,
-                                fontSize = 12.sp,
+                                color = palette.color1,
+                                fontSize = 14.5.sp,
                                 maxLines = 1,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0).clickable { onArtistClick(track.artist) }
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        Haptics.tick(ctx)
+                                        onArtistClick(track.artist)
+                                    }
                             )
                             if (track.album.isNotBlank()) {
                                 Text(
                                     if (displayYear != null) "${track.album}  ·  $displayYear" else track.album,
                                     color = Muted,
-                                    fontSize = 11.sp,
+                                    fontSize = 13.sp,
                                     maxLines = 1,
                                     fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
-                                        .clickable { onAlbumClick(albumArtist, track.album) }
+                                    modifier = Modifier
+                                        .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            Haptics.tick(ctx)
+                                            onAlbumClick(albumArtist, track.album)
+                                        }
                                 )
                             }
-                    // Bit depth/sample rate chips, each with their own bespoke color/shape —
-                    // resolves async off TrackTech's cache like every other badge. Height is
-                    // reserved up front (fixed, not wrap-content) so the bar doesn't visibly
-                    // grow/shrink every time skip-prev/next swaps to a track whose tech data
-                    // hasn't resolved yet — was the "resizes badly when a control is pressed" bug.
-                    // Bit-depth/sample-rate badges only here — the mini bar is too width-constrained
-                    // to also fit the release year without it overflowing behind the heart/transport
-                    // controls (found live: the year text had nowhere to go and drew UNDER the
-                    // heart icon). Year has plenty of room and shows clearly in the full Now Playing
-                    // screen, the track list, and the album hero instead.
-                    // Taller than before: the diamond/pentagon badge shapes (see BadgeShapes) need
-                    // more vertical room than the old flatter hex/pill did — 21dp was clipping the
-                    // bottom off every badge's text.
-                    Row(Modifier.height(28.dp).clipToBounds(), verticalAlignment = Alignment.CenterVertically) {
-                        TechBadgeRow(ctx, track, fontSize = 10.sp, spacing = 4.dp)
-                    }
-                }
-                RainbowHeart(LikeStore.isLiked(track.id)) { LikeStore.toggle(ctx, track) }
-                Spacer(Modifier.width(2.dp))
-                ControlAssembly {
-                    HapticIconButton(onClick = {
-                        shuffle = !shuffle
-                        player.shuffleModeEnabled = shuffle
-                        PlayerPreferences.saveShuffle(ctx, shuffle)
-                    }, flat = true, modifier = Modifier.size(30.dp)) {
-                        Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) MikuPink else Muted, modifier = Modifier.size(16.dp))
-                    }
-                    HapticIconButton(onClick = { player.seekToPreviousMediaItem() }, keyShape = TransportShapes.prevWing, modifier = Modifier.size(38.dp)) {
-                        Icon(Icons.Default.SkipPrevious, "Prev", tint = Muted, modifier = Modifier.size(22.dp))
-                    }
-                    HapticIconButton(onClick = onToggle, face = MikuTeal, keyShape = TransportShapes.hero, modifier = Modifier.size(width = 56.dp, height = 42.dp)) {
-                        PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 26.dp)
-                    }
-                    HapticIconButton(onClick = { player.seekToNextMediaItem() }, keyShape = TransportShapes.nextWing, modifier = Modifier.size(38.dp)) {
-                        Icon(Icons.Default.SkipNext, "Next", tint = Muted, modifier = Modifier.size(24.dp))
-                    }
-                }
+                            Spacer(Modifier.height(2.dp))
+                            Row(Modifier.height(22.dp).clipToBounds(), verticalAlignment = Alignment.CenterVertically) {
+                                TechBadgeRow(ctx, track, fontSize = 9.sp, spacing = 3.dp)
+                            }
+                        }
+
+                        // Heart Button & Transport Controls with Tightened, Isolated Touch Hitboxes
+                        RainbowHeart(LikeStore.isLiked(track.id), size = 38.dp) { LikeStore.toggle(ctx, track) }
+                        Spacer(Modifier.width(2.dp))
+                        ControlAssembly {
+                            HapticIconButton(
+                                onClick = {
+                                    shuffle = !shuffle
+                                    player.shuffleModeEnabled = shuffle
+                                    PlayerPreferences.saveShuffle(ctx, shuffle)
+                                },
+                                flat = true,
+                                modifier = Modifier.size(28.dp)
+                            ) {
+                                Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) MikuPink else Muted, modifier = Modifier.size(15.dp))
+                            }
+                            HapticIconButton(
+                                onClick = { player.seekToPreviousMediaItem() },
+                                keyShape = TransportShapes.prevWing,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.Default.SkipPrevious, "Prev", tint = Muted, modifier = Modifier.size(20.dp))
+                            }
+                            HapticIconButton(
+                                onClick = onToggle,
+                                face = palette.color1,
+                                keyShape = TransportShapes.hero,
+                                modifier = Modifier.size(width = 48.dp, height = 38.dp)
+                            ) {
+                                PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 22.dp)
+                            }
+                            HapticIconButton(
+                                onClick = { player.seekToNextMediaItem() },
+                                keyShape = TransportShapes.nextWing,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.Default.SkipNext, "Next", tint = Muted, modifier = Modifier.size(20.dp))
+                            }
+                        }
                     }
                 }
             }

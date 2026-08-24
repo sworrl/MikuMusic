@@ -57,9 +57,33 @@ object MikuCarAudioRouter {
         false
     }
 
+    @Volatile private var isCallbackRegistered = false
+
+    fun init(context: Context) {
+        if (isCallbackRegistered) return
+        val am = context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        try {
+            am.registerAudioDeviceCallback(object : android.media.AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                    Log.i(TAG, "Audio devices added: ${addedDevices?.joinToString { typeName(it.type) }}")
+                    ensureAnalogIfCar(context.applicationContext, "devices-added")
+                }
+
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                    Log.i(TAG, "Audio devices removed: ${removedDevices?.joinToString { typeName(it.type) }}")
+                    ensureAnalogIfCar(context.applicationContext, "devices-removed")
+                }
+            }, Handler(Looper.getMainLooper()))
+            isCallbackRegistered = true
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to register AudioDeviceCallback", t)
+        }
+    }
+
     /** Call when a controller connects to the session. Applies analog routing if it's a car
      *  controller (or the device itself is in car UI mode). */
     fun onControllerConnected(context: Context, pkg: String?) {
+        init(context)
         val car = isCarPackage(pkg) || isCarUiMode(context)
         Log.i(TAG, "controller connected: pkg=$pkg -> car=$car")
         if (car) {
@@ -71,7 +95,14 @@ object MikuCarAudioRouter {
     /** Re-assert analog routing right before playback if a car controller has been seen (or the
      *  device is in car UI mode). Cheap; guards against player recreation between connect and play. */
     fun ensureAnalogIfCar(context: Context, reason: String) {
-        if (carControllerSeen || isCarUiMode(context)) routeToAnalog(context, reason)
+        val allowUsb = PlayerPreferences.loadAllowUsbAudio(context)
+        if (allowUsb) {
+            Log.d(TAG, "ensureAnalogIfCar($reason): USB Audio explicitly permitted by user")
+            return
+        }
+        if (carControllerSeen || isCarUiMode(context)) {
+            routeToAnalog(context, reason)
+        }
     }
 
     private val USB_TYPES = setOf(
@@ -102,6 +133,12 @@ object MikuCarAudioRouter {
     )
 
     fun routeToAnalog(context: Context, reason: String) {
+        val allowUsb = PlayerPreferences.loadAllowUsbAudio(context)
+        if (allowUsb) {
+            Log.i(TAG, "routeToAnalog($reason): Skipping analog enforcement because allowUsbAudio is TRUE")
+            return
+        }
+
         val player: ExoPlayer = PlayerHolder.player ?: run {
             Log.w(TAG, "routeToAnalog($reason): no player yet; skipping")
             return
@@ -132,16 +169,13 @@ object MikuCarAudioRouter {
                     Log.i(
                         TAG,
                         "routeToAnalog($reason): PREFERRED -> ${typeName(analog.type)} id=${analog.id} " +
-                            "product='${analog.productName}' (USB explicitly avoided)"
+                            "product='${analog.productName}' (USB Audio Blocked · High-Res AUX Active)"
                     )
                 } catch (t: Throwable) {
                     Log.e(TAG, "routeToAnalog($reason): setPreferredAudioDevice failed", t)
                 }
             }
         } else {
-            // FALLBACK: nothing analog/wired present. We deliberately do NOT force the built-in
-            // speaker or a USB sink here — with no wired output to target, we leave the system
-            // default route and log loudly so the real device-type set can be captured and tuned.
             Log.w(
                 TAG,
                 "routeToAnalog($reason): no analog/wired non-USB output found; leaving system " +
@@ -157,8 +191,7 @@ object MikuCarAudioRouter {
         for (t in ANALOG_PREFERENCE) {
             outputs.firstOrNull { it.type == t }?.let { return it }
         }
-        // 2. Last resort per the spec ("if the exact HiBy analog device type differs, pick the
-        //    non-USB wired output"): first sink that is neither USB, BT, built-in, HDMI nor telephony.
+        // 2. Non-USB wired output
         return outputs.firstOrNull { it.type !in FALLBACK_AVOID }
     }
 

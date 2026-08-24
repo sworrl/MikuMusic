@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import com.miku.launcher.weather.MikuWeatherService
 import kotlinx.coroutines.*
 import java.io.File
@@ -187,7 +188,10 @@ fun MikuGpsTacticalMapModal(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { onDismissRequest() },
+                ) { onDismissRequest() }
+                // System-gesture-style dismiss: swipe up starting at the bottom edge. Map pan
+                // gestures are children and claim the pointer first, so they are unaffected.
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
             contentAlignment = Alignment.Center
         ) {
             Box(

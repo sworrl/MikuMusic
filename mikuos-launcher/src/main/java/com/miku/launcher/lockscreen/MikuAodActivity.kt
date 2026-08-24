@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -103,14 +104,14 @@ class MikuAodActivity : ComponentActivity() {
                     Text(
                         text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(now),
                         color = MikuCyan.copy(alpha = 0.85f),
-                        fontSize = 56.sp,
+                        fontSize = 62.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = AudiowideFont
                     )
                     Text(
                         text = SimpleDateFormat("EEE, MMM d", Locale.getDefault()).format(now),
                         color = Color(0xFF6F8F8C),
-                        fontSize = 13.sp,
+                        fontSize = 17.5.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = AudiowideFont
                     )
@@ -122,18 +123,18 @@ class MikuAodActivity : ComponentActivity() {
                             Text(
                                 text = "${w.icon} ${w.tempF.toInt()}°F · ${w.summary}",
                                 color = Color(0xFF89ACA7),
-                                fontSize = 12.sp,
+                                fontSize = 16.5.sp,
                                 fontWeight = FontWeight.Bold
                             )
                         }
                     }
 
                     if (showNp && bpmState.isPlaying && npTitle.isNotBlank()) {
-                        Spacer(Modifier.height(18.dp))
+                        Spacer(Modifier.height(16.dp))
                         Text(
                             text = "♪ $npTitle",
-                            color = MikuNeonPink.copy(alpha = 0.8f),
-                            fontSize = 13.sp,
+                            color = MikuNeonPink.copy(alpha = 0.9f),
+                            fontSize = 17.5.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
@@ -141,9 +142,49 @@ class MikuAodActivity : ComponentActivity() {
                             Text(
                                 text = npArtist,
                                 color = Color(0xFF6F8F8C),
-                                fontSize = 10.sp,
+                                fontSize = 14.5.sp,
                                 maxLines = 1
                             )
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        // 1-Line AOD Mini Beat Visualizer & BPM Badge
+                        Row(
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "⚡ ${bpmState.bpm.toInt()} BPM",
+                                color = MikuCyan.copy(alpha = 0.85f),
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = AudiowideFont
+                            )
+                            // 8-Bar Mini Spectrum
+                            val pulseAnim = rememberInfiniteTransition(label = "AodSpec")
+                            val phase by pulseAnim.animateFloat(
+                                initialValue = 0.2f,
+                                targetValue = 0.85f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(durationMillis = (bpmState.beatIntervalMs / 2).toInt().coerceIn(120, 800)),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "aod_pulse"
+                            )
+                            Row(
+                                modifier = Modifier.height(10.dp),
+                                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp),
+                                verticalAlignment = androidx.compose.ui.Alignment.Bottom
+                            ) {
+                                repeat(6) { idx ->
+                                    val barH = (phase * (0.4f + (idx % 3).toFloat() * 0.3f)).coerceIn(0.15f, 1f)
+                                    Box(
+                                        Modifier
+                                            .width(2.dp)
+                                            .fillMaxHeight(barH)
+                                            .background(if (idx % 2 == 0) MikuCyan.copy(alpha = 0.7f) else MikuNeonPink.copy(alpha = 0.7f))
+                                    )
+                                }
+                            }
                         }
                     }
                 }

@@ -142,12 +142,14 @@ object MikuLockscreenManager {
                             val wakeIntent = Intent(context, MikuLockscreenActivity::class.java).apply {
                                 putExtra("is_screen_off_transition", false)
                                 addFlags(
-                                    // No NO_ANIMATION: let the curtain-drop window animation play.
                                     Intent.FLAG_ACTIVITY_NEW_TASK or
                                     Intent.FLAG_ACTIVITY_SINGLE_TOP
                                 )
                             }
-                            context.startActivity(wakeIntent)
+                            val opts = android.app.ActivityOptions.makeCustomAnimation(
+                                context, com.miku.launcher.R.anim.lockscreen_curtain_down, 0
+                            ).toBundle()
+                            context.startActivity(wakeIntent, opts)
                         } catch (t: Throwable) {
                             Log.e(TAG, "Failed to launch MikuLockscreenActivity on SCREEN_ON", t)
                         }

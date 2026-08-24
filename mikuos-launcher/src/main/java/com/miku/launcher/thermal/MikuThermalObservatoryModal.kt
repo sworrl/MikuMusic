@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miku.launcher.*
+import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -165,7 +166,9 @@ fun MikuThermalObservatoryModal(
         Modifier
             .fillMaxSize()
             .background(Color(0xE6040D12))
-            .clickable { onClose() },
+            .clickable { onClose() }
+            // System-gesture-style dismiss: swipe up starting at the bottom edge of the modal.
+            .swipeUpFromBottomToDismiss(onDismiss = onClose),
         contentAlignment = Alignment.BottomCenter
     ) {
         // High-Tech Cyber Glass Container (Inset from physical screen edges)

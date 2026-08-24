@@ -182,15 +182,16 @@ object MikuApiServer {
             }
 
             // Dispatch to Router
+            val routeMethod = if (method == "HEAD") "GET" else method
             val r = router ?: MikuApiRouter(context)
             val response = try {
-                r.handleRequest(method, path, queryParams, body)
+                r.handleRequest(routeMethod, path, queryParams, body)
             } catch (e: Throwable) {
                 Log.e(TAG, "Error handling $method $path", e)
                 ApiResponse.error(500, "Internal server error: ${e.message}")
             }
 
-            sendResponse(output, response)
+            sendResponse(output, response, isHead = (method == "HEAD"))
         } catch (e: Throwable) {
             Log.w(TAG, "Client socket handler exception: ${e.message}")
         } finally {
@@ -198,7 +199,7 @@ object MikuApiServer {
         }
     }
 
-    private fun sendResponse(output: OutputStream, res: ApiResponse) {
+    private fun sendResponse(output: OutputStream, res: ApiResponse, isHead: Boolean = false) {
         val statusText = when (res.statusCode) {
             200 -> "OK"
             201 -> "Created"
@@ -216,13 +217,13 @@ object MikuApiServer {
         sb.append("Content-Type: ${res.contentType}\r\n")
         sb.append("Content-Length: ${res.body.size}\r\n")
         sb.append("Access-Control-Allow-Origin: *\r\n")
-        sb.append("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n")
+        sb.append("Access-Control-Allow-Methods: GET, POST, HEAD, OPTIONS\r\n")
         sb.append("Access-Control-Allow-Headers: Authorization, Content-Type, X-Miku-Signature, X-Miku-Timestamp, X-Miku-Nonce, X-Miku-Key\r\n")
         sb.append("Connection: close\r\n")
         sb.append("\r\n")
 
         output.write(sb.toString().toByteArray(Charsets.UTF_8))
-        if (res.body.isNotEmpty()) {
+        if (!isHead && res.body.isNotEmpty()) {
             output.write(res.body)
         }
         output.flush()

@@ -416,4 +416,12 @@ object PlayerPreferences {
     }
     fun loadDisplayTheMode(context: Context): String =
         prefs(context).getString(KEY_DISPLAY_THE_MODE, "PREFIX") ?: "PREFIX" // Default: "PREFIX" ("The Crystal Method")
+
+    // USB Audio routing in Car / Android Auto mode: default FALSE (strictly route to Hi-Res 3.5mm/4.4mm AUX jack)
+    private const val KEY_ALLOW_USB_AUDIO = "allow_usb_audio_car"
+    fun saveAllowUsbAudio(context: Context, allow: Boolean) {
+        prefs(context).edit().putBoolean(KEY_ALLOW_USB_AUDIO, allow).apply()
+    }
+    fun loadAllowUsbAudio(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_ALLOW_USB_AUDIO, false)
 }

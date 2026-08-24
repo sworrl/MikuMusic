@@ -30,6 +30,7 @@ import com.miku.player.MikuCyan
 import com.miku.player.MikuNeonPink
 import com.miku.player.MikuTextPrimary
 import com.miku.player.MikuTextSecondary
+import com.miku.player.ui.swipeUpFromBottomToDismiss
 
 /**
  * Dedicated Miku Brain & Bone Orchestration Modal.
@@ -50,6 +51,7 @@ fun MikuBrainModal(
             Modifier
                 .fillMaxWidth(0.96f)
                 .fillMaxHeight(0.92f)
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest)
                 .clip(CutCornerShape(16.dp))
                 .background(
                     Brush.verticalGradient(

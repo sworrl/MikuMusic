@@ -38,6 +38,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.miku.player.AudiowideFont
 import com.miku.player.OrbitronFont
+import com.miku.player.ui.swipeUpFromBottomToDismiss
 import com.miku.player.weather.MikuWeatherService
 import kotlinx.coroutines.*
 import java.io.File
@@ -188,7 +189,8 @@ fun MikuGpsTacticalMapModal(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
-                ) { onDismissRequest() },
+                ) { onDismissRequest() }
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
             contentAlignment = Alignment.Center
         ) {
             Box(

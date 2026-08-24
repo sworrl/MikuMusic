@@ -80,17 +80,28 @@ class QualcommFmHardwareEngine(private val context: Context) {
             val fmConfigClass = classLoader.loadClass("qcom.fmradio.FmConfig")
             val callbackInterface = classLoader.loadClass("qcom.fmradio.FmRxEvCallbacksAdaptor")
 
-            enableMethod = fmReceiverClass.getMethod("enable", fmConfigClass)
-            disableMethod = fmReceiverClass.getMethod("disable")
-            setStationMethod = fmReceiverClass.getMethod("setStation", Int::class.javaPrimitiveType)
-            getStationMethod = fmReceiverClass.getMethod("getStation")
-            searchStationsMethod = fmReceiverClass.getMethod("searchStations", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
-            cancelSearchMethod = fmReceiverClass.getMethod("cancelSearch")
-            setMuteModeMethod = fmReceiverClass.getMethod("setMuteMode", Int::class.javaPrimitiveType)
-            setStereoModeMethod = fmReceiverClass.getMethod("setStereoMode", Boolean::class.javaPrimitiveType)
-            getRssiMethod = fmReceiverClass.getMethod("getRssi")
-            getRadioTextMethod = fmReceiverClass.getMethod("getRadioText")
-            getProgramServiceMethod = fmReceiverClass.getMethod("getProgramService")
+            enableMethod = try {
+                fmReceiverClass.getMethod("enable", fmConfigClass, Context::class.java)
+            } catch (_: Throwable) {
+                try {
+                    fmReceiverClass.getMethod("enable", fmConfigClass, Int::class.javaPrimitiveType)
+                } catch (_: Throwable) {
+                    try {
+                        fmReceiverClass.getMethod("enable", fmConfigClass)
+                    } catch (_: Throwable) { null }
+                }
+            }
+
+            disableMethod = try { fmReceiverClass.getMethod("disable") } catch (_: Throwable) { null }
+            setStationMethod = try { fmReceiverClass.getMethod("setStation", Int::class.javaPrimitiveType) } catch (_: Throwable) { null }
+            getStationMethod = try { fmReceiverClass.getMethod("getStation") } catch (_: Throwable) { null }
+            searchStationsMethod = try { fmReceiverClass.getMethod("searchStations", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType) } catch (_: Throwable) { null }
+            cancelSearchMethod = try { fmReceiverClass.getMethod("cancelSearch") } catch (_: Throwable) { null }
+            setMuteModeMethod = try { fmReceiverClass.getMethod("setMuteMode", Int::class.javaPrimitiveType) } catch (_: Throwable) { null }
+            setStereoModeMethod = try { fmReceiverClass.getMethod("setStereoMode", Boolean::class.javaPrimitiveType) } catch (_: Throwable) { null }
+            getRssiMethod = try { fmReceiverClass.getMethod("getRssi") } catch (_: Throwable) { null }
+            getRadioTextMethod = try { fmReceiverClass.getMethod("getRadioText") } catch (_: Throwable) { null }
+            getProgramServiceMethod = try { fmReceiverClass.getMethod("getProgramService") } catch (_: Throwable) { null }
 
             fmConfigInstance = fmConfigClass.getDeclaredConstructor().newInstance().apply {
                 try {
@@ -110,10 +121,16 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 null
             }
 
-            fmReceiverInstance = fmReceiverClass.getConstructor(String::class.java, callbackInterface)
-                .newInstance(FM_DEVICE_PATH, callbackProxy)
+            fmReceiverInstance = try {
+                fmReceiverClass.getConstructor(String::class.java, callbackInterface)
+                    .newInstance(FM_DEVICE_PATH, callbackProxy)
+            } catch (_: Throwable) {
+                try {
+                    fmReceiverClass.getDeclaredConstructor().newInstance()
+                } catch (_: Throwable) { null }
+            }
 
-            Log.d(TAG, "Qualcomm FmReceiver hardware class loaded successfully from framework")
+            Log.d(TAG, "Qualcomm FmReceiver hardware class loaded: enableMethod=$enableMethod, setStationMethod=$setStationMethod")
         } catch (t: Throwable) {
             Log.w(TAG, "qcom.fmradio reflection init note (direct V4L2/HAL fallback will be used): ${t.message}")
         }
@@ -154,11 +171,27 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 // 1. Configure Hardware Audio HAL routing parameters
                 configureAudioHal(true, currentFrequencyKHz.value)
 
-                // 2. Enable Qualcomm FM hardware chip
-                enableMethod?.invoke(fmReceiverInstance, fmConfigInstance)
+                // 2. Enable Qualcomm FM hardware chip with matching signature
+                val m = enableMethod
+                if (m != null && fmReceiverInstance != null) {
+                    try {
+                        when (m.parameterTypes.size) {
+                            2 -> {
+                                if (m.parameterTypes[1] == Context::class.java) {
+                                    m.invoke(fmReceiverInstance, fmConfigInstance, context)
+                                } else {
+                                    m.invoke(fmReceiverInstance, fmConfigInstance, 1)
+                                }
+                            }
+                            else -> m.invoke(fmReceiverInstance, fmConfigInstance)
+                        }
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "Error invoking enableMethod: ${e.message}")
+                    }
+                }
 
                 // 3. Tune initial frequency
-                setStationMethod?.invoke(fmReceiverInstance, currentFrequencyKHz.value)
+                tune(currentFrequencyKHz.value)
 
                 // 4. Start bit-perfect AudioRecord -> AudioTrack bridge
                 startAudioBridge()
@@ -180,7 +213,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
             try {
                 mute()
                 stopAudioBridge()
-                disableMethod?.invoke(fmReceiverInstance)
+                try { disableMethod?.invoke(fmReceiverInstance) } catch (_: Throwable) {}
                 configureAudioHal(false, currentFrequencyKHz.value)
                 Log.d(TAG, "Hardware Qualcomm FM Tuner powered OFF")
             } catch (t: Throwable) {
@@ -193,13 +226,13 @@ class QualcommFmHardwareEngine(private val context: Context) {
         val clamped = freqKHz.coerceIn(87500, 108000)
         currentFrequencyKHz.value = clamped
         stationName.value = "FM ${(clamped / 1000.0)} MHz"
-        radioText.value = "Live Qualcomm FM Tuner"
+        radioText.value = "Live Qualcomm CS43131 FM Tuner"
 
         scope.launch {
             try {
-                setStationMethod?.invoke(fmReceiverInstance, clamped)
-                audioManager.setParameters("fm_freq=$clamped")
-                RootShell.execFast("setprop vendor.audio.fm.freq $clamped")
+                try { setStationMethod?.invoke(fmReceiverInstance, clamped) } catch (_: Throwable) {}
+                audioManager.setParameters("fm_freq=$clamped;fm_status=1;fm_mute=0")
+                RootShell.execFast("setprop vendor.audio.fm.freq $clamped; setprop vendor.audio.fm.status 1; setprop vendor.audio.fm.mute 0")
             } catch (t: Throwable) {
                 Log.e(TAG, "Error tuning frequency $clamped", t)
             }
@@ -254,13 +287,16 @@ class QualcommFmHardwareEngine(private val context: Context) {
     private fun configureAudioHal(enable: Boolean, freqKHz: Int) {
         try {
             val status = if (enable) "1" else "0"
-            audioManager.setParameters("fm_status=$status;fm_volume=1.0;fm_mute=0;fm_freq=$freqKHz")
+            audioManager.setParameters("handle_fm=$status;fm_status=$status;fm_volume=1.0;fm_mute=0;fm_freq=$freqKHz;fm_active=$status")
             audioManager.setParameters(if (enable) "fm_route=playback" else "fm_route=off")
+            audioManager.setParameters("vendor.audio.hw.fm.mode=$status")
 
             RootShell.execFast(
                 "setprop vendor.audio.hw.fm.mode $status; " +
                 "setprop vendor.audio.fm.route $status; " +
-                "setprop vendor.audio.fm.freq $freqKHz"
+                "setprop vendor.audio.fm.freq $freqKHz; " +
+                "setprop vendor.audio.fm.status $status; " +
+                "setprop vendor.audio.fm.mute 0"
             )
         } catch (t: Throwable) {
             Log.e(TAG, "Audio HAL parameter configuration error", t)

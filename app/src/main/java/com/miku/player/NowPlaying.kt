@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -65,13 +66,70 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.rememberCoroutineScope
-
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
+
+data class ArtPalette(
+    val color1: Color = MikuTeal,
+    val color2: Color = Color(0xFF0C2428),
+    val color3: Color = MikuPink
+)
+
+fun extractArtPalette(bitmap: ImageBitmap?): ArtPalette {
+    if (bitmap == null) return ArtPalette(MikuTeal, Color(0xFF0A2528), MikuPink)
+    try {
+        val bm = bitmap.asAndroidBitmap()
+        val w = bm.width
+        val h = bm.height
+        if (w <= 0 || h <= 0) return ArtPalette(MikuTeal, Color(0xFF0A2528), MikuPink)
+
+        val colors = ArrayList<Int>(64)
+        val stepX = (w / 8).coerceAtLeast(1)
+        val stepY = (h / 8).coerceAtLeast(1)
+        for (y in stepY / 2 until h step stepY) {
+            for (x in stepX / 2 until w step stepX) {
+                val pixel = bm.getPixel(x, y)
+                if (android.graphics.Color.alpha(pixel) > 50) {
+                    colors.add(pixel)
+                }
+            }
+        }
+        if (colors.isEmpty()) return ArtPalette(MikuTeal, Color(0xFF0A2528), MikuPink)
+
+        val sortedBySat = colors.sortedByDescending { c ->
+            val hsv = FloatArray(3)
+            android.graphics.Color.colorToHSV(c, hsv)
+            hsv[1] * (if (hsv[2] in 0.25f..0.95f) 1.5f else 0.5f)
+        }
+
+        val topVibrant = sortedBySat.firstOrNull() ?: colors.first()
+        val deepTone = colors.minByOrNull { c ->
+            val hsv = FloatArray(3)
+            android.graphics.Color.colorToHSV(c, hsv)
+            hsv[2]
+        } ?: colors[colors.size / 2]
+
+        val accentTone = sortedBySat.drop(sortedBySat.size / 3).firstOrNull { c ->
+            val hsv1 = FloatArray(3)
+            val hsv2 = FloatArray(3)
+            android.graphics.Color.colorToHSV(topVibrant, hsv1)
+            android.graphics.Color.colorToHSV(c, hsv2)
+            Math.abs(hsv1[0] - hsv2[0]) > 30f
+        } ?: sortedBySat.getOrNull(sortedBySat.size / 2) ?: colors.last()
+
+        return ArtPalette(
+            color1 = Color(topVibrant),
+            color2 = Color(deepTone),
+            color3 = Color(accentTone)
+        )
+    } catch (_: Throwable) {
+        return ArtPalette(MikuTeal, Color(0xFF0A2528), MikuPink)
+    }
+}
 
 private data class QueueItemInfo(
     val queueIdx: Int,
@@ -172,6 +230,7 @@ fun NowPlayingScreen(
     var isFullscreenVisualizer by remember { mutableStateOf(false) }
     var showOverlayControls by remember { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
+    var showConnectModal by remember { mutableStateOf(false) }
     var pinControls by remember { mutableStateOf(false) }
     var presetToast by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -208,20 +267,29 @@ fun NowPlayingScreen(
                 )
             }
     ) {
-        // Branded background: blurred album art + a faint Miku behind the whole screen (normal mode;
-        // the fullscreen viz draws its own opaque surface over this).
+        val palette = remember(art) { extractArtPalette(art) }
+
+        // Branded 3-color dynamic blended background extracted directly from album artwork
         art?.let {
             androidx.compose.foundation.Image(
                 it, null,
-                Modifier.matchParentSize().blur(40.dp),
-                contentScale = ContentScale.Crop, alpha = 0.30f
+                Modifier.matchParentSize().blur(45.dp),
+                contentScale = ContentScale.Crop, alpha = 0.35f
             )
         }
-        Box(Modifier.matchParentSize().background(
-            Brush.verticalGradient(listOf(Ground.copy(alpha = 0.60f), Ground.copy(alpha = 0.88f), Ground))
-        ))
-        // Ambient Miku watermark: a different official wallpaper per track (never the same art as
-        // the Home backdrop) — every bespoke collab image gets its moment.
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    listOf(
+                        palette.color1.copy(alpha = 0.38f),
+                        palette.color2.copy(alpha = 0.65f),
+                        palette.color3.copy(alpha = 0.30f),
+                        Ground
+                    )
+                )
+            )
+        )
+        // Ambient Miku watermark: a different official wallpaper per track
         androidx.compose.foundation.Image(
             painter = androidx.compose.ui.res.painterResource(remember(track.id) { MikuArt.forTrack(track.id) }),
             contentDescription = null,
@@ -339,12 +407,10 @@ fun NowPlayingScreen(
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
-        // Top Nav Bar. `flat = true` on these — a slim glassy nav row, not hardware transport
-        // keys, so no embossed key-face pill behind them (that read as a stray dark blob next to
-        // the chrome-free heart icon).
+        // Top Nav Bar.
         Row(verticalAlignment = Alignment.CenterVertically) {
             HapticIconButton(onClick = onClose, flat = true) {
-                Icon(Icons.Default.KeyboardArrowDown, "Close", tint = MikuTeal, modifier = Modifier.size(32.dp))
+                Icon(Icons.Default.KeyboardArrowDown, "Close", tint = palette.color1, modifier = Modifier.size(32.dp))
             }
             Spacer(Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -352,184 +418,249 @@ fun NowPlayingScreen(
                 Text(track.album.ifBlank { "Miku Player" }, color = Color(0xFFE8F4F2), fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.weight(1f))
-            HapticIconButton(onClick = { showQueue = !showQueue }, flat = true) {
-                Icon(Icons.Default.QueueMusic, "Up Next Queue", tint = if (showQueue) MikuPink else MikuTeal, modifier = Modifier.size(26.dp))
+            HapticIconButton(onClick = { showConnectModal = !showConnectModal }, flat = true) {
+                Icon(Icons.Default.Tv, "Miku Connect (TV & Remote)", tint = if (showConnectModal) palette.color3 else palette.color1, modifier = Modifier.size(24.dp))
             }
             Spacer(Modifier.width(4.dp))
-            HapticIconButton(onClick = onTape, flat = true) { TapeIcon(tint = MikuPink, modifier = Modifier.size(26.dp)) }
+            HapticIconButton(onClick = { showQueue = !showQueue }, flat = true) {
+                Icon(Icons.Default.QueueMusic, "Up Next Queue", tint = if (showQueue) palette.color3 else palette.color1, modifier = Modifier.size(26.dp))
+            }
+            Spacer(Modifier.width(4.dp))
+            HapticIconButton(onClick = onTape, flat = true) { TapeIcon(tint = palette.color3, modifier = Modifier.size(26.dp)) }
         }
 
         Spacer(Modifier.height(10.dp))
 
-        // Stage (Art / ProjectM Visualizer) — flexible height: it yields to the fixed elements
-        // below (art panel, seek, transport) so nothing ever clips off-screen.
-        Box(
+        // Stage & Track Info Container with exact 50/50 even space split
+        Column(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
-                .clip(RoundedCornerShape(20.dp))
-                .background(Color(0xFF0A2528)),
-            contentAlignment = Alignment.Center
         ) {
-            if (showViz) {
-                ProjectMVisualizerView(
-                    sessionId = player.audioSessionId,
-                    preset = currentPreset,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else if (art != null) {
-                androidx.compose.foundation.Image(
-                    art!!, "Album art", Modifier.fillMaxSize(), contentScale = ContentScale.Fit
-                )
-            } else {
-                Icon(Icons.Default.Album, null, tint = MikuTeal.copy(alpha = .5f), modifier = Modifier.size(120.dp))
-            }
-
-            // Interactive Gestures on Stage (Visualizer or Album Art)
-            if (showViz) {
-                Box(
-                    Modifier.matchParentSize().pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = { isFullscreenVisualizer = true },
-                            onLongPress = { showViz = false }
-                        )
-                    }
-                )
-            } else {
-                var totalDragX by remember { mutableStateOf(0f) }
-                Box(
-                    // Inset the full-screen swipe-to-change-track area away from the
-                    // horizontal edges so it doesn't swallow the OS gesture-nav back
-                    // swipe (which lives in the ~24dp edge inset). Track-change still
-                    // works across the whole middle; the edges are left to the system.
-                    Modifier.matchParentSize()
-                        .padding(horizontal = 32.dp)
-                        .pointerInput(track.id) {
-                            detectHorizontalDragGestures(
-                                onDragEnd = {
-                                    if (totalDragX < -60f) {
-                                        Haptics.tick(ctx)
-                                        player.seekToNextMediaItem()
-                                    } else if (totalDragX > 60f) {
-                                        Haptics.tick(ctx)
-                                        player.seekToPreviousMediaItem()
-                                    }
-                                    totalDragX = 0f
-                                },
-                                onDragCancel = { totalDragX = 0f },
-                                onHorizontalDrag = { change, dragAmount ->
-                                    change.consume()
-                                    totalDragX += dragAmount
-                                }
+            // Stage (Art / ProjectM Visualizer) — 50% split
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(Color(0xFF08181B))
+                    .border(
+                        1.2.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                palette.color1.copy(alpha = 0.55f),
+                                palette.color3.copy(alpha = 0.45f)
                             )
-                        }
-                        .pointerInput(track.id) {
-                            detectTapGestures(
-                                onDoubleTap = {
-                                    Haptics.tick(ctx)
-                                    LikeStore.toggle(ctx, track)
-                                },
-                                onLongPress = {
-                                    Haptics.tick(ctx)
-                                    showViz = true
-                                }
-                            )
-                        }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        // Artistic album-art + data panel — the visualizer now gets ALL the space freed up by
-        // removing the preset-switch button row and the standalone title above it (title lives in
-        // this card now, as its own prominent first line). Styling enhanced to match: a real
-        // gradient border + drop shadow instead of a flat fill, so it reads as its own elevated
-        // "now playing" card rather than an inert info strip.
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .drawBehind {
-                    val rr = CornerRadius(20.dp.toPx(), 20.dp.toPx())
-                    drawRoundRect(Color(0x59000000), topLeft = Offset(0f, 3.dp.toPx()), size = size, cornerRadius = rr)
-                }
-                .clip(RoundedCornerShape(20.dp))
-                .background(Brush.horizontalGradient(listOf(Surface1, Color(0xFF0A2528))))
-                .border(1.2.dp, Brush.horizontalGradient(listOf(MikuTealBright.copy(alpha = 0.5f), MikuPink.copy(alpha = 0.4f))), RoundedCornerShape(20.dp))
-                .padding(14.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(120.dp).clip(RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-                    if (art != null) androidx.compose.foundation.Image(art!!, "Album art", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                    else Box(Modifier.fillMaxSize().background(Color(0xFF123438)), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Album, null, tint = MikuTeal.copy(alpha = .6f), modifier = Modifier.size(40.dp))
-                    }
-                }
-                Spacer(Modifier.width(14.dp))
-                Column(Modifier.weight(1f)) {
-                    // Title moved here from its old standalone spot above the vis — now the
-                    // card's own headline, largest text in the block.
-                    Text(
-                        track.title,
-                        color = Color.White,
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = RighteousFont,
-                        letterSpacing = 0.3.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
+                        ),
+                        RoundedCornerShape(22.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                if (showViz) {
+                    ProjectMVisualizerView(
+                        sessionId = player.audioSessionId,
+                        preset = currentPreset,
+                        modifier = Modifier.fillMaxSize()
                     )
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        track.album.ifBlank { track.artist },
-                        color = MikuTealBright,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        fontFamily = Baloo2Font,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
-                            .clickable(enabled = track.album.isNotBlank()) {
-                                onClose()
-                                onOpenAlbum(track.albumArtist.ifBlank { track.artist }, track.album)
+                } else if (art != null) {
+                    androidx.compose.foundation.Image(
+                        art!!, "Album art", Modifier.fillMaxSize(), contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Icon(Icons.Default.Album, null, tint = palette.color1.copy(alpha = .5f), modifier = Modifier.size(100.dp))
+                }
+
+                // Interactive Gestures on Stage (Visualizer or Album Art)
+                if (showViz) {
+                    Box(
+                        Modifier.matchParentSize().pointerInput(Unit) {
+                            detectTapGestures(
+                                onTap = { isFullscreenVisualizer = true },
+                                onLongPress = { showViz = false }
+                            )
+                        }
+                    )
+                } else {
+                    var totalDragX by remember { mutableStateOf(0f) }
+                    Box(
+                        Modifier.matchParentSize()
+                            .padding(horizontal = 32.dp)
+                            .pointerInput(track.id) {
+                                detectHorizontalDragGestures(
+                                    onDragEnd = {
+                                        if (totalDragX < -60f) {
+                                            Haptics.tick(ctx)
+                                            player.seekToNextMediaItem()
+                                        } else if (totalDragX > 60f) {
+                                            Haptics.tick(ctx)
+                                            player.seekToPreviousMediaItem()
+                                        }
+                                        totalDragX = 0f
+                                    },
+                                    onDragCancel = { totalDragX = 0f },
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        totalDragX += dragAmount
+                                    }
+                                )
+                            }
+                            .pointerInput(track.id) {
+                                detectTapGestures(
+                                    onDoubleTap = {
+                                        Haptics.tick(ctx)
+                                        LikeStore.toggle(ctx, track)
+                                    },
+                                    onLongPress = {
+                                        Haptics.tick(ctx)
+                                        showViz = true
+                                    }
+                                )
                             }
                     )
-                    Spacer(Modifier.height(2.dp))
-                    val displayYear = TrackYear.yearFor(ctx, track)?.takeIf { it > 0 } ?: track.year.takeIf { it > 0 }
-                    Text(
-                        track.artist + if (displayYear != null) "   ·   $displayYear" else "",
-                        color = Muted,
-                        fontSize = 12.5.sp,
-                        fontFamily = Baloo2Font,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable {
-                            onClose()
-                            onOpenArtist(track.artist)
-                        }
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Track Info Card: 100% Full Album Art with Text Overlain & Vignette — 50% split
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .drawBehind {
+                        val rr = CornerRadius(22.dp.toPx(), 22.dp.toPx())
+                        drawRoundRect(Color(0x66000000), topLeft = Offset(0f, 4.dp.toPx()), size = size, cornerRadius = rr)
+                    }
+                    .clip(RoundedCornerShape(22.dp))
+                    .border(
+                        1.5.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                palette.color1.copy(alpha = 0.85f),
+                                palette.color3.copy(alpha = 0.75f)
+                            )
+                        ),
+                        RoundedCornerShape(22.dp)
                     )
-                    Spacer(Modifier.height(8.dp))
-                    // All the exacting metrics as pills, in one place (they wrap to fit).
-                    androidx.compose.foundation.layout.FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // 1. ALL Album Art filling 100% of the entire card
+                if (art != null) {
+                    androidx.compose.foundation.Image(
+                        bitmap = art!!,
+                        contentDescription = "Album Art",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0D2529)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        // Same bespoke neon diamond/pentagon/hexagon chips as everywhere else (mini
-                        // bar, track rows, album hero) — format included here (this panel has the
-                        // room), not just bit-depth/sample-rate. Wrapped in a Row so FlowRow treats
-                        // the trio as one flow item (keeps them from wrapping apart mid-group).
-                        Row { TechBadgeRow(ctx, track, fontSize = 11.sp, spacing = 6.dp, includeFormat = true) }
-                        if (track.bitrateKbps > 0) DataChip("${track.bitrateKbps} kbps", bitrateColor(track.bitrateKbps))
-                        DataChip(qualityTier(track), bitrateColor(track.bitrateKbps))
-                        if (track.durationMs > 0) DataChip(fmtTime(track.durationMs), Muted)
-                        if (track.sizeBytes > 0) DataChip("${"%.1f".format(track.sizeBytes / 1e6)} MB", Muted)
+                        Icon(
+                            Icons.Default.Album,
+                            null,
+                            tint = palette.color1.copy(alpha = 0.4f),
+                            modifier = Modifier.size(90.dp)
+                        )
                     }
                 }
-                // Persistent like control — was only reachable via the auto-hiding overlay controls
-                // (tap-to-reveal, vanishes after ~4.5s), so it read as "gone" from the main screen.
-                Spacer(Modifier.width(8.dp))
-                RainbowHeart(LikeStore.isLiked(track.id)) { LikeStore.toggle(ctx, track) }
+
+                // 2. High-legibility Vignetting Scrim (protects text contrast over any bright/busy artwork)
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                0.0f to Color(0x80000000),
+                                0.35f to Color(0xA0020B0E),
+                                0.70f to Color(0xDD010709),
+                                1.0f to Color(0xF4010405)
+                            )
+                        )
+                )
+
+                // 3. Track info text taking up the ENTIRE card over top the art
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    // Top Row: Large Title + Like Heart
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = track.title,
+                            color = Color.White,
+                            fontSize = 22.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = RighteousFont,
+                            letterSpacing = 0.4.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f)
+                                .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        RainbowHeart(LikeStore.isLiked(track.id)) { LikeStore.toggle(ctx, track) }
+                    }
+
+                    // Middle Section: Artist & Album with Year (occupies middle of card)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        val displayYear = TrackYear.yearFor(ctx, track)?.takeIf { it > 0 } ?: track.year.takeIf { it > 0 }
+                        val yearTag = if (displayYear != null) "  ·  $displayYear" else ""
+                        Text(
+                            text = "${track.artist}$yearTag",
+                            color = Color(0xFFF2FBF9),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = Baloo2Font,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
+                                .clickable {
+                                    onClose()
+                                    onOpenArtist(track.artist)
+                                }
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = track.album.ifBlank { track.artist },
+                            color = palette.color1,
+                            fontSize = 14.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            fontFamily = Baloo2Font,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
+                                .clickable(enabled = track.album.isNotBlank()) {
+                                    onClose()
+                                    onOpenAlbum(track.albumArtist.ifBlank { track.artist }, track.album)
+                                }
+                        )
+                    }
+
+                    // Bottom Row: Audio Quality & Format Pills taking full width across the bottom of the card
+                    androidx.compose.foundation.layout.FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Row { TechBadgeRow(ctx, track, fontSize = 12.sp, spacing = 5.dp, includeFormat = true) }
+                        if (track.bitrateKbps > 0) DataChip("${track.bitrateKbps} kbps", bitrateColor(track.bitrateKbps))
+                        DataChip(qualityTier(track), bitrateColor(track.bitrateKbps))
+                        if (track.durationMs > 0) DataChip(fmtTime(track.durationMs), Color(0xFFD4ECE9))
+                        if (track.sizeBytes > 0) DataChip("${"%.1f".format(track.sizeBytes / 1e6)} MB", Color(0xFFD4ECE9))
+                    }
+                }
             }
         }
 
@@ -542,9 +673,9 @@ fun NowPlayingScreen(
             onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
         )
         Row(Modifier.fillMaxWidth()) {
-            Text(fmtTime(pos), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
+            Text(fmtTime(pos), color = Muted, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
             Spacer(Modifier.weight(1f))
-            Text(fmtTime(dur), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
+            Text(fmtTime(dur), color = Muted, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
         }
 
         Spacer(Modifier.height(6.dp))
@@ -802,7 +933,150 @@ fun NowPlayingScreen(
             }
         }
     }
+
+    if (showConnectModal) {
+        MikuConnectModal(
+            context = ctx,
+            onClose = { showConnectModal = false }
+        )
+    }
+    }
 }
+
+@Composable
+fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
+    val ip = remember {
+        try {
+            val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val raw = wm?.connectionInfo?.ipAddress ?: 0
+            if (raw != 0) {
+                String.format(
+                    java.util.Locale.US,
+                    "%d.%d.%d.%d",
+                    raw and 0xff,
+                    raw shr 8 and 0xff,
+                    raw shr 16 and 0xff,
+                    raw shr 24 and 0xff
+                )
+            } else "192.168.13.184"
+        } catch (_: Throwable) { "192.168.13.184" }
+    }
+
+    val remoteUrl = "http://$ip:8765"
+    val tvUrl = "http://$ip:8765/tv"
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.75f))
+            .clickable(onClick = onClose),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(20.dp))
+                .background(Color(0xFF041017))
+                .border(
+                    1.5.dp,
+                    Brush.horizontalGradient(listOf(MikuTeal, MikuPink)),
+                    RoundedCornerShape(20.dp)
+                )
+                .clickable(enabled = false) {}
+                .padding(18.dp)
+        ) {
+            // Header
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF00FF88))
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "MIKU CONNECT",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = AudiowideFont,
+                        letterSpacing = 1.sp
+                    )
+                }
+                HapticIconButton(onClick = onClose, flat = true) {
+                    Icon(Icons.Default.Close, "Close", tint = Color.White, modifier = Modifier.size(20.dp))
+                }
+            }
+
+            Text(
+                "Spotify-Connect style wireless control & TV playback.",
+                color = Muted,
+                fontSize = 11.5.sp,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // Card 1: Mobile Remote
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF08202D))
+                    .border(1.dp, MikuTeal.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.PhoneAndroid, null, tint = MikuTeal, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("PHONE / WEB REMOTE", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(remoteUrl, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Open on your phone or laptop browser to control playback, adjust volume, and view queue.", color = Muted, fontSize = 11.sp)
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Card 2: TV Big Screen
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xFF08202D))
+                    .border(1.dp, MikuPink.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    .padding(12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Tv, null, tint = MikuPink, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("TV BIG SCREEN STAGE", color = MikuPink, fontSize = 12.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(tvUrl, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Open on your Smart TV browser to see giant album art, live spectrum, and stream audio to TV sound system.", color = Muted, fontSize = 11.sp)
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    "Port 8765 · Native DTA Server Active",
+                    color = MikuTeal.copy(alpha = 0.7f),
+                    fontSize = 10.5.sp,
+                    fontFamily = AudiowideFont
+                )
+            }
+        }
+    }
 }
 
 /**
@@ -897,7 +1171,7 @@ fun EmbossedScrubber(
 
 // Embossed 3D metric pill: raised tinted face lit from the top, specular hairline, drop shadow.
 @Composable fun DataChip(text: String, color: Color) = Text(
-    text, color = color, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp,
+    text, color = color, fontSize = 14.5.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp,
     modifier = Modifier
         .drawBehind {
             val rr = CornerRadius(8.dp.toPx(), 8.dp.toPx())
@@ -909,7 +1183,7 @@ fun EmbossedScrubber(
                 Brush.verticalGradient(listOf(Color(0x59FFFFFF), Color(0x00FFFFFF)), endY = size.height * 0.65f),
                 cornerRadius = rr, style = Stroke(1.1f))
         }
-        .padding(horizontal = 8.dp, vertical = 3.dp)
+        .padding(horizontal = 9.dp, vertical = 4.dp)
 )
 
 private fun qualityTier(t: Track): String {
@@ -945,29 +1219,31 @@ private fun heartbeat(x: Float): Float {
 enum class LikeTier { TRACK, ALBUM, ARTIST }
 
 @Composable
-fun RainbowHeart(liked: Boolean, onToggle: () -> Unit) = TieredRainbowHeart(LikeTier.TRACK, liked, onToggle)
+fun RainbowHeart(liked: Boolean, size: androidx.compose.ui.unit.Dp = 42.dp, onToggle: () -> Unit) =
+    TieredRainbowHeart(LikeTier.TRACK, liked, size, onToggle)
 
 /** Ring-wrapped heart — "the whole collection wrapped together," a step up from a single track. */
 @Composable
-fun AlbumRainbowHeart(liked: Boolean, onToggle: () -> Unit) = TieredRainbowHeart(LikeTier.ALBUM, liked, onToggle)
+fun AlbumRainbowHeart(liked: Boolean, size: androidx.compose.ui.unit.Dp = 42.dp, onToggle: () -> Unit) =
+    TieredRainbowHeart(LikeTier.ALBUM, liked, size, onToggle)
 
 /** Heart with a spark accent — "everything this person makes," the widest tier. */
 @Composable
-fun ArtistRainbowHeart(liked: Boolean, onToggle: () -> Unit) = TieredRainbowHeart(LikeTier.ARTIST, liked, onToggle)
+fun ArtistRainbowHeart(liked: Boolean, size: androidx.compose.ui.unit.Dp = 42.dp, onToggle: () -> Unit) =
+    TieredRainbowHeart(LikeTier.ARTIST, liked, size, onToggle)
 
 @Composable
-fun TieredRainbowHeart(tier: LikeTier, liked: Boolean, onToggle: () -> Unit) {
+fun TieredRainbowHeart(
+    tier: LikeTier,
+    liked: Boolean,
+    size: androidx.compose.ui.unit.Dp = 42.dp,
+    onToggle: () -> Unit
+) {
     val ctx = LocalContext.current
-    // Manual time loops (device animations are disabled). A flowing multi-stop rainbow gradient fills
-    // the heart (many hues at once), with a subtle detailed lub-dub beat rather than one big throb.
     var phase by remember { mutableStateOf(0f) }
     var beat by remember { mutableStateOf(0f) }
     LaunchedEffect(liked) {
         if (!liked) return@LaunchedEffect
-        // Highest wake-frequency loop in the app (16ms) — pure decorative pulse, so it's not worth
-        // running at all once the screen isn't actively shown (dimmed/ambient/off all count, same
-        // cutoff the visualizer already uses). Coarse 500ms check-back while idle so it resumes
-        // smoothly the instant the screen comes back, instead of a hard cliff.
         while (true) {
             if (IdleController.screenActive) {
                 phase = (phase + 2.4f) % 360f; beat = (beat + 0.014f) % 1f
@@ -975,59 +1251,163 @@ fun TieredRainbowHeart(tier: LikeTier, liked: Boolean, onToggle: () -> Unit) {
             } else delay(500)
         }
     }
-    val pulse = if (liked) 1f + 0.055f * heartbeat(beat) else 1f
+    val pulse = if (liked) 1f + 0.065f * heartbeat(beat) else 1f
     val label = when (tier) { LikeTier.TRACK -> "song"; LikeTier.ALBUM -> "album"; LikeTier.ARTIST -> "artist" }
     Box(
-        Modifier.size(30.dp).scale(pulse)
+        Modifier
+            .size(size)
+            .scale(pulse)
             .semantics { contentDescription = "${if (liked) "Unlike" else "Like"} $label"; role = Role.Checkbox; toggleableState = ToggleableState(liked) }
-            .clickable { Haptics.tick(ctx); onToggle() },
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null
+            ) {
+                Haptics.tick(ctx)
+                onToggle()
+            },
         contentAlignment = Alignment.Center
     ) {
-        Canvas(Modifier.size(24.dp)) {
-            val p = heartPath(size.width, size.height)
+        Canvas(Modifier.size(size * 0.84f)) {
+            val w = this.size.width
+            val h = this.size.height
+            val p = heartPath(w, h)
+
             if (liked) {
-                // Each tier gets its own hue-stepping/rotation-speed formula — a "slightly
-                // different rainbow pattern," not just a recolor — plus its own gradient axis.
+                // 1. 3D Physical Drop Shadow underneath the heart
+                val shadowPath = heartPath(w, h)
+                drawContext.canvas.save()
+                drawContext.canvas.translate(0f, 3.5f)
+                drawPath(shadowPath, Color(0x99000000))
+                drawContext.canvas.restore()
+
+                // 2. Ambient Chromatic Bloom / Aura behind the heart
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(
+                            Color.hsv((phase + 120f) % 360f, 0.9f, 1f, 0.45f),
+                            Color.Transparent
+                        ),
+                        center = Offset(w * 0.5f, h * 0.45f),
+                        radius = w * 0.75f
+                    )
+                )
+
+                // 3. Dynamic Rotating Rainbow Chromatic Core
                 val cols = when (tier) {
-                    LikeTier.TRACK -> (0..6).map { Color.hsv(((it * 52) + phase) % 360f, 0.85f, 1f) }
-                    LikeTier.ALBUM -> (0..6).map { Color.hsv(((it * 52) + phase * 1.4f + 40f) % 360f, 0.78f, 0.95f) }
-                    LikeTier.ARTIST -> (0..7).map { Color.hsv(((it * 46) + phase * 0.7f + 200f) % 360f, 0.9f, 1f) }
+                    LikeTier.TRACK -> (0..6).map { Color.hsv(((it * 52) + phase) % 360f, 0.88f, 1f) }
+                    LikeTier.ALBUM -> (0..6).map { Color.hsv(((it * 52) + phase * 1.4f + 40f) % 360f, 0.80f, 0.98f) }
+                    LikeTier.ARTIST -> (0..7).map { Color.hsv(((it * 46) + phase * 0.7f + 200f) % 360f, 0.92f, 1f) }
                 }
                 val brush = when (tier) {
-                    LikeTier.TRACK -> Brush.linearGradient(cols, Offset(0f, size.height), Offset(size.width, 0f))
-                    LikeTier.ALBUM -> Brush.linearGradient(cols, Offset(size.width, size.height), Offset(0f, 0f))
-                    LikeTier.ARTIST -> Brush.radialGradient(cols, center = Offset(size.width * 0.5f, size.height * 0.42f), radius = size.width * 0.75f)
+                    LikeTier.TRACK -> Brush.linearGradient(cols, Offset(0f, h), Offset(w, 0f))
+                    LikeTier.ALBUM -> Brush.linearGradient(cols, Offset(w, h), Offset(0f, 0f))
+                    LikeTier.ARTIST -> Brush.radialGradient(cols, center = Offset(w * 0.5f, h * 0.42f), radius = w * 0.75f)
                 }
                 drawPath(p, brush)
-                drawPath(p, Color.White.copy(alpha = 0.10f))                                    // soft sheen
-                drawPath(p, Color.White.copy(alpha = 0.35f), style = Stroke(1.2f))              // crisp edge
+
+                // 4. 3D Embossed Convex Shading & Specular Dome (Top-Left Light Source)
+                // Top-left specular highlight rim (raised 3D crest)
+                val highlightBrush = Brush.linearGradient(
+                    listOf(
+                        Color.White.copy(alpha = 0.92f),
+                        Color.White.copy(alpha = 0.35f),
+                        Color.Transparent
+                    ),
+                    start = Offset(0f, 0f),
+                    end = Offset(w, h)
+                )
+                drawPath(p, highlightBrush, style = Stroke(width = 2.4f))
+
+                // Bottom-right shadow rim (sunken 3D bottom bevel)
+                val shadowRimBrush = Brush.linearGradient(
+                    listOf(
+                        Color.Transparent,
+                        Color(0x80000000)
+                    ),
+                    start = Offset(0f, 0f),
+                    end = Offset(w, h)
+                )
+                drawPath(p, shadowRimBrush, style = Stroke(width = 2.2f))
+
+                // Upper dual-lobe 3D gloss gleams
+                drawOval(
+                    brush = Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.65f), Color.Transparent),
+                        center = Offset(w * 0.28f, h * 0.26f),
+                        radius = w * 0.20f
+                    ),
+                    topLeft = Offset(w * 0.16f, h * 0.16f),
+                    size = Size(w * 0.24f, h * 0.18f)
+                )
+                drawOval(
+                    brush = Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.50f), Color.Transparent),
+                        center = Offset(w * 0.70f, h * 0.26f),
+                        radius = w * 0.18f
+                    ),
+                    topLeft = Offset(w * 0.60f, h * 0.16f),
+                    size = Size(w * 0.20f, h * 0.16f)
+                )
+
+                // Distinct tier accents
+                val minDim = minOf(w, h)
                 when (tier) {
                     LikeTier.ALBUM -> {
-                        // Orbit ring — reads as "a whole collection," distinguishes at a glance
-                        // from the plain track heart without changing the silhouette.
                         drawCircle(
-                            Color.White.copy(alpha = 0.55f),
-                            radius = size.minDimension * 0.62f,
-                            center = Offset(size.width / 2f, size.height / 2f),
-                            style = Stroke(width = 1.1f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(3f, 3f)))
+                            color = Color.White.copy(alpha = 0.75f),
+                            radius = minDim * 0.64f,
+                            center = Offset(w / 2f, h / 2f),
+                            style = Stroke(width = 1.6f, pathEffect = androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(4f, 4f)))
                         )
                     }
                     LikeTier.ARTIST -> {
-                        // Small 4-point spark at the top-right notch — "spotlight on this person."
-                        val cx = size.width * 0.82f; val cy = size.height * 0.14f; val r = size.minDimension * 0.14f
+                        val cx = w * 0.84f
+                        val cy = h * 0.14f
+                        val r = minDim * 0.16f
                         val spark = androidx.compose.ui.graphics.Path().apply {
-                            moveTo(cx, cy - r); lineTo(cx + r * 0.28f, cy - r * 0.28f)
-                            lineTo(cx + r, cy); lineTo(cx + r * 0.28f, cy + r * 0.28f)
-                            lineTo(cx, cy + r); lineTo(cx - r * 0.28f, cy + r * 0.28f)
-                            lineTo(cx - r, cy); lineTo(cx - r * 0.28f, cy - r * 0.28f)
+                            moveTo(cx, cy - r)
+                            lineTo(cx + r * 0.28f, cy - r * 0.28f)
+                            lineTo(cx + r, cy)
+                            lineTo(cx + r * 0.28f, cy + r * 0.28f)
+                            lineTo(cx, cy + r)
+                            lineTo(cx - r * 0.28f, cy + r * 0.28f)
+                            lineTo(cx - r, cy)
+                            lineTo(cx - r * 0.28f, cy - r * 0.28f)
                             close()
                         }
-                        drawPath(spark, Color.White.copy(alpha = 0.85f))
+                        drawPath(spark, Color.White.copy(alpha = 0.95f))
                     }
                     LikeTier.TRACK -> {}
                 }
             } else {
-                drawPath(p, Color(0xFF54706B))
+                // 3D Debossed Engraved Cavity when unliked
+                // Top inset shadow
+                val insetShadowPath = heartPath(w, h)
+                drawContext.canvas.save()
+                drawContext.canvas.translate(0f, 1.8f)
+                drawPath(insetShadowPath, Color(0x95000000))
+                drawContext.canvas.restore()
+
+                // Satin dark metallic fill
+                val debossFill = Brush.verticalGradient(
+                    listOf(
+                        Color(0xFF1B2F33),
+                        Color(0xFF0F1D20)
+                    )
+                )
+                drawPath(p, debossFill)
+
+                // Bottom bevel highlight (light catching the bottom rim of the engraved cavity)
+                val bottomChamfer = Brush.verticalGradient(
+                    listOf(
+                        Color.Transparent,
+                        Color.White.copy(alpha = 0.35f)
+                    )
+                )
+                drawPath(p, bottomChamfer, style = Stroke(width = 1.8f))
+
+                // Crisp inner metallic edge
+                drawPath(p, Color(0xFF426863).copy(alpha = 0.85f), style = Stroke(width = 1.3f))
             }
         }
     }

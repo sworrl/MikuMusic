@@ -16,13 +16,20 @@ val MikuPink = Color(0xFFFF2A85)
 val MikuPinkBright = Color(0xFFFF4081)
 val MikuPurple = Color(0xFFB388FF)
 val MikuGold = Color(0xFFFFD54F)
+val MikuCyan = Color(0xFF00E5FF)
+val MikuNeonPink = Color(0xFFFF4081)
+val MikuTextPrimary = Color(0xFFE0F7FA)
+val MikuTextSecondary = Color(0xFF80DEEA)
 val MikuDarkBg = Color(0xFF040D12)
 val MikuSurface1 = Color(0xFF071922)
 val MikuSurface2 = Color(0xFF0E242C)
 val MikuCardBg = Color(0xFF06141B)
 val MikuMuted = Color(0xFF8BA6A9)
 val MikuWhite = Color(0xFFF0FDFB)
-val CyberGlassBorder = Color(0x5500F5D4)
+val CyberGlassBorder = Color(0x3300E5FF)
+val CyberGlassCard = Color(0xDD0A1E26)
+val AudiowideFont = androidx.compose.ui.text.font.FontFamily.Monospace
+val OrbitronFont = androidx.compose.ui.text.font.FontFamily.Monospace
 
 fun Modifier.mikuTile(isActive: Boolean) = this
     .clip(RoundedCornerShape(14.dp))
@@ -51,6 +58,22 @@ fun Modifier.mikuTile(isActive: Boolean) = this
             Brush.verticalGradient(listOf(CyberGlassBorder.copy(alpha = 0.5f), Color.Transparent, CyberGlassBorder.copy(alpha = 0.25f))),
         RoundedCornerShape(13.dp)
     )
+
+fun Modifier.mikuCard(
+    borderColor: Color = MikuTeal.copy(alpha = 0.35f),
+    cornerRadius: Int = 16
+) = this
+    .clip(RoundedCornerShape(cornerRadius.dp))
+    .background(MikuCardBg)
+    .border(1.dp, borderColor, RoundedCornerShape(cornerRadius.dp))
+
+fun Modifier.mikuHeroCard(
+    startColor: Color = Color(0xFF0D2529),
+    endColor: Color = Color(0xFF071215)
+) = this
+    .clip(RoundedCornerShape(18.dp))
+    .background(Brush.verticalGradient(listOf(startColor, endColor)))
+    .border(1.2.dp, MikuTealBright.copy(alpha = 0.5f), RoundedCornerShape(18.dp))
 
 fun Modifier.mikuGlassCard() = this
     .clip(RoundedCornerShape(16.dp))
