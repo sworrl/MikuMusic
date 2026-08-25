@@ -15,7 +15,7 @@ object FastLibraryStore {
     private const val TAG = "FastLibraryStore"
     private const val CACHE_FILE_NAME = "library_fast_v2.bin"
     private const val MAGIC_HEADER = 0x4D494B55 // "MIKU"
-    private const val VERSION = 2
+    private const val VERSION = 3 // v3: + discNumber per track
 
     @Volatile private var memoryCache: List<Track>? = null
 
@@ -56,6 +56,7 @@ object FastLibraryStore {
                     val trackNumber = dis.readInt()
                     val albumArtist = dis.readUTF()
                     val dateAddedSec = dis.readLong()
+                    val discNumber = dis.readInt()
 
                     list.add(
                         Track(
@@ -72,7 +73,8 @@ object FastLibraryStore {
                             albumId = albumId,
                             trackNumber = trackNumber,
                             albumArtist = albumArtist,
-                            dateAddedSec = dateAddedSec
+                            dateAddedSec = dateAddedSec,
+                            discNumber = discNumber
                         )
                     )
                 }
@@ -121,6 +123,7 @@ object FastLibraryStore {
                     dos.writeInt(t.trackNumber)
                     dos.writeUTF(t.albumArtist)
                     dos.writeLong(t.dateAddedSec)
+                    dos.writeInt(t.discNumber)
                 }
                 dos.flush()
             }

@@ -27,6 +27,9 @@ import java.util.concurrent.CopyOnWriteArraySet
 object MikuSyncTransceiver {
     private const val TAG = "MikuSyncTransceiver"
 
+    /** Mirror of Settings.Global miku_ingest_enabled, kept current by [MikuIngestGate]. */
+    @Volatile var ingestEnabledFlag: Boolean = false
+
     const val RSYNC_PORT = 8730
     const val M500D_PORT = 8787
     const val M500D_BEACON_PORT = 8788
@@ -215,8 +218,23 @@ object MikuSyncTransceiver {
 
     private var networkCallbackRegistered = false
 
+    /** Halts the network side of the ingress engine (host discovery + daemon polling). The local
+     *  library mirror in LibraryDaemonService is untouched — this is what "ingest engine OFF"
+     *  means: nothing talks to the network, local SD scans keep working. */
+    fun stopMonitoring() {
+        monitorJob?.cancel()
+        monitorJob = null
+        _state.value = _state.value.copy(
+            transport = TransportType.DISCONNECTED,
+            daemon = _state.value.daemon.copy(online = false, isTransferring = false),
+            isTransferring = false
+        )
+        log("Ingress engine OFF — network monitoring halted (local SD scans only)")
+    }
+
     fun startMonitoring(ctx: Context) {
         if (monitorJob != null) return
+        if (!MikuIngestGate.isEnabled(ctx)) { log("Ingress engine is OFF — not starting network monitor"); return }
         
         if (!networkCallbackRegistered) {
             try {
@@ -513,6 +531,7 @@ object MikuSyncTransceiver {
     }
 
     fun triggerDaemonSync(start: Boolean, onResult: (Boolean, String) -> Unit) {
+        if (!ingestEnabledFlag) { onResult(false, "Ingress engine is OFF (local SD scans only)"); return }
         scope.launch {
             try {
                 val host = activeHost

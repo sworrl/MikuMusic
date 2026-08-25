@@ -102,6 +102,11 @@ object PlayerHolder {
         // Full-range volume: kill HiBy's "volume lock" (Settings.Global vendor.audio.hw.volume_lock)
         // which caps STREAM_MUSIC at index 35/40 on the phone-out jacks — see MikuDirectAudio.
         runCatching { MikuDirectAudio.ensureFullVolumeRange(app) }
+        // Hi-fi pipeline is the ONLY pipeline: the bit-perfect DirectPCM sink (24/32-bit int
+        // passthrough, float→24-bit, DTA DIRECT when allow-listed). The old "LibVLC / OpenSL ES"
+        // engine preference was a 16-bit resampled path — it is no longer selectable, and any
+        // stale stored value is overwritten here so a prior tap can never silently degrade audio.
+        runCatching { if (PlayerPreferences.loadAudioEngine(app) != "exoplayer") PlayerPreferences.saveAudioEngine(app, "exoplayer") }
 
         // Integer PCM output with bit-perfect DIRECT support for dual CS43198 DACs:
         // Media3's stock DefaultAudioSink either downsamples 24/32-bit to 16-bit (float=false)

@@ -49,6 +49,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
@@ -122,13 +124,36 @@ fun extractArtPalette(bitmap: ImageBitmap?): ArtPalette {
         } ?: sortedBySat.getOrNull(sortedBySat.size / 2) ?: colors.last()
 
         return ArtPalette(
-            color1 = Color(topVibrant),
+            color1 = legibleAccent(Color(topVibrant), MikuTeal),
             color2 = Color(deepTone),
-            color3 = Color(accentTone)
+            color3 = legibleAccent(Color(accentTone), MikuPink)
         )
     } catch (_: Throwable) {
         return ArtPalette(MikuTeal, Color(0xFF0A2528), MikuPink)
     }
+}
+
+/**
+ * Accent colors are used for TEXT and ICONS on a near-black ground, so they must stay legible:
+ * a black-cover album (Metallica, AC/DC…) used to hand back a near-black "vibrant" color and the
+ * whole chrome — artist line, dice, tape icon, progress — went invisible. Grey/desaturated art
+ * falls back to the Miku identity accent; dark-but-colorful accents are lifted toward white until
+ * they clear a luminance floor, keeping their hue.
+ */
+fun legibleAccent(c: Color, fallback: Color): Color {
+    val hsv = FloatArray(3)
+    android.graphics.Color.colorToHSV(c.toArgb(), hsv)
+    if (hsv[1] < 0.22f) return fallback                       // grey / monochrome art → Miku accent
+    val l = c.luminance()
+    val minLum = 0.30f
+    if (l >= minLum) return c
+    val t = ((minLum - l) / (1f - l)).coerceIn(0f, 0.8f)
+    return Color(
+        red = c.red + (1f - c.red) * t,
+        green = c.green + (1f - c.green) * t,
+        blue = c.blue + (1f - c.blue) * t,
+        alpha = 1f
+    )
 }
 
 private data class QueueItemInfo(
@@ -268,6 +293,8 @@ fun NowPlayingScreen(
             }
     ) {
         val palette = remember(art) { extractArtPalette(art) }
+        // Feed the app-wide dynamic theme from the SAME hi-res art this screen decoded.
+        LaunchedEffect(palette, track.id) { MikuArtTheme.push(track.id, palette) }
 
         // Branded 3-color dynamic blended background extracted directly from album artwork
         art?.let {
@@ -418,6 +445,14 @@ fun NowPlayingScreen(
                 Text(track.album.ifBlank { "Miku Player" }, color = Color(0xFFE8F4F2), fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.weight(1f))
+            HapticIconButton(onClick = { InstantRandom.start(ctx) }, flat = true) {
+                Icon(
+                    Icons.Default.Casino, "Random — play anything",
+                    tint = if (InstantRandom.active) palette.color3 else palette.color1,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            Spacer(Modifier.width(2.dp))
             HapticIconButton(onClick = { showConnectModal = !showConnectModal }, flat = true) {
                 Icon(Icons.Default.Tv, "Miku Connect (TV & Remote)", tint = if (showConnectModal) palette.color3 else palette.color1, modifier = Modifier.size(24.dp))
             }
@@ -431,17 +466,18 @@ fun NowPlayingScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Stage & Track Info Container with exact 50/50 even space split
+        // Stage & Track Info Container — stage gets the lion's share (~59/41): the info card only
+        // needs room for title / artist / album / badges, everything else is visualizer.
         Column(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            // Stage (Art / ProjectM Visualizer) — 50% split
+            // Stage (Art / ProjectM Visualizer) — larger split
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .weight(1.45f)
                     .clip(RoundedCornerShape(22.dp))
                     .background(Color(0xFF08181B))
                     .border(
@@ -522,7 +558,7 @@ fun NowPlayingScreen(
 
             Spacer(Modifier.height(10.dp))
 
-            // Track Info Card: 100% Full Album Art with Text Overlain & Vignette — 50% split
+            // Track Info Card: 100% Full Album Art with Text Overlain & Vignette — compact split
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -585,10 +621,10 @@ fun NowPlayingScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .padding(horizontal = 14.dp, vertical = 9.dp),
                     verticalArrangement = Arrangement.SpaceBetween
                 ) {
-                    // Top Row: Large Title + Like Heart
+                    // Top Row: Title + Like Heart
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
@@ -597,7 +633,7 @@ fun NowPlayingScreen(
                         Text(
                             text = track.title,
                             color = Color.White,
-                            fontSize = 22.sp,
+                            fontSize = 18.5.sp,
                             fontWeight = FontWeight.Black,
                             fontFamily = RighteousFont,
                             letterSpacing = 0.4.sp,
@@ -607,8 +643,8 @@ fun NowPlayingScreen(
                                 .weight(1f)
                                 .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
                         )
-                        Spacer(Modifier.width(10.dp))
-                        RainbowHeart(LikeStore.isLiked(track.id)) { LikeStore.toggle(ctx, track) }
+                        Spacer(Modifier.width(8.dp))
+                        RainbowHeart(LikeStore.isLiked(track.id), size = 34.dp) { LikeStore.toggle(ctx, track) }
                     }
 
                     // Middle Section: Artist & Album with Year (occupies middle of card)
@@ -618,8 +654,8 @@ fun NowPlayingScreen(
                         Text(
                             text = "${track.artist}$yearTag",
                             color = Color(0xFFF2FBF9),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
                             fontFamily = Baloo2Font,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -630,11 +666,11 @@ fun NowPlayingScreen(
                                     onOpenArtist(track.artist)
                                 }
                         )
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height(1.dp))
                         Text(
                             text = track.album.ifBlank { track.artist },
                             color = palette.color1,
-                            fontSize = 14.5.sp,
+                            fontSize = 11.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             fontFamily = Baloo2Font,
                             maxLines = 1,
@@ -654,7 +690,7 @@ fun NowPlayingScreen(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Row { TechBadgeRow(ctx, track, fontSize = 12.sp, spacing = 5.dp, includeFormat = true) }
+                        Row { TechBadgeRow(ctx, track, fontSize = 10.5.sp, spacing = 4.dp, includeFormat = true) }
                         if (track.bitrateKbps > 0) DataChip("${track.bitrateKbps} kbps", bitrateColor(track.bitrateKbps))
                         DataChip(qualityTier(track), bitrateColor(track.bitrateKbps))
                         if (track.durationMs > 0) DataChip(fmtTime(track.durationMs), Color(0xFFD4ECE9))

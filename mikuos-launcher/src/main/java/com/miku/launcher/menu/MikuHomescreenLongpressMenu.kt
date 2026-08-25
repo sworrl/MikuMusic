@@ -33,6 +33,7 @@ import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 @Composable
 fun MikuHomescreenLongpressMenu(
     onWallpaperAndStyle: () -> Unit,
+    onQuiltOptions: () -> Unit = {},
     onWidgets: () -> Unit,
     onHomeSettings: () -> Unit,
     onDismiss: () -> Unit
@@ -144,6 +145,16 @@ fun MikuHomescreenLongpressMenu(
                     )
 
                     // 3. Home Settings (AOSP 1:1)
+                    AospMenuItem(
+                        title = "Quilt & badges",
+                        subtitle = "Rearrange, size, rows & backdrop",
+                        icon = Icons.Default.Dashboard,
+                        iconTint = MikuCyan,
+                        onClick = {
+                            onDismiss()
+                            onQuiltOptions()
+                        }
+                    )
                     AospMenuItem(
                         title = "Home settings",
                         subtitle = "Diva dock, gestures & grid",

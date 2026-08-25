@@ -90,6 +90,38 @@ fun MikuMonitorModal(
                     .padding(10.dp)
             ) {
                 // ============================================================
+                // INGRESS ENGINE MASTER SWITCH (Settings.Global miku_ingest_enabled, default OFF)
+                // ============================================================
+                var ingestOn by remember { mutableStateOf(MikuIngestGate.isEnabled(ctx)) }
+                LaunchedEffect(Unit) { while (true) { ingestOn = MikuIngestGate.isEnabled(ctx); kotlinx.coroutines.delay(1500) } }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (ingestOn) CyberNeonCyan.copy(alpha = 0.10f) else Color(0x33FF5C5C))
+                        .border(1.dp, if (ingestOn) CyberNeonCyan else Color(0xFFFF5C5C), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            if (ingestOn) "INGRESS ENGINE: ON" else "INGRESS ENGINE: OFF — LOCAL SD SCANS ONLY",
+                            color = if (ingestOn) CyberNeonCyan else Color(0xFFFF8A80),
+                            fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            if (ingestOn) "m500d discovery + rsync transceiver live" else "No network ingest runs. Library updates come from the SD card scan (Force Scan / periodic).",
+                            color = Color(0xFFB0BEC5), fontSize = 9.5.sp, fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Switch(
+                        checked = ingestOn,
+                        onCheckedChange = { on -> MikuIngestGate.setEnabled(ctx, on); ingestOn = on },
+                        colors = SwitchDefaults.colors(checkedThumbColor = CyberNeonCyan, checkedTrackColor = CyberNeonCyan.copy(alpha = 0.35f))
+                    )
+                }
+
+                // ============================================================
                 // HEADER BAR: CYBERDECK // MIKU_RELAY_NODE // V.2.0     [ X ]
                 // ============================================================
                 Row(

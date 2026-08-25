@@ -169,7 +169,7 @@ fun MikuFsIngestObservatoryModal(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                                     Box(
                                         Modifier
                                             .size(9.dp)
@@ -198,9 +198,12 @@ fun MikuFsIngestObservatoryModal(
                                 Text(
                                     "${ingestState.totalTracks} Tracks",
                                     color = Color.White,
-                                    fontSize = 16.5.sp,
+                                    fontSize = 14.sp,
                                     fontWeight = FontWeight.Black,
-                                    fontFamily = AudiowideFont
+                                    fontFamily = AudiowideFont,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(start = 8.dp)
                                 )
                             }
 
@@ -555,13 +558,13 @@ fun VolumeProgressRow(
 ) {
     Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column {
-                Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+            Column(Modifier.weight(1f)) {
+                Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(1.dp))
-                Text(path, color = MikuMuted, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace)
+                Text(path, color = MikuMuted, fontSize = 11.5.sp, fontFamily = FontFamily.Monospace, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Column(horizontalAlignment = Alignment.End) {
-                Text("$usedStr / $totalStr", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+            Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(start = 8.dp)) {
+                Text("$usedStr / $totalStr", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, maxLines = 1, softWrap = false)
                 Spacer(Modifier.height(1.dp))
                 Text("$pct% Used", color = barColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }

@@ -701,7 +701,7 @@ fun LanguageSelectionScreen(
                                         .background(MikuOnboardingTeal.copy(alpha = 0.2f))
                                         .padding(horizontal = 6.dp, vertical = 2.dp)
                                 ) {
-                                    Text("CYBER UI", color = MikuOnboardingTeal, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    Text("CYBER UI", color = MikuOnboardingTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }
@@ -806,7 +806,7 @@ fun DateTimeSelectionScreen(
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("LIVE CLOCK PREVIEW", color = MikuOnboardingTeal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    Text("LIVE CLOCK PREVIEW", color = MikuOnboardingTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     Spacer(Modifier.width(8.dp))
                     Box(
                         Modifier
@@ -814,7 +814,7 @@ fun DateTimeSelectionScreen(
                             .background(MikuOnboardingTeal.copy(alpha = 0.2f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
-                        Text(if (is24Hour) "24H FORMAT" else "12H FORMAT", color = MikuOnboardingTeal, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text(if (is24Hour) "24H FORMAT" else "12H FORMAT", color = MikuOnboardingTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 Spacer(Modifier.height(2.dp))
@@ -931,7 +931,7 @@ fun DateTimeSelectionScreen(
                                 .background(MikuOnboardingTeal.copy(alpha = 0.2f))
                                 .padding(horizontal = 4.dp, vertical = 1.dp)
                         ) {
-                            Text("TOUCH BOOST", color = MikuOnboardingTeal, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
+                            Text("TOUCH BOOST", color = MikuOnboardingTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -939,7 +939,7 @@ fun DateTimeSelectionScreen(
                 Text(
                     "Increase touch sensitivity for tempered glass protectors",
                     color = Color.White.copy(alpha = 0.6f),
-                    fontSize = 9.5.sp
+                    fontSize = 11.sp
                 )
             }
             Spacer(Modifier.width(6.dp))
@@ -998,7 +998,7 @@ fun DateTimeSelectionScreen(
                             .background(MikuOnboardingGreen.copy(alpha = 0.2f))
                             .padding(horizontal = 5.dp, vertical = 2.dp)
                     ) {
-                        Text("PRE-AUTH", color = MikuOnboardingGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Text("PRE-AUTH", color = MikuOnboardingGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
                 Text(
@@ -1119,7 +1119,7 @@ fun DateTimeSelectionScreen(
                                     .background(Color.White.copy(alpha = 0.08f))
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
-                                Text(tz.offset, color = MikuOnboardingTeal, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text(tz.offset, color = MikuOnboardingTeal, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                         Text(

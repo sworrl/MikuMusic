@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +55,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
     var csFilter by remember { mutableStateOf(CirrusLogicManager.DigitalFilter.NOS) }
     var csGain by remember { mutableStateOf(CirrusLogicManager.GainMode.LOW) }
     var csDre by remember { mutableStateOf(true) }
+    var showDreOffConfirm by remember { mutableStateOf(false) }
     var csTurbo by remember { mutableStateOf(false) }
     var csDsdComp by remember { mutableStateOf(true) }
     var csOutput by remember { mutableStateOf(CirrusLogicManager.OutputMode.BAL_HEADPHONE_OUT) }
@@ -78,6 +80,34 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
             auditState = CirrusLogicManager.getLiveHardwareAudit()
             dtaStatus = MikuDirectAudio.status(ctx)
         }
+    }
+    if (showDreOffConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDreOffConfirm = false },
+            containerColor = Color(0xFF0A1E26),
+            titleContentColor = Color(0xFFFF6B6B),
+            textContentColor = Color.White,
+            title = { Text("⚠ LOW QUALITY MODE", fontWeight = FontWeight.Black, fontFamily = AudiowideFont, fontSize = 14.sp) },
+            text = {
+                Text(
+                    "Turning Dynamic Range Enhancement OFF drops the CS43198 dynamic range (~130 dB → stock) and audibly reduces micro-detail. This is a deliberate downgrade — the player will keep every other hi-fi setting, but DRE stays off until you re-enable it here.",
+                    fontSize = 12.sp, lineHeight = 16.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDreOffConfirm = false
+                    csDre = false
+                    scope.launch {
+                        CirrusLogicManager.setDreEnabled(ctx, false)
+                        refreshAudit()
+                    }
+                }) { Text("DISABLE DRE ANYWAY", color = Color(0xFFFF6B6B), fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDreOffConfirm = false }) { Text("KEEP HI-FI", color = MikuCyan, fontWeight = FontWeight.Bold) }
+            }
+        )
     }
 
     // Poll the HAL's direct flags while this screen is open so the readout is live truth,
@@ -409,10 +439,15 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                             Switch(
                                 checked = csDre,
                                 onCheckedChange = {
-                                    csDre = it
-                                    scope.launch {
-                                        CirrusLogicManager.setDreEnabled(ctx, it)
-                                        refreshAudit()
+                                    if (!it) {
+                                        // Disabling DRE is an audible quality downgrade — never on a stray tap.
+                                        showDreOffConfirm = true
+                                    } else {
+                                        csDre = true
+                                        scope.launch {
+                                            CirrusLogicManager.setDreEnabled(ctx, true)
+                                            refreshAudit()
+                                        }
                                     }
                                 },
                                 colors = SwitchDefaults.colors(checkedThumbColor = MikuCyan, checkedTrackColor = Color(0xFF00695C))
@@ -686,7 +721,10 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                 // SECTION 1.6: AUDIO PLAYBACK ENGINE ("SWAPPABLE BONE")
                 // ============================================================
                 item {
-                    var audioEngine by remember { mutableStateOf(PlayerPreferences.loadAudioEngine(ctx)) }
+                    // The playback core is NOT swappable any more. The old "LibVLC (OpenSL ES + SoX)"
+                    // alternative was a 16-bit, resampled pipeline — a silent audio downgrade one
+                    // accidental tap away. Only the bit-perfect DirectPCM DTA sink exists now, and
+                    // PlayerHolder re-asserts it on every player creation.
                     Column(
                         Modifier
                             .fillMaxWidth()
@@ -696,90 +734,27 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                             .padding(14.dp)
                     ) {
                         Text(
-                            "AUDIO PLAYBACK CORE (SWAPPABLE BONE)",
+                            "AUDIO PLAYBACK CORE — LOCKED HI-FI",
                             color = MikuCyan,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = AudiowideFont
                         )
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "Select the active audio decoding pipeline. DirectPCM routes straight to the dual CS43198 DACs, while LibVLC provides the alternate OpenSL ES engine.",
-                            color = MikuTextSecondary,
-                            fontSize = 10.sp,
-                            lineHeight = 13.5.sp
-                        )
-                        Spacer(Modifier.height(8.dp))
-
-                        // Option 1: DirectPCM (ExoPlayer)
-                        val isExo = audioEngine == "exoplayer"
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isExo) Color(0x3300E5FF) else Color.Transparent)
-                                .clickable {
-                                    audioEngine = "exoplayer"
-                                    PlayerPreferences.saveAudioEngine(ctx, "exoplayer")
-                                    android.widget.Toast.makeText(ctx, "⚡ DirectPCM Engine Active", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = isExo,
-                                onClick = {
-                                    audioEngine = "exoplayer"
-                                    PlayerPreferences.saveAudioEngine(ctx, "exoplayer")
-                                    android.widget.Toast.makeText(ctx, "⚡ DirectPCM Engine Active", android.widget.Toast.LENGTH_SHORT).show()
-                                },
-                                colors = RadioButtonDefaults.colors(selectedColor = MikuCyan, unselectedColor = Color.Gray)
-                            )
-                            Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Lock, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
                             Column {
                                 Text("DirectPCM Bit-Perfect DTA (ExoPlayer)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Direct hardware sink to dual CS43198 DACs (Bit-perfect, lowest latency)", color = MikuTextSecondary, fontSize = 10.sp, lineHeight = 13.sp)
-                            }
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-
-                        // Option 2: LibVLC Engine
-                        val isVlc = audioEngine == "vlc"
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isVlc) Color(0x3300E5FF) else Color.Transparent)
-                                .clickable {
-                                    audioEngine = "vlc"
-                                    PlayerPreferences.saveAudioEngine(ctx, "vlc")
-                                    android.widget.Toast.makeText(ctx, "⚡ LibVLC Engine Active", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = isVlc,
-                                onClick = {
-                                    audioEngine = "vlc"
-                                    PlayerPreferences.saveAudioEngine(ctx, "vlc")
-                                    android.widget.Toast.makeText(ctx, "⚡ LibVLC Engine Active", android.widget.Toast.LENGTH_SHORT).show()
-                                },
-                                colors = RadioButtonDefaults.colors(selectedColor = MikuCyan, unselectedColor = Color.Gray)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Column {
-                                Text("LibVLC Engine (OpenSL ES + SoX)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Modular OpenSL ES backend with high-precision soxr resampler", color = MikuTextSecondary, fontSize = 10.sp, lineHeight = 13.sp)
+                                Text(
+                                    "Direct hardware sink to the dual CS43198 DACs: 24/32-bit integer passthrough, float → 24-bit, no resampling, DTA DIRECT route when granted. There is no low-quality engine to fall into.",
+                                    color = MikuTextSecondary, fontSize = 10.sp, lineHeight = 13.5.sp
+                                )
                             }
                         }
                     }
                 }
 
-                // ============================================================
-                // SECTION 2: BIT-PERFECT UAC2 ASYNCHRONOUS USB DAC
-                // ============================================================
                 item {
                     Column(
                         Modifier

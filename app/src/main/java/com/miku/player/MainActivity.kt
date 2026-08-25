@@ -413,7 +413,9 @@ class MainActivity : ComponentActivity() {
         }
         AlarmScheduler.rescheduleAll(this)                                 // re-arm exact alarms every launch (idempotent; also covers "somehow got cleared")
 
-        // Automated SD card ingress: trigger periodic deep scans
+        // "All files access" self-grant (platform-signed) — SD-card folder art + scans depend on it.
+        MikuStorageAccess.ensure(this)
+        // Automated SD card LOCAL rescans (never network — see MikuIngestGate for the ingress engine)
         schedulePeriodicLibraryScan(this)
 
         // Tell the platform to hold a stable, un-throttled CPU/GPU clock state (no governor
@@ -459,7 +461,7 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.RequestMultiplePermissions()
                 ) { result -> granted = result[audioPermission()] ?: hasAudioPermission() }
                 LaunchedEffect(Unit) { launcher.launch(permissionsToRequest()) }
-                Surface(color = Ground, modifier = Modifier.fillMaxSize()) {
+                Surface(color = MikuArtTheme.colors().ground, modifier = Modifier.fillMaxSize()) {
                     if (granted) {
                         var refresh by remember { mutableStateOf(0) }
                         var lastSeenGen by remember { mutableStateOf(ScanProgress.generation.get()) }
@@ -468,6 +470,7 @@ class MainActivity : ComponentActivity() {
                                 val g = ScanProgress.generation.get()
                                 if (g != lastSeenGen) {
                                     lastSeenGen = g
+                                    AlbumArtCache.clearMisses() // a scan may have surfaced art for previously-missed tracks
                                     refresh++
                                 }
                                 delay(2500L)
@@ -650,6 +653,7 @@ class MainActivity : ComponentActivity() {
         // meant to run front-to-back like a CD/vinyl side — force it off on every explicit play.
         player.shuffleModeEnabled = false
         PlayerPreferences.saveShuffle(this, false)
+        InstantRandom.clear()
         player.setMediaItems(list.map { mediaItemFor(it) }, index, 0L)
         player.prepare(); player.play()
         PlayerPreferences.saveQueue(this, list.map { it.id }, index)
@@ -696,6 +700,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33) {
             p.add(Manifest.permission.POST_NOTIFICATIONS)
             p.add(Manifest.permission.READ_MEDIA_VIDEO)
+            p.add(Manifest.permission.READ_MEDIA_IMAGES) // folder cover art via MediaStore.Images
         }
         return p.toTypedArray()
     }
@@ -730,6 +735,7 @@ class MainActivity : ComponentActivity() {
                 val id = c.getLong(iId)
                 val rawTrackNo = if (iTrackNo >= 0 && !c.isNull(iTrackNo)) c.getInt(iTrackNo) else 0
                 var parsedTrackNo = if (rawTrackNo >= 1000) rawTrackNo % 1000 else rawTrackNo
+                val discNo = if (rawTrackNo >= 1000) rawTrackNo / 1000 else 0
                 val path = if (iPath >= 0 && !c.isNull(iPath)) c.getString(iPath) ?: "" else ""
 
                 // MediaStore rows can outlive the actual file — deletes/moves done outside the
@@ -773,7 +779,8 @@ class MainActivity : ComponentActivity() {
                     if (iAlbumId >= 0 && !c.isNull(iAlbumId)) c.getLong(iAlbumId) else 0L,
                     parsedTrackNo,
                     albumArtist,
-                    if (iDateAdded >= 0 && !c.isNull(iDateAdded)) c.getLong(iDateAdded) else 0L
+                    if (iDateAdded >= 0 && !c.isNull(iDateAdded)) c.getLong(iDateAdded) else 0L,
+                    discNumber = discNo
                 ))
             }
         }
@@ -783,6 +790,28 @@ class MainActivity : ComponentActivity() {
 }
 
 @OptIn(ExperimentalHazeMaterialsApi::class)
+/** Automated SD card library rescans: triggers periodic deep scans (default: weekly, opt-in to daily) */
+/** LOCAL SD-card rescan schedule — MediaScanner over the card, no network (the ingress engine is a
+ *  separate switch, see MikuIngestGate). */
+fun schedulePeriodicLibraryScan(ctx: android.content.Context) {
+    val prefs = ctx.getSharedPreferences("miku_auto_scan", android.content.Context.MODE_PRIVATE)
+    val lastScanTime = prefs.getLong("last_auto_scan_ms", 0L)
+    val now = System.currentTimeMillis()
+    val ONE_DAY = 24 * 60 * 60 * 1000L
+    val ONE_WEEK = 7 * ONE_DAY
+
+    // Trigger if last scan was > 1 week ago (or first time)
+    if (now - lastScanTime > ONE_WEEK) {
+        android.util.Log.i("MainActivity", "Triggering automated deep library scan...")
+        MikuSyncTransceiver.deepScanDirectory(ctx, MikuSyncTransceiver.getSdMusicPath(ctx)) { count ->
+            prefs.edit().putLong("last_auto_scan_ms", System.currentTimeMillis()).apply()
+            if (count > 0) {
+                android.util.Log.i("MainActivity", "Auto-scan completed: $count tracks")
+            }
+        }
+    }
+}
+
 @Composable
 private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false, onScan: () -> Unit, onPlay: (List<Track>, Int) -> Unit) {
     val ctx = LocalContext.current
@@ -806,6 +835,14 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     val artistDetailListState = rememberLazyListState()
 
     var currentTrack by remember { mutableStateOf<Track?>(null) }
+    // App-wide dynamic color: re-extract from the CURRENT track's art on every change.
+    LaunchedEffect(currentTrack?.id) { MikuArtTheme.update(ctx, currentTrack) }
+    // Instant RANDOM mode — one tap, playback within a few hundred ms (see InstantRandom).
+    val startRandom: () -> Unit = {
+        Haptics.tick(ctx)
+        val ok = InstantRandom.start(ctx) { t -> currentTrack = t }
+        if (!ok) android.widget.Toast.makeText(ctx, "Library index is empty — run a scan first", android.widget.Toast.LENGTH_SHORT).show()
+    }
     // Views are sticky: relaunching drops you back into whatever you were looking at last
     // (tape deck / full now playing / the lists), as soon as the track restores.
     val initialTape = (ctx as? MainActivity)?.intent?.getBooleanExtra("open_tape_mode", false) == true
@@ -928,6 +965,10 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 val safePos = if (lastPos in 0..(restoredTrack.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)) lastPos else 0L
                 player.setMediaItems(restoredQueue.map { mediaItemFor(it) }, targetIdx, safePos)
                 player.prepare()
+                // Random mode persists: the saved shuffle flag is only ever TRUE when the queue was
+                // built by InstantRandom (explicit album/list plays save FALSE), so restoring it
+                // can't re-shuffle an album — it just brings random mode back with its dice lit.
+                if (PlayerPreferences.loadShuffle(ctx)) { player.shuffleModeEnabled = true; InstantRandom.markActive() }
                 // Restore queue + position ready-to-play but PAUSED. Auto-calling play() here
                 // meant every process restart (any app reinstall/update, a cached-process kill)
                 // resumed audio unprompted — the "music starts randomly on update" glitch.
@@ -1013,26 +1054,6 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     // Screen orientation is locked strictly to PORTRAIT mode across the entire app lifecycle.
     // Tape Mode renders rotated 90° CW in portrait mode so the user holds the DAP sideways while Android OS stays in portrait.
 
-    /** Automated SD card library rescans: triggers periodic deep scans (default: weekly, opt-in to daily) */
-    fun schedulePeriodicLibraryScan(ctx: android.content.Context) {
-        val prefs = ctx.getSharedPreferences("miku_auto_scan", android.content.Context.MODE_PRIVATE)
-        val lastScanTime = prefs.getLong("last_auto_scan_ms", 0L)
-        val now = System.currentTimeMillis()
-        val ONE_DAY = 24 * 60 * 60 * 1000L
-        val ONE_WEEK = 7 * ONE_DAY
-
-        // Trigger if last scan was > 1 week ago (or first time)
-        if (now - lastScanTime > ONE_WEEK) {
-            android.util.Log.i("MainActivity", "Triggering automated deep library scan...")
-            MikuSyncTransceiver.deepScanDirectory(ctx, MikuSyncTransceiver.getSdMusicPath(ctx)) { count ->
-                prefs.edit().putLong("last_auto_scan_ms", System.currentTimeMillis()).apply()
-                if (count > 0) {
-                    android.util.Log.i("MainActivity", "Auto-scan completed: $count tracks")
-                }
-            }
-        }
-    }
-
     fun startPlay(list: List<Track>, i: Int) {
         currentTrack = list[i]
         PlayerPreferences.saveLastPlayback(ctx, list[i].id, 0L)
@@ -1072,6 +1093,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
 
     var showScanDialog by remember { mutableStateOf(false) }
     var showMikuMonitorDialog by remember { mutableStateOf(false) }
+    var showStorageModal by remember { mutableStateOf(false) }
 
     // Pop the same priority chain the `when` below already renders in (deepest overlay first),
     // one level at a time — shared by the system-back handler and the bottom-bar back glyph so
@@ -1124,6 +1146,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     // padding equal to the bar's own measured height (it changes — the tab row only shows on the
     // top-level tabs, not in Artist/Album detail) so nothing starts out hidden underneath it.
     val hazeState = remember { HazeState() }
+    val artGround = MikuArtTheme.colors().ground
     var headerHeightPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
 
@@ -1194,7 +1217,8 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                     Tab.HOME -> HomeScreen(
                         tracks, recentlyPlayed, { tab = Tab.ARTISTS }, ::startPlay, listState = homeListState,
                         albumGroups = albumGroups, artistGroups = artistGroups,
-                        onOpenAlbum = { albumSel = it }, onOpenArtist = openArtistByName
+                        onOpenAlbum = { albumSel = it }, onOpenArtist = openArtistByName,
+                        onRandom = startRandom
                     )
                     Tab.SONGS -> SongList(tracks, sortIgnoreThe = sortIgnoreThe, onPlay = ::startPlay, listState = songsListState)
                     Tab.ARTISTS -> ArtistList(
@@ -1250,17 +1274,20 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .onSizeChanged { headerHeightPx = it.height }
-                .hazeChild(state = hazeState, style = HazeMaterials.thick(Ground))
+                .hazeChild(state = hazeState, style = HazeMaterials.thick(artGround))
         ) {
             Header(
                 count = tracks.size,
                 onScan = {
+                    // Track-count pill = the filesystem/storage display. The ingress engine has its
+                    // own modal (MikuMonitorModal) reached from Settings → Ingress Staging Telemetry.
                     if (ScanProgress.active) {
                         showScanDialog = true
                     } else {
-                        showMikuMonitorDialog = true
+                        showStorageModal = true
                     }
                 },
+                onRandom = startRandom,
                 onTape = {
                     showFullNowPlaying = false
                     if (currentTrack == null && tracks.isNotEmpty()) {
@@ -1320,6 +1347,9 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
             MikuMonitorModal(
                 onDismissRequest = { showMikuMonitorDialog = false }
             )
+        }
+        if (showStorageModal) {
+            MikuStorageSettingsModal(onDismissRequest = { showStorageModal = false })
         }
         if (showScanDialog) {
             ScanProgressDialog(hazeState = hazeState, onDismissRequest = { showScanDialog = false })
@@ -2389,9 +2419,11 @@ fun expandNotificationShade(ctx: Context) {
     onTape: () -> Unit,
     onSettings: () -> Unit = {},
     canGoBack: Boolean = false,
-    onBack: () -> Unit = {}
+    onBack: () -> Unit = {},
+    onRandom: () -> Unit = {}
 ) {
     val ctx = LocalContext.current
+    val ac = MikuArtTheme.colors()
     // No background fill of its own anymore — this now sits inside the shared hazeChild glass
     // panel (see App()), which supplies the frosted tint. A second opaque fill here would just
     // hide the blur entirely.
@@ -2453,7 +2485,7 @@ fun expandNotificationShade(ctx: Context) {
                 Spacer(Modifier.width(5.dp))
                 Text(
                     "Miku Music",
-                    color = MikuTealBright,
+                    color = ac.accent,
                     fontSize = brandFontSize,
                     fontWeight = FontWeight.Bold,
                     fontFamily = AudiowideFont,
@@ -2462,6 +2494,18 @@ fun expandNotificationShade(ctx: Context) {
             }
             Spacer(Modifier.weight(1f))
 
+            // Instant RANDOM — always one tap away from anything in the library.
+            HapticIconButton(
+                onClick = onRandom,
+                modifier = Modifier.semantics { contentDescription = "Random — play anything" }
+            ) {
+                Icon(
+                    Icons.Default.Casino, null,
+                    tint = if (InstantRandom.active) ac.accent2 else ac.accent,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
+            Spacer(Modifier.width(2.dp))
             ScannerPill(
                 count = count,
                 onScan = onScan
@@ -2470,7 +2514,7 @@ fun expandNotificationShade(ctx: Context) {
             HapticIconButton(
                 onClick = onTape,
                 modifier = Modifier.semantics { contentDescription = "Tape mode" }
-            ) { TapeIcon(tint = MikuPink, modifier = Modifier.size(22.dp)) }
+            ) { TapeIcon(tint = ac.accent2, modifier = Modifier.size(22.dp)) }
         }
     }
 }
@@ -2550,7 +2594,8 @@ private fun tabColor(t: Tab): Color = when (t) {
     albumGroups: List<AlbumGroup> = emptyList(),
     artistGroups: List<ArtistGroup> = emptyList(),
     onOpenAlbum: (AlbumGroup) -> Unit = {},
-    onOpenArtist: (String) -> Unit = {}
+    onOpenArtist: (String) -> Unit = {},
+    onRandom: () -> Unit = {}
 ) {
     val ctx = LocalContext.current
     val likedIds = LikeStore.liked.toList()
@@ -2652,6 +2697,7 @@ private fun tabColor(t: Tab): Color = when (t) {
         }
 
         // 1.5. "What vibe are you feeling?" / Vibe Alchemist Prompt Bar & Randomizer
+        item { RandomModePill(count = tracks.size, onRandom = onRandom) }
         item {
             MikuVibePromptCard(tracks = tracks, onPlay = onPlay)
         }
@@ -4294,7 +4340,7 @@ private fun ArtistSortSettingsModal(
                     }
                 }
             }
-            .padding(horizontal = 6.dp, vertical = 2.5.dp),
+            .padding(horizontal = 6.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
         val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
@@ -4306,7 +4352,20 @@ private fun ArtistSortSettingsModal(
             fontSize = dampedFontSize,
             fontWeight = FontWeight.Black,
             fontFamily = OrbitronFont,
-            letterSpacing = 0.3.sp
+            letterSpacing = 0.3.sp,
+            maxLines = 1,
+            softWrap = false,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            // Orbitron carries tall ascent/descent metrics — with default font padding the glyphs
+            // sat visibly low and off-center inside the gem. Trim the padding, center the line box.
+            lineHeight = dampedFontSize,
+            style = androidx.compose.ui.text.TextStyle(
+                platformStyle = androidx.compose.ui.text.PlatformTextStyle(includeFontPadding = false),
+                lineHeightStyle = androidx.compose.ui.text.style.LineHeightStyle(
+                    alignment = androidx.compose.ui.text.style.LineHeightStyle.Alignment.Center,
+                    trim = androidx.compose.ui.text.style.LineHeightStyle.Trim.Both
+                )
+            )
         )
     }
 }
@@ -6637,8 +6696,14 @@ object TransportShapes {
     // between samples so it reads as continuous playback, not a ticking gauge.
     val targetProgress = (pos.toFloat() / dur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
     val progress by animateFloatAsState(targetProgress, tween(520, easing = LinearEasing), label = "barProgress")
-    val artBm = remember(track.id) { AlbumArtCache.get(track.id) }
-    val palette = remember(artBm) { extractArtPalette(artBm) }
+    // Palette comes from the app-wide theme (extracted from the real art once it's loaded) and
+    // glides between tracks — no more "stays teal because the art wasn't cached at first compose".
+    LaunchedEffect(track.id) { MikuArtTheme.update(ctx, track) }
+    val targetPalette = MikuArtTheme.palette
+    val pc1 by animateColorAsState(targetPalette.color1, tween(600), label = "barC1")
+    val pc2 by animateColorAsState(targetPalette.color2, tween(600), label = "barC2")
+    val pc3 by animateColorAsState(targetPalette.color3, tween(600), label = "barC3")
+    val palette = ArtPalette(pc1, pc2, pc3)
 
     // Flush-to-bottom cyber docked NowPlayingBar
     Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
@@ -6765,6 +6830,14 @@ object TransportShapes {
                                 trackPath = track.path,
                                 contentScale = ContentScale.Crop
                             )
+                            // Like heart — the mini bar lost it in the docked redesign. Lives on the
+                            // art's corner so it costs the title/artist column no width at all.
+                            Box(
+                                Modifier.align(Alignment.BottomEnd).padding(1.dp)
+                                    .background(Color(0x99000000), RoundedCornerShape(topStart = 9.dp, bottomEnd = 11.dp))
+                            ) {
+                                RainbowHeart(LikeStore.isLiked(track.id), size = 26.dp) { LikeStore.toggle(ctx, track) }
+                            }
                         }
 
                         // Middle Track Information Column (Expanded Touch Zone & Responsive Typography)
@@ -7174,3 +7247,37 @@ private fun fmtDurationLong(ms: Long): String {
     }
 }
 
+
+
+/** Home-screen "RANDOM" pill: one tap → a random track from the whole library starts instantly
+ *  (InstantRandom), queue fills behind it. Lit in the art accent while random mode is active. */
+@Composable private fun RandomModePill(count: Int, onRandom: () -> Unit) {
+    val ac = MikuArtTheme.colors()
+    val active = InstantRandom.active
+    val glow by animateColorAsState(if (active) ac.accent2 else ac.accent, tween(400), label = "randomPillGlow")
+    Row(
+        Modifier
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Brush.horizontalGradient(listOf(glow.copy(alpha = 0.22f), ac.surface.copy(alpha = 0.85f))))
+            .border(1.dp, Brush.horizontalGradient(listOf(glow.copy(alpha = 0.9f), glow.copy(alpha = 0.25f))), RoundedCornerShape(16.dp))
+            .clickable { onRandom() }
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Casino, null, tint = glow, modifier = Modifier.size(26.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                if (active) "RANDOM MODE — ON" else "RANDOM",
+                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont, letterSpacing = 1.sp
+            )
+            Text(
+                if (active) "Rolling through the whole library · tap to re-roll" else "Play anything, instantly · $count tracks",
+                color = Muted, fontSize = 11.sp, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis
+            )
+        }
+        Icon(Icons.Default.PlayArrow, null, tint = glow, modifier = Modifier.size(22.dp))
+    }
+}

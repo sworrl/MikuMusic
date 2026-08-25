@@ -752,6 +752,11 @@ fun MikuKawaiiLockscreenScreen(
                 else -> listOf(Color(0x66FF1744), Color(0xFF200508))
             }
 
+            // Thin standard status bar (mirrors the home top bar), then the badge row under it.
+            com.miku.launcher.ui.MikuStatusBar(
+                state = com.miku.launcher.ui.rememberMikuStatusBarState(clock = currentTime, isPlaying = false, thermalC = 0f),
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
             // Top telemetry bar
             Row(
                 Modifier.fillMaxWidth(),
@@ -778,7 +783,7 @@ fun MikuKawaiiLockscreenScreen(
                         Text(
                             "CS43198",
                             color = palette.accent,
-                            fontSize = 7.8.dampedSp(),
+                            fontSize = 10.dampedSp(),
                             fontWeight = FontWeight.Bold,
                             fontFamily = AudiowideFont,
                             maxLines = 1
@@ -811,7 +816,7 @@ fun MikuKawaiiLockscreenScreen(
                             Text(
                                 "BRAIN",
                                 color = Color(0xFF00FF7F),
-                                fontSize = 7.8.dampedSp(),
+                                fontSize = 10.dampedSp(),
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = AudiowideFont,
                                 maxLines = 1
@@ -846,7 +851,7 @@ fun MikuKawaiiLockscreenScreen(
                             Text(
                                 "$batteryPercent%",
                                 color = Color.White,
-                                fontSize = 7.8.dampedSp(),
+                                fontSize = 10.dampedSp(),
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = AudiowideFont,
                                 maxLines = 1

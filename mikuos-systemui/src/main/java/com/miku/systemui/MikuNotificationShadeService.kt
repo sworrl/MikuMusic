@@ -1,198 +1,329 @@
 package com.miku.systemui
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.animation.ValueAnimator
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.drawable.GradientDrawable
+import android.graphics.RectF
+import android.os.Build
+import android.os.Handler
+import android.os.HandlerThread
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
 import android.view.WindowManager
-import android.os.Handler
-import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
-import android.widget.FrameLayout
+import android.view.animation.DecelerateInterpolator
+import android.view.animation.OvershootInterpolator
+import kotlin.math.abs
 
+/**
+ * MikuOS navigation layer (this device's stock SystemUI draws NO nav bar / status bar, so
+ * this accessibility service IS the navigation). Pixel-10 gesture model, Miku-themed:
+ *
+ *  • Edge back (both edges, 24dp strips): indicator emerges after 16dp of inward travel,
+ *    follows the finger's Y, rubber-bands to 36dp, commits at 32dp (haptic + pop),
+ *    un-commits below 22dp, cancels beyond ~55° vertical. Touches that turn out to be
+ *    taps / vertical scrolls / long-presses are REPLAYED into the app on release via
+ *    dispatchGesture (the a11y MotionEventInjector cancels injected input while a real
+ *    finger is still moving, so live pass-through is impossible — replay-on-lift is the
+ *    closest achievable behaviour; the strip is toggled NOT_TOUCHABLE during the replay).
+ *  • Home pill (132x24dp zone, bottom centre): swipe up 24dp / fling = HOME; swipe up
+ *    48dp then pause 150ms = Miku Recents; horizontal 32dp = quick switch (right = previous
+ *    app, left = forward again). Pill stretches/lifts with the drag and pops on trigger.
+ *  • Top strip (20dp, fully transparent — the status bar lives in the launcher): 24dp
+ *    downward drag opens MikuShadeActivity with the drag offset; anything else is replayed.
+ *  • Power: framework assistant path owns long-press (see frameworkOwnsPowerLongPress).
+ */
 class MikuNotificationShadeService : AccessibilityService() {
 
-    private lateinit var windowManager: WindowManager
-    private var touchInterceptView: View? = null
-    private var pullHandleView: View? = null
-    private var leftEdgeView: View? = null
-    private var rightEdgeView: View? = null
+    companion object {
+        private const val TAG = "MikuNav"
+        const val ACTION_TRIGGER_BACK = "com.miku.systemui.action.TRIGGER_BACK"
+        const val ACTION_DEBUG_QUICK_SWITCH = "com.miku.systemui.action.DEBUG_QUICK_SWITCH"
+        const val ACTION_DEBUG_RECENTS = "com.miku.systemui.action.DEBUG_RECENTS"
+        const val ACTION_DEBUG_HOME = "com.miku.systemui.action.DEBUG_HOME"
+        const val ACTION_DEBUG_BACK = "com.miku.systemui.action.DEBUG_BACK"
 
-    private val backReceiver = object : android.content.BroadcastReceiver() {
+        // Gesture geometry (dp)
+        const val EDGE_STRIP_DP = 24
+        const val EDGE_CLAIM_DP = 16f
+        const val EDGE_COMMIT_DP = 32f
+        const val EDGE_UNCOMMIT_DP = 22f
+        const val EDGE_MAX_DP = 36f
+        const val EDGE_VERTICAL_INTENT_PX = 20f
+        const val EDGE_MAX_ANGLE_TAN = 1.428f      // tan(55°)
+        const val TOP_STRIP_DP = 20
+        const val SHADE_PULL_DP = 24f
+        const val PILL_ZONE_W_DP = 132
+        const val PILL_ZONE_H_DP = 24
+        const val PILL_W_DP = 104f
+        const val PILL_H_DP = 4f
+        const val HOME_DP = 24f
+        const val HOME_FLING_PX_S = 900f
+        const val RECENTS_DP = 48f
+        const val RECENTS_HOLD_MS = 150L
+        const val RECENTS_HOLD_MAX_PX_S = 150f
+        const val QUICK_SWITCH_DP = 32f
+        const val QUICK_SWITCH_MAX_DY_DP = 16f
+        const val QUICK_SWITCH_SESSION_MS = 2500L
+        const val REPLAY_MAX_MS = 600L
+    }
+
+    private lateinit var windowManager: WindowManager
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val workThread = HandlerThread("miku-nav-work").apply { start() }
+    private val workHandler = Handler(workThread.looper)
+    private var overlaysAdded = false
+
+    private var leftEdgeView: EdgeBackView? = null
+    private var rightEdgeView: EdgeBackView? = null
+    private var topStripView: ShadePullView? = null
+    private var pillView: HomePillView? = null
+    private var leftParams: WindowManager.LayoutParams? = null
+    private var rightParams: WindowManager.LayoutParams? = null
+    private var topParams: WindowManager.LayoutParams? = null
+
+    private val density: Float get() = resources.displayMetrics.density
+    private fun dp(v: Float): Float = v * density
+
+    // ------------------------------------------------------------------ broadcasts
+
+    private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
-            if (intent?.action == "com.miku.systemui.action.TRIGGER_BACK") {
-                performGlobalAction(GLOBAL_ACTION_BACK)
+            when (intent?.action) {
+                ACTION_TRIGGER_BACK, ACTION_DEBUG_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
+                ACTION_DEBUG_HOME -> triggerHome()
+                ACTION_DEBUG_RECENTS -> openRecents()
+                ACTION_DEBUG_QUICK_SWITCH -> {
+                    val dir = if (intent.getStringExtra("dir") == "next") -1 else 1
+                    quickSwitch(dir)
+                }
             }
         }
     }
+
+    // ------------------------------------------------------------------ lifecycle
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        initTouchInterceptor()
-        initPullHandle()
-        initEdgeBackGestures()
         try {
-            val filter = android.content.IntentFilter("com.miku.systemui.action.TRIGGER_BACK")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(backReceiver, filter, Context.RECEIVER_EXPORTED)
+            val filter = IntentFilter().apply {
+                addAction(ACTION_TRIGGER_BACK); addAction(ACTION_DEBUG_BACK)
+                addAction(ACTION_DEBUG_HOME); addAction(ACTION_DEBUG_RECENTS)
+                addAction(ACTION_DEBUG_QUICK_SWITCH)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
             } else {
-                registerReceiver(backReceiver, filter)
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(receiver, filter)
             }
-        } catch (_: Throwable) {}
+        } catch (t: Throwable) { Log.w(TAG, "receiver register failed: $t") }
     }
 
-    private fun openShadeActivity() {
-        try {
-            val intent = Intent(this, MikuShadeActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val pi = PendingIntent.getActivity(
-                this, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            pi.send()
-        } catch (_: Throwable) {
-            try {
-                val intent = Intent(this, MikuShadeActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                startActivity(intent)
-            } catch (_: Throwable) {}
-        }
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        addOverlays()
+        Log.i(TAG, "MikuNav connected; overlays=$overlaysAdded canGestures=" +
+            (serviceInfo?.capabilities?.and(android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0))
     }
 
-    private fun initTouchInterceptor() {
-        touchInterceptView = View(this).apply {
-            var startY = 0f
-            setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        startY = event.rawY
-                        false
-                    }
-                    MotionEvent.ACTION_MOVE -> {
-                        val dy = event.rawY - startY
-                        if (dy > 15f) {
-                            openShadeActivity()
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    MotionEvent.ACTION_UP -> {
-                        val dy = event.rawY - startY
-                        if (dy > 15f) {
-                            openShadeActivity()
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                    else -> false
-                }
-            }
-            setOnClickListener {
-                openShadeActivity()
-            }
-        }
+    override fun onDestroy() {
+        try { unregisterReceiver(receiver) } catch (_: Throwable) {}
+        removeOverlays()
+        try { workThread.quitSafely() } catch (_: Throwable) {}
+        super.onDestroy()
+    }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            96,
+    override fun onInterrupt() {}
+
+    private fun overlayParams(w: Int, h: Int, gravity: Int, noLimits: Boolean = true) =
+        WindowManager.LayoutParams(
+            w, h,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                (if (noLimits) WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS else 0),
             PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        }
+        ).apply { this.gravity = gravity }
 
-        try {
-            windowManager.addView(touchInterceptView, params)
-        } catch (_: Throwable) {}
+    /**
+     * Adds the four navigation overlays. There must be exactly ONE of each on screen — most of
+     * all the home pill — so any previous set is torn down first (onServiceConnected can fire
+     * again after a rebind on the SAME instance, which would otherwise stack a second pill).
+     */
+    private fun addOverlays() {
+        if (overlaysAdded || leftEdgeView != null || rightEdgeView != null ||
+            topStripView != null || pillView != null) {
+            Log.i(TAG, "addOverlays: tearing down previous overlay set first")
+            removeOverlays()
+        }
+        val dm = resources.displayMetrics
+        val topPx = dp(TOP_STRIP_DP.toFloat()).toInt()
+        val pillZoneH = dp(PILL_ZONE_H_DP.toFloat()).toInt()
+        val edgeW = dp(EDGE_STRIP_DP.toFloat()).toInt()
+        val edgeH = (dm.heightPixels - topPx - pillZoneH).coerceAtLeast(dp(200f).toInt())
+
+        leftEdgeView = EdgeBackView(this, isLeft = true).also { v ->
+            leftParams = overlayParams(edgeW, edgeH, Gravity.TOP or Gravity.START).apply { y = topPx }
+            runCatching { windowManager.addView(v, leftParams) }.onFailure { Log.w(TAG, "left edge add: $it") }
+        }
+        rightEdgeView = EdgeBackView(this, isLeft = false).also { v ->
+            rightParams = overlayParams(edgeW, edgeH, Gravity.TOP or Gravity.END).apply { y = topPx }
+            runCatching { windowManager.addView(v, rightParams) }.onFailure { Log.w(TAG, "right edge add: $it") }
+        }
+        topStripView = ShadePullView(this).also { v ->
+            topParams = overlayParams(WindowManager.LayoutParams.MATCH_PARENT, topPx, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            runCatching { windowManager.addView(v, topParams) }.onFailure { Log.w(TAG, "top strip add: $it") }
+        }
+        pillView = HomePillView(this).also { v ->
+            val p = overlayParams(dp(PILL_ZONE_W_DP.toFloat()).toInt(), pillZoneH, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+            runCatching { windowManager.addView(v, p) }.onFailure { Log.w(TAG, "pill add: $it") }
+        }
+        overlaysAdded = true
     }
 
-    private fun initPullHandle() {
-        val pill = View(this).apply {
-            background = GradientDrawable().apply {
-                setColor(0xFF00E5FF.toInt()) // Miku Cyan Bright
-                cornerRadius = 8f
-            }
+    private fun removeOverlays() {
+        listOf(leftEdgeView, rightEdgeView, topStripView, pillView).forEach { v ->
+            v?.let { runCatching { windowManager.removeView(it) } }
         }
-
-        val container = FrameLayout(this).apply {
-            val pillParams = FrameLayout.LayoutParams(160, 12).apply {
-                gravity = Gravity.CENTER_HORIZONTAL or Gravity.TOP
-                topMargin = 2
-            }
-            addView(pill, pillParams)
-
-            var startY = 0f
-            setOnTouchListener { _, event ->
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        startY = event.rawY
-                        true
-                    }
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_MOVE -> {
-                        val dy = event.rawY - startY
-                        if (dy > 8f || event.action == MotionEvent.ACTION_UP) {
-                            openShadeActivity()
-                        }
-                        true
-                    }
-                    else -> true
-                }
-            }
-            setOnClickListener {
-                openShadeActivity()
-            }
-        }
-
-        val handleParams = WindowManager.LayoutParams(
-            280,
-            56,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        }
-
-        pullHandleView = container
-
-        try {
-            windowManager.addView(pullHandleView, handleParams)
-        } catch (_: Throwable) {}
+        leftEdgeView = null; rightEdgeView = null; topStripView = null; pillView = null
+        overlaysAdded = false
     }
 
-    private fun openPowerMenuActivity() {
+    // ------------------------------------------------------------------ actions
+
+    private fun launchOwnActivity(cls: Class<*>, requestCode: Int, extras: (Intent.() -> Unit)? = null) {
+        val intent = Intent(this, cls).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION
+            extras?.invoke(this)
+        }
         try {
-            val intent = Intent(this, MikuPowerMenuActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION
-            }
-            val pi = PendingIntent.getActivity(
-                this, 1, intent,
+            // PendingIntent.send() keeps the launch on OUR background-activity-launch grant.
+            PendingIntent.getActivity(
+                this, requestCode, intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            pi.send()
+            ).send()
         } catch (_: Throwable) {
-            try {
-                val intent = Intent(this, MikuPowerMenuActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                }
-                startActivity(intent)
-            } catch (_: Throwable) {}
+            try { startActivity(intent) } catch (t: Throwable) { Log.w(TAG, "launch ${cls.simpleName}: $t") }
         }
     }
+
+    private fun openShadeActivity(dragOffsetPx: Int = -1) =
+        launchOwnActivity(MikuShadeActivity::class.java, 0) {
+            if (dragOffsetPx >= 0) putExtra(MikuShadeActivity.EXTRA_DRAG_OFFSET_PX, dragOffsetPx)
+        }
+
+    private fun openPowerMenuActivity() = launchOwnActivity(MikuPowerMenuActivity::class.java, 1)
+
+    fun openRecents() = launchOwnActivity(MikuRecentsActivity::class.java, 2)
+
+    fun triggerHome() { performGlobalAction(GLOBAL_ACTION_HOME) }
+
+    // Quick-switch session: the MRU list is captured on the first swipe and walked for 2.5 s.
+    private var qsList: List<MikuTaskStack.Entry> = emptyList()
+    private var qsIndex = -1          // index of the task we are standing on (-1 = home/unknown)
+    private var qsFromHome = false
+    private var qsTime = 0L
+
+    /** dir = +1 → previous app (swipe right); dir = -1 → forward again (swipe left). */
+    fun quickSwitch(dir: Int) {
+        workHandler.post {
+            val now = SystemClock.elapsedRealtime()
+            if (now - qsTime > QUICK_SWITCH_SESSION_MS || qsList.isEmpty()) {
+                qsList = MikuTaskStack.recents(this, 8)
+                val top = MikuTaskStack.topTask(this)
+                qsFromHome = MikuTaskStack.isHomeOnTop(this)
+                qsIndex = qsList.indexOfFirst { it.taskId == top?.first }
+            }
+            val target = qsIndex + dir
+            val ok = when {
+                target in qsList.indices -> MikuTaskStack.switchTo(this, qsList[target].taskId).also { if (it) qsIndex = target }
+                target < 0 && qsFromHome && qsIndex >= 0 -> { mainHandler.post { triggerHome() }; qsIndex = -1; true }
+                else -> false
+            }
+            qsTime = now
+            Log.i(TAG, "quickSwitch dir=$dir target=$target ok=$ok list=${qsList.map { it.pkg }}")
+            if (!ok) mainHandler.post { pillView?.rejectBounce() }
+        }
+    }
+
+    // ------------------------------------------------------------------ replay-on-lift
+
+    data class TouchPt(val x: Float, val y: Float, val t: Long)
+
+    /**
+     * True while a replayed touch is being injected. The injected stroke is a REAL screen touch,
+     * so once the strip goes touchable again it can land back on us and replay itself — the
+     * strips ignore new ACTION_DOWNs while this is set (observed: one tap replayed 3x).
+     */
+    @Volatile private var replayInFlight = false
+
+    private fun setTouchable(view: View?, params: WindowManager.LayoutParams?, touchable: Boolean) {
+        if (view == null || params == null) return
+        val f = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        val next = if (touchable) params.flags and f.inv() else params.flags or f
+        if (next == params.flags) return
+        params.flags = next
+        runCatching { windowManager.updateViewLayout(view, params) }
+    }
+
+    /**
+     * Re-inject a touch that a strip swallowed but that was NOT a gesture (tap, vertical
+     * scroll, long press) so the app underneath still receives it. Real timing is kept up to
+     * REPLAY_MAX_MS; longer drags are time-compressed.
+     */
+    private fun replayTouch(points: List<TouchPt>, view: View?, params: WindowManager.LayoutParams?) {
+        if (points.isEmpty()) return
+        val first = points.first(); val last = points.last()
+        val path = Path().apply { moveTo(first.x, first.y) }
+        var travelled = 0f
+        var px = first.x; var py = first.y
+        for (p in points.drop(1)) {
+            val d = abs(p.x - px) + abs(p.y - py)
+            if (d < 1f) continue
+            path.lineTo(p.x, p.y); travelled += d; px = p.x; py = p.y
+        }
+        val realDur = (last.t - first.t).coerceAtLeast(1L)
+        val dur = if (travelled < 8f) realDur.coerceIn(20L, REPLAY_MAX_MS) else realDur.coerceIn(1L, REPLAY_MAX_MS)
+        val gesture = try {
+            GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, dur))
+                .build()
+        } catch (t: Throwable) { Log.w(TAG, "replay build: $t"); return }
+        Log.i(TAG, "replay: pts=${points.size} travelled=${travelled.toInt()} dur=$dur")
+        replayInFlight = true
+        setTouchable(view, params, false)
+        val restore = Runnable { setTouchable(view, params, true); replayInFlight = false }
+        val ok = try {
+            dispatchGesture(gesture, object : AccessibilityService.GestureResultCallback() {
+                override fun onCompleted(g: GestureDescription?) { mainHandler.post(restore) }
+                override fun onCancelled(g: GestureDescription?) { mainHandler.post(restore) }
+            }, mainHandler)
+        } catch (t: Throwable) { Log.w(TAG, "replay dispatch: $t"); false }
+        if (!ok) restore.run() else mainHandler.postDelayed(restore, dur + 400L)   // safety net
+    }
+
+    // ------------------------------------------------------------------ keys / events
 
     private var powerDownTimestamp = 0L
 
@@ -239,11 +370,9 @@ class MikuNotificationShadeService : AccessibilityService() {
                     performGlobalAction(GLOBAL_ACTION_BACK)
                     sendBroadcast(Intent(Intent.ACTION_CLOSE_SYSTEM_DIALOGS))
                 } catch (_: Throwable) {}
-                
                 openPowerMenuActivity()
                 return
             }
-
             if (cls.contains("NotificationShade", ignoreCase = true) ||
                 cls.contains("QuickSettings", ignoreCase = true) ||
                 cls.contains("StatusBarWindow", ignoreCase = true)) {
@@ -252,136 +381,173 @@ class MikuNotificationShadeService : AccessibilityService() {
         }
     }
 
-    
-    enum class GestureAction { HOME, RECENTS, QUICK_SWITCH }
+    // ================================================================== EDGE BACK
 
-    private var gesturePillView: GesturePillView? = null
+    private enum class Mode { UNDECIDED, BACK, FORWARD, CANCELLED }
 
-    private fun triggerHome() {
-        performGlobalAction(GLOBAL_ACTION_HOME)
-    }
+    inner class EdgeBackView(context: Context, private val isLeft: Boolean) : View(context) {
+        private var mode = Mode.UNDECIDED
+        private var startX = 0f; private var startY = 0f
+        private var curX = 0f; private var curY = 0f
+        private var committed = false
+        private var down = false
+        private val points = ArrayList<TouchPt>(64)
 
-    private fun triggerRecents() {
-        performGlobalAction(GLOBAL_ACTION_RECENTS)
-    }
+        // Visual state
+        private var visProgress = 0f          // 0..1 extension of the indicator
+        private var visY = 0f
+        private var pop = 1f
+        private var retractAnim: ValueAnimator? = null
+        private var popAnim: ValueAnimator? = null
 
-    private fun initEdgeBackGestures() {
-        val density = resources.displayMetrics.density
-        val edgeWidthPx = (32 * density).toInt()
-
-        leftEdgeView = EdgeBackView(this, isLeft = true) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0xFF39C5BB.toInt() }
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0x5500F5D4 }
+        private val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = dp(14f)
+            setShadowLayer(dp(4f), 0f, 0f, 0xAA00F5D4.toInt())
         }
-        val leftParams = WindowManager.LayoutParams(
-            edgeWidthPx, WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.START or Gravity.CENTER_VERTICAL; x = 0; y = 0 }
-        try { windowManager.addView(leftEdgeView, leftParams) } catch (e: Throwable) {}
-
-        rightEdgeView = EdgeBackView(this, isLeft = false) {
-            performGlobalAction(GLOBAL_ACTION_BACK)
+        private val chevronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE; strokeWidth = dp(2.2f); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+            color = 0xFFF0FDFB.toInt()
         }
-        val rightParams = WindowManager.LayoutParams(
-            edgeWidthPx, WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL; x = 0; y = 0 }
-        try { windowManager.addView(rightEdgeView, rightParams) } catch (e: Throwable) {}
+        private val rect = RectF()
+        private val chevron = Path()
 
-        // Add Bottom Gesture Pill
-        val barHeightPx = (32 * density).toInt()
-        val pillParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT, barHeightPx,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-            WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; y = 0 }
+        private fun inward(x: Float) = if (isLeft) (x - startX) else (startX - x)
 
-        gesturePillView = GesturePillView(this) { action ->
-            when (action) {
-                GestureAction.HOME -> triggerHome()
-                GestureAction.RECENTS -> triggerRecents()
-                GestureAction.QUICK_SWITCH -> performGlobalAction(GLOBAL_ACTION_RECENTS)
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            if (visProgress <= 0.01f) return
+            val h = dp(56f)
+            val maxW = dp(EDGE_MAX_DP)
+            val w = dp(10f) + maxW * visProgress
+            val cy = visY.coerceIn(h / 2f, height - h / 2f)
+            val cx = if (isLeft) w / 2f - dp(6f) else width - w / 2f + dp(6f)
+            canvas.save()
+            canvas.scale(pop, pop, cx, cy)
+            // Capsule that emerges from the edge ("D" shape)
+            val left = if (isLeft) -dp(20f) else width - w
+            val right = if (isLeft) w else width + dp(20f)
+            rect.set(left - dp(5f), cy - h / 2f - dp(5f), right + dp(5f), cy + h / 2f + dp(5f))
+            glowPaint.alpha = (0x55 * visProgress).toInt()
+            canvas.drawRoundRect(rect, h, h, glowPaint)
+            rect.set(left, cy - h / 2f, right, cy + h / 2f)
+            fillPaint.alpha = (0xF2 * (0.55f + 0.45f * visProgress)).toInt()
+            canvas.drawRoundRect(rect, h, h, fillPaint)
+            // Heart glyph + chevron pointing inward (chevron fades in as we approach commit)
+            val gx = if (isLeft) (right - dp(15f)) else (left + dp(15f))
+            glyphPaint.alpha = (255 * visProgress).toInt()
+            canvas.drawText("♥", gx, cy + dp(5f), glyphPaint)
+            val chevAlpha = ((visProgress - 0.55f) / 0.45f).coerceIn(0f, 1f)
+            if (chevAlpha > 0f) {
+                chevronPaint.alpha = (255 * chevAlpha).toInt()
+                val s = dp(5f)
+                val ax = if (isLeft) gx + dp(11f) else gx - dp(11f)
+                chevron.reset()
+                if (isLeft) { chevron.moveTo(ax - s, cy - s); chevron.lineTo(ax, cy); chevron.lineTo(ax - s, cy + s) }
+                else { chevron.moveTo(ax + s, cy - s); chevron.lineTo(ax, cy); chevron.lineTo(ax + s, cy + s) }
+                canvas.drawPath(chevron, chevronPaint)
+            }
+            canvas.restore()
+        }
+
+        private fun animateRetract() {
+            retractAnim?.cancel()
+            retractAnim = ValueAnimator.ofFloat(visProgress, 0f).apply {
+                duration = 150; interpolator = DecelerateInterpolator()
+                addUpdateListener { visProgress = it.animatedValue as Float; invalidate() }
+                start()
             }
         }
-        try { windowManager.addView(gesturePillView, pillParams) } catch (e: Throwable) {}
-    }
 
-    class EdgeBackView(
-        context: Context,
-        private val isLeft: Boolean,
-        private val onBackTriggered: () -> Unit
-    ) : View(context) {
-        private val density = resources.displayMetrics.density
-        private var startX = 0f
-        private var startY = 0f
-        private var currentX = 0f
-        private var currentY = 0f
-        private var isTracking = false
-        private var isTriggered = false
-        private val heartPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.FILL
-            color = android.graphics.Color.parseColor("#39C5BB")
-            textAlign = android.graphics.Paint.Align.CENTER
-            textSize = 28f * density
-            setShadowLayer(4f, 0f, 0f, android.graphics.Color.WHITE)
-        }
-
-        override fun onDraw(canvas: android.graphics.Canvas) {
-            super.onDraw(canvas)
-            if (!isTracking) return
-            val dx = if (isLeft) (currentX - startX).coerceAtLeast(0f) else (startX - currentX).coerceAtLeast(0f)
-            val maxDrag = 40f * density
-            val progress = (dx / maxDrag).coerceIn(0f, 1f)
-            val centerY = currentY.coerceIn(60f * density, height - 60f * density)
-            
-            // Only draw a cute glowing kawaii heart moving inwards
-            if (progress > 0.1f) {
-                val heartX = if (isLeft) (progress * 30f * density) else width - (progress * 30f * density)
-                heartPaint.alpha = (progress * 255).toInt()
-                canvas.drawText("♥", heartX, centerY + 10f * density, heartPaint)
+        private fun animatePop() {
+            popAnim?.cancel()
+            popAnim = ValueAnimator.ofFloat(1f, 1.18f, 1f).apply {
+                duration = 140; interpolator = OvershootInterpolator(1.5f)
+                addUpdateListener { pop = it.animatedValue as Float; invalidate() }
+                start()
             }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
+            val now = SystemClock.uptimeMillis()
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX; startY = event.rawY
-                    currentX = event.rawX; currentY = event.rawY
-                    isTracking = true; isTriggered = false
+                    if (replayInFlight) return false          // our own injected touch
+                    retractAnim?.cancel()
+                    down = true; committed = false; mode = Mode.UNDECIDED
+                    startX = event.rawX; startY = event.rawY; curX = startX; curY = startY
+                    points.clear(); points += TouchPt(event.rawX, event.rawY, now)
+                    visY = event.y; visProgress = 0f; pop = 1f
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!isTracking) return false
-                    currentX = event.rawX; currentY = event.rawY
-                    val dx = if (isLeft) (event.rawX - startX) else (startX - event.rawX)
-                    val dy = Math.abs(event.rawY - startY)
-                    if (dx > 16f * density && dy < 2.2f * dx && !isTriggered) {
-                        isTriggered = true
-                        performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
+                    if (!down) return false
+                    curX = event.rawX; curY = event.rawY
+                    if (points.size < 400) points += TouchPt(curX, curY, now)
+                    val dxIn = inward(curX)
+                    val dy = abs(curY - startY)
+                    when (mode) {
+                        Mode.UNDECIDED -> {
+                            if (dxIn >= dp(EDGE_CLAIM_DP)) {
+                                mode = if (dy <= dxIn * EDGE_MAX_ANGLE_TAN) Mode.BACK else Mode.FORWARD
+                            } else if (dy >= EDGE_VERTICAL_INTENT_PX) {
+                                mode = Mode.FORWARD          // vertical intent first → belongs to the app
+                            }
+                        }
+                        Mode.BACK -> {
+                            if (!committed && dy > dxIn * EDGE_MAX_ANGLE_TAN) {
+                                mode = Mode.CANCELLED; animateRetract(); return true
+                            }
+                            val wasCommitted = committed
+                            if (!committed && dxIn >= dp(EDGE_COMMIT_DP)) committed = true
+                            else if (committed && dxIn < dp(EDGE_UNCOMMIT_DP)) committed = false
+                            if (committed && !wasCommitted) {
+                                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                                animatePop()
+                            } else if (!committed && wasCommitted) {
+                                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            }
+                        }
+                        else -> {}
                     }
-                    invalidate()
+                    if (mode == Mode.BACK) {
+                        val max = dp(EDGE_MAX_DP)
+                        val raw = dxIn.coerceAtLeast(0f)
+                        // rubber-band past the max: only 15% of the extra travel shows
+                        val eff = if (raw <= max) raw else max + (raw - max) * 0.15f
+                        visProgress = (eff / max).coerceIn(0f, 1.12f)
+                        visY = event.y - (event.y - (visY)) * 0.35f    // loose vertical follow
+                        invalidate()
+                    }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (isTracking && isTriggered) {
-                        onBackTriggered()
+                    if (!down) return false
+                    down = false
+                    points += TouchPt(event.rawX, event.rawY, now)
+                    Log.i(TAG, "edge up: left=$isLeft mode=$mode committed=$committed dxIn=${inward(event.rawX).toInt()} pts=${points.size}")
+                    when (mode) {
+                        Mode.BACK -> {
+                            if (committed) {
+                                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                                performGlobalAction(GLOBAL_ACTION_BACK)
+                            }
+                            animateRetract()
+                        }
+                        Mode.UNDECIDED, Mode.FORWARD -> {
+                            val (v, p) = if (isLeft) leftEdgeView to leftParams else rightEdgeView to rightParams
+                            replayTouch(ArrayList(points), v, p)
+                        }
+                        Mode.CANCELLED -> {}
                     }
-                    isTracking = false; isTriggered = false
-                    invalidate()
+                    committed = false
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
-                    isTracking = false; isTriggered = false
-                    invalidate()
+                    down = false; committed = false; mode = Mode.CANCELLED
+                    animateRetract()
                     return true
                 }
             }
@@ -389,74 +555,194 @@ class MikuNotificationShadeService : AccessibilityService() {
         }
     }
 
-    class GesturePillView(context: Context, private val onAction: (GestureAction) -> Unit) : View(context) {
-        private val pillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.FILL
-            color = android.graphics.Color.WHITE
-        }
-        private var startY = 0f; private var startX = 0f
-        private var currentY = 0f; private var currentX = 0f
-        private var startTime = 0L; private var isDragging = false
+    // ================================================================== TOP SHADE PULL
 
-        private val density = resources.displayMetrics.density
-        override fun onDraw(canvas: android.graphics.Canvas) {
+    inner class ShadePullView(context: Context) : View(context) {
+        private var down = false
+        private var opened = false
+        private var startX = 0f; private var startY = 0f
+        private val points = ArrayList<TouchPt>(64)
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            val now = SystemClock.uptimeMillis()
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    if (replayInFlight) return false          // our own injected touch
+                    down = true; opened = false
+                    startX = event.rawX; startY = event.rawY
+                    points.clear(); points += TouchPt(startX, startY, now)
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!down) return false
+                    if (points.size < 400) points += TouchPt(event.rawX, event.rawY, now)
+                    if (!opened) {
+                        val dy = event.rawY - startY
+                        val dx = abs(event.rawX - startX)
+                        if (dy >= dp(SHADE_PULL_DP) && dx < dy) {
+                            opened = true
+                            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            openShadeActivity(dy.toInt())
+                        }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!down) return false
+                    down = false
+                    points += TouchPt(event.rawX, event.rawY, now)
+                    if (!opened) replayTouch(ArrayList(points), topStripView, topParams)
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> { down = false; return true }
+            }
+            return super.onTouchEvent(event)
+        }
+    }
+
+    // ================================================================== HOME PILL
+
+    inner class HomePillView(context: Context) : View(context) {
+        private var down = false
+        private var fired = false
+        private var startX = 0f; private var startY = 0f
+        private var curX = 0f; private var curY = 0f
+        private var velocity: VelocityTracker? = null
+        private var stretch = 0f       // 0..1 upward drag progress
+        private var shiftX = 0f        // horizontal follow
+        private var armed = false      // recents hold armed (pill turns teal)
+        private var pop = 1f
+        private var relaxAnim: ValueAnimator? = null
+        private var popAnim: ValueAnimator? = null
+
+        private val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0xD9FFFFFF.toInt() }
+        private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0x3800F5D4 }
+        private val rect = RectF()
+
+        private val holdCheck = object : Runnable {
+            override fun run() {
+                if (!down || fired) return
+                velocity?.computeCurrentVelocity(1000)
+                val vx = velocity?.xVelocity ?: 0f; val vy = velocity?.yVelocity ?: 0f
+                val speed = abs(vx) + abs(vy)
+                val dyUp = startY - curY
+                if (dyUp >= dp(RECENTS_DP) && speed < RECENTS_HOLD_MAX_PX_S) {
+                    Log.i(TAG, "pill hold -> recents (dyUp=${dyUp.toInt()} speed=${speed.toInt()})")
+                    fired = true; armed = true
+                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    animatePop()
+                    openRecents()
+                } else {
+                    mainHandler.postDelayed(this, 60L)
+                }
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val w = width.toFloat(); val h = height.toFloat()
-            val offsetY = if (isDragging) (currentY - startY).coerceAtMost(0f) * 0.4f else 0f
-            val pillWidth = 76 * density
-            val pillHeight = 4f * density
-            val r = 2f * density
-            val left = (w - pillWidth) / 2f
-            val top = h - pillHeight - (6 * density) + offsetY
-            canvas.drawRoundRect(left, top, left + pillWidth, top + pillHeight, r, r, pillPaint)
+            val pw = dp(PILL_W_DP) * (1f + 0.18f * stretch)
+            val ph = dp(PILL_H_DP)
+            val lift = dp(12f) * stretch
+            val cx = w / 2f + shiftX
+            val bottom = h - dp(8f) - lift
+            canvas.save()
+            canvas.scale(pop, pop, cx, bottom - ph / 2f)
+            rect.set(cx - pw / 2f - dp(4f), bottom - ph - dp(4f), cx + pw / 2f + dp(4f), bottom + dp(4f))
+            glowPaint.alpha = if (armed) 0x80 else (0x38 + (0x40 * stretch).toInt())
+            canvas.drawRoundRect(rect, ph + dp(4f), ph + dp(4f), glowPaint)
+            rect.set(cx - pw / 2f, bottom - ph, cx + pw / 2f, bottom)
+            pillPaint.color = if (armed) 0xFF00F5D4.toInt() else 0xD9FFFFFF.toInt()
+            canvas.drawRoundRect(rect, ph / 2f, ph / 2f, pillPaint)
+            canvas.restore()
+        }
+
+        private fun animateRelax() {
+            relaxAnim?.cancel()
+            val s0 = stretch; val x0 = shiftX
+            relaxAnim = ValueAnimator.ofFloat(1f, 0f).apply {
+                duration = 220; interpolator = OvershootInterpolator(1.2f)
+                addUpdateListener { val f = it.animatedValue as Float; stretch = s0 * f; shiftX = x0 * f; invalidate() }
+                start()
+            }
+        }
+
+        private fun animatePop() {
+            popAnim?.cancel()
+            popAnim = ValueAnimator.ofFloat(1f, 1.25f, 1f).apply {
+                duration = 160; interpolator = OvershootInterpolator(1.4f)
+                addUpdateListener { pop = it.animatedValue as Float; invalidate() }
+                start()
+            }
+        }
+
+        fun rejectBounce() {
+            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            relaxAnim?.cancel()
+            relaxAnim = ValueAnimator.ofFloat(0f, 1f, -1f, 0f).apply {
+                duration = 260
+                addUpdateListener { shiftX = dp(6f) * (it.animatedValue as Float); invalidate() }
+                start()
+            }
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startX = event.rawX; startY = event.rawY
-                    currentX = event.rawX; currentY = event.rawY
-                    startTime = android.os.SystemClock.elapsedRealtime()
-                    isDragging = true
+                    relaxAnim?.cancel()
+                    down = true; fired = false; armed = false
+                    startX = event.rawX; startY = event.rawY; curX = startX; curY = startY
+                    velocity?.recycle(); velocity = VelocityTracker.obtain().also { it.addMovement(event) }
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    if (!isDragging) return false
-                    currentX = event.rawX; currentY = event.rawY
+                    if (!down) return false
+                    velocity?.addMovement(event)
+                    curX = event.rawX; curY = event.rawY
+                    val dyUp = (startY - curY).coerceAtLeast(0f)
+                    val dx = curX - startX
+                    val max = dp(RECENTS_DP)
+                    stretch = if (dyUp <= max) dyUp / max else 1f + (dyUp - max) / max * 0.12f
+                    shiftX = (dx * 0.5f).coerceIn(-dp(24f), dp(24f))
+                    if (!fired) {
+                        mainHandler.removeCallbacks(holdCheck)
+                        if (dyUp >= max) mainHandler.postDelayed(holdCheck, RECENTS_HOLD_MS)
+                    }
                     invalidate()
                     return true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!isDragging) return false
-                    isDragging = false
-                    val deltaY = currentY - startY
-                    val deltaX = currentX - startX
-                    val duration = android.os.SystemClock.elapsedRealtime() - startTime
-                    invalidate()
-                    if (deltaY < -14f * density) {
-                        performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
-                        if (duration >= 250L) onAction(GestureAction.RECENTS) else onAction(GestureAction.HOME)
-                    } else if (Math.abs(deltaX) > 36f * density && Math.abs(deltaY) < 18f * density) {
-                        performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
-                        onAction(GestureAction.QUICK_SWITCH)
+                    if (!down) return false
+                    down = false
+                    mainHandler.removeCallbacks(holdCheck)
+                    velocity?.addMovement(event)
+                    velocity?.computeCurrentVelocity(1000)
+                    val vy = velocity?.yVelocity ?: 0f
+                    velocity?.recycle(); velocity = null
+                    val dyUp = startY - curY
+                    val dx = curX - startX
+                    val dy = abs(curY - startY)
+                    Log.i(TAG, "pill up: dyUp=${dyUp.toInt()} dx=${dx.toInt()} vy=${vy.toInt()} fired=$fired")
+                    if (event.actionMasked == MotionEvent.ACTION_UP && !fired) {
+                        if (dyUp >= dp(HOME_DP) || (vy < -HOME_FLING_PX_S && dyUp >= dp(12f))) {
+                            fired = true
+                            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            animatePop()
+                            triggerHome()
+                        } else if (abs(dx) >= dp(QUICK_SWITCH_DP) && dy < dp(QUICK_SWITCH_MAX_DY_DP)) {
+                            fired = true
+                            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            animatePop()
+                            quickSwitch(if (dx > 0) 1 else -1)
+                        }
                     }
+                    armed = false
+                    animateRelax()
                     return true
                 }
             }
             return super.onTouchEvent(event)
         }
     }
-override fun onInterrupt() {}
-
-    override fun onDestroy() {
-        try { unregisterReceiver(backReceiver) } catch (_: Throwable) {}
-        touchInterceptView?.let { runCatching { windowManager.removeView(it) } }
-        pullHandleView?.let { runCatching { windowManager.removeView(it) } }
-        leftEdgeView?.let { runCatching { windowManager.removeView(it) } }
-        rightEdgeView?.let { runCatching { windowManager.removeView(it) } }
-        gesturePillView?.let { runCatching { windowManager.removeView(it) } }
-        super.onDestroy()
-    }
 }
-

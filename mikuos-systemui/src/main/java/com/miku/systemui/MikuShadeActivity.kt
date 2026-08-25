@@ -6,11 +6,22 @@ import android.view.View
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
 class MikuShadeActivity : ComponentActivity() {
+    companion object {
+        /** Pixels the finger had already pulled down when the nav service opened us — the
+         *  panel starts that far exposed and finishes the slide, so it appears to follow. */
+        const val EXTRA_DRAG_OFFSET_PX = "miku.shade.drag_offset_px"
+    }
 
     private fun hideSystemBars() {
         try {
@@ -31,8 +42,10 @@ class MikuShadeActivity : ComponentActivity() {
     @Suppress("DEPRECATION")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val dragOffset = intent?.getIntExtra(EXTRA_DRAG_OFFSET_PX, -1) ?: -1
         try {
-            overridePendingTransition(R.anim.slide_down_in, R.anim.fade_out)
+            if (dragOffset >= 0) overridePendingTransition(0, 0)
+            else overridePendingTransition(R.anim.slide_down_in, R.anim.fade_out)
         } catch (_: Throwable) {}
 
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -45,15 +58,26 @@ class MikuShadeActivity : ComponentActivity() {
         hideSystemBars()
 
         setContent {
-            MikuNotificationShadeView(
-                onDismiss = { finish() },
-                onOpenSettings = {
-                    try {
-                        val intent = packageManager.getLaunchIntentForPackage("com.miku.settings")
-                        if (intent != null) startActivity(intent)
-                    } catch (_: Throwable) {}
-                }
-            )
+            val screenH = resources.displayMetrics.heightPixels.toFloat()
+            val startY = if (dragOffset >= 0) -(screenH * 0.94f - dragOffset).coerceAtLeast(0f) else 0f
+            val ty = remember { androidx.compose.animation.core.Animatable(startY) }
+            LaunchedEffect(Unit) {
+                if (startY != 0f) ty.animateTo(
+                    0f,
+                    androidx.compose.animation.core.tween(180, easing = androidx.compose.animation.core.FastOutSlowInEasing)
+                )
+            }
+            Box(Modifier.fillMaxSize().graphicsLayer { translationY = ty.value }) {
+                MikuNotificationShadeView(
+                    onDismiss = { finish() },
+                    onOpenSettings = {
+                        try {
+                            val intent = packageManager.getLaunchIntentForPackage("com.miku.settings")
+                            if (intent != null) startActivity(intent)
+                        } catch (_: Throwable) {}
+                    }
+                )
+            }
         }
     }
 

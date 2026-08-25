@@ -41,6 +41,9 @@ data class Track(
     val durationMs: Long, val sizeBytes: Long, val bitrateKbps: Int, val mime: String,
     val path: String = "", val year: Int = 0, val albumId: Long = 0L, val trackNumber: Int = 0,
     val albumArtist: String = "", val dateAddedSec: Long = 0L,
+    /** Disc number for multi-disc sets (0 = unknown/single disc). MediaStore packs it as
+     *  disc*1000+track in the TRACK column; kept separately so disc order survives grouping. */
+    val discNumber: Int = 0,
 )
 
 data class ArtistGroup(val name: String, val tracks: List<Track>) {
@@ -159,6 +162,42 @@ private fun normalizeArtistNameUncached(rawArtist: String): String {
     return clean.ifBlank { rawArtist.trim() }
 }
 
+// Folder names that mean "you've walked off the top of the music tree" — a storage volume root
+// (exFAT/FAT volume ids like "EAFF-98FE"), the emulated-storage scaffolding, or a mount point.
+// Confirmed live (2026-08-25): an album folder dropped FLAT at the SD root ("Music/2 Unlimited -
+// Get Ready (1992) (FLAC)/…") walked past the generic "Music" folder and returned the volume id
+// "EAFF-98FE" as the ARTIST — hundreds of tracks landed under a phantom artist named after the
+// card. Path inference must stop dead here, never climb above it.
+private val STORAGE_ROOT_NAMES = setOf("storage", "emulated", "0", "sdcard", "self", "media_rw", "mnt", "primary", "external_sd", "sdcard1", "")
+private val VOLUME_ID_RE = Regex("^[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}$")
+private fun isStorageRootFolder(f: java.io.File): Boolean {
+    val n = f.name.trim()
+    return n.lowercase() in STORAGE_ROOT_NAMES || VOLUME_ID_RE.matches(n) || f.parentFile == null
+}
+
+// Scene-release / ingest-staging folder names are NOT artist names: "1988-2022 Lords Of Acid",
+// "(1998) Eiffel 65 - Blue (First Press)", "2.Unlimited-Get.Ready-(BYTE.5006)-CDS-FLAC-1991-WRE",
+// "[24bit 96kHz Vinyl Rip]". Strip the leading year/year-range decoration first; if what's left is
+// empty, or the name carries codec/format/source tokens, it's a release folder and yields no artist.
+private val LEADING_YEAR_DECOR_RE = Regex("^[\\[(]?(?:19|20)\\d{2}(?:\\s*[-–—/]\\s*(?:19|20)?\\d{2,4})?[\\])]?\\s*[-–—:.]?\\s*")
+private val SCENE_TOKEN_RE = Regex("(?i)(?:\\b(?:flac|alac|mp3|aac|ogg|opus|wav|dsd|dsf|dff|web|cds?|cdm|cdr|rip|vinyl|remaster(?:ed)?|bootleg|lossless|hi-?res|scene|proper|repack|retail|promo)\\b|\\b\\d{1,2}\\s*-?\\s*bit\\b|\\b\\d{2,3}(?:\\.\\d)?\\s*k(?:hz)?\\b|\\b24-?(?:44|48|88|96|176|192)\\b|\\b16-?44\\b|[\\[(][^\\])]*[\\])])")
+private fun cleanArtistCandidate(raw: String): String? {
+    var c = raw.trim()
+    c = LEADING_YEAR_DECOR_RE.replace(c, "").trim()
+    if (c.isBlank()) return null
+    // Flat "Artist - Album…" names: only the ARTIST half is a candidate.
+    if (c.contains(" - ")) c = c.substringBefore(" - ").trim()
+    c = TRAILING_BRACKET_RE.replace(c, "").trim().trim('-', '_', '.', ' ')
+    if (c.isBlank() || c.length < 2) return null
+    if (YEAR_ONLY_RE.matches(c)) return null
+    if (c.lowercase() in GENERIC_FOLDER_NAMES) return null
+    // Dotted scene names ("2.Unlimited-Get.Ready.For.This-(BYTE.5006)-CDS-FLAC-1991-WRE") and
+    // anything still carrying format/source tags are release names, not artists.
+    if (SCENE_TOKEN_RE.containsMatchIn(c)) return null
+    if (c.count { it == '.' } >= 2 && !c.contains(' ')) return null
+    return c
+}
+
 private val GENERIC_FOLDER_NAMES = setOf(
     "music", "download", "downloads", "audio", "sdcard", "internal storage", "0", "media",
     "files", "unknown", "albums", "album", "recordings", "recording", "tracks", "songs",
@@ -188,39 +227,35 @@ private fun inferAlbumArtistFromPathUncached(path: String, albumTitle: String): 
             curr = curr.parentFile ?: return null
             hops++
         }
+        if (isStorageRootFolder(curr)) return null
 
         // Now `curr` is the Album folder (e.g. "1999 - The Gift Of Game [JP]")
         val albumFolder = curr
         var artistFolder = albumFolder.parentFile
 
         // Walk past generic intermediate container folders (e.g. "Albums", "Discography", "Singles", "EP")
+        // — but NEVER past a storage root: "Music" directly under the card root means the album folder
+        // sits flat at the top of the tree and there simply is no artist folder to read.
         hops = 0
-        while (artistFolder != null && hops < 4 && artistFolder.name.trim().lowercase() in GENERIC_FOLDER_NAMES) {
+        while (artistFolder != null && hops < 4 && !isStorageRootFolder(artistFolder) &&
+            artistFolder.name.trim().lowercase() in GENERIC_FOLDER_NAMES) {
             artistFolder = artistFolder.parentFile
             hops++
         }
+        if (artistFolder != null && isStorageRootFolder(artistFolder)) artistFolder = null
 
         // 2. Check artistFolder (e.g. "Crazy Town - Discography 1999-2015 [FLAC]" or "Crazy Town")
         if (artistFolder != null) {
             val aName = artistFolder.name.trim()
-            if (aName.lowercase() !in GENERIC_FOLDER_NAMES && aName.length > 1) {
-                val aBase = if (aName.contains(" - ")) {
-                    if (YEAR_ALBUM_RE.matches(aName)) "" else aName.substringBefore(" - ")
-                } else aName
-                val cand = TRAILING_BRACKET_RE.replace(aBase, "").trim()
-                if (cand.lowercase() !in GENERIC_FOLDER_NAMES && cand.length > 1 && !YEAR_ONLY_RE.matches(cand)) {
-                    return cand
-                }
+            if (aName.lowercase() !in GENERIC_FOLDER_NAMES && aName.length > 1 && !YEAR_ALBUM_RE.matches(aName)) {
+                cleanArtistCandidate(aName)?.let { return it }
             }
         }
 
         // 3. Check if the albumFolder itself is "Artist - Album" (e.g. "Crazy Town - The Gift of Game")
         val pName = albumFolder.name.trim()
         if (pName.contains(" - ") && !YEAR_ALBUM_RE.matches(pName)) {
-            val potentialArtist = TRAILING_BRACKET_RE.replace(pName.substringBefore(" - "), "").trim()
-            if (potentialArtist.lowercase() !in GENERIC_FOLDER_NAMES && potentialArtist.length > 1 && !YEAR_ONLY_RE.matches(potentialArtist)) {
-                return potentialArtist
-            }
+            cleanArtistCandidate(pName)?.let { return it }
         }
     } catch (_: Throwable) {}
     return null
@@ -483,7 +518,19 @@ fun List<Track>.artists(
     // (inferAlbumArtistFromPath's disc-folder/year-album/bracket-annotation fixes above), so it's
     // safe to let all three signals contribute again. Album grouping ([albums]) is unaffected —
     // it already prefers album_artist/path independently of this.
-    flatMap { tr ->
+    let { all ->
+    // Every canonical artist key that a real TAG (artist / album_artist) vouches for. The folder-
+    // inferred name may only ADD a membership when it resolves to one of these — it can confirm a
+    // compilation's compiling artist, it can never invent a brand-new artist out of a folder name.
+    // (Untagged tracks are the one exception below: with no tag at all, the folder is all we have.)
+    val knownKeys = HashSet<String>(all.size / 4 + 16)
+    for (tr in all) {
+        val a = normalizeArtistName(tr.artist)
+        if (!isBlankArtistTag(a)) knownKeys.add(canonicalArtistKey(a, ctx))
+        val aa = tr.albumArtist.trim()
+        if (aa.isNotBlank()) { val n = normalizeArtistName(aa); if (!isBlankArtistTag(n)) knownKeys.add(canonicalArtistKey(n, ctx)) }
+    }
+    all.flatMap { tr ->
         val list = mutableListOf<Pair<String, Track>>()
         val art = normalizeArtistName(tr.artist)
         val artBlank = isBlankArtistTag(art)
@@ -499,15 +546,21 @@ fun List<Track>.artists(
         val pathArtist = inferAlbumArtistFromPath(tr.path, tr.album)
         if (!pathArtist.isNullOrBlank()) {
             val normPathArt = normalizeArtistName(pathArtist)
-            if (!isBlankArtistTag(normPathArt) &&
-                (artBlank || canonicalArtistKey(normPathArt, ctx) != canonicalArtistKey(art, ctx)) &&
-                (albArtBlank || canonicalArtistKey(normPathArt, ctx) != canonicalArtistKey(albArt, ctx))
-            ) {
-                list.add(normPathArt to tr)
+            if (!isBlankArtistTag(normPathArt)) {
+                val pathKey = canonicalArtistKey(normPathArt, ctx)
+                val untagged = artBlank && albArtBlank
+                val confirmsKnown = pathKey in knownKeys
+                if ((untagged || confirmsKnown) &&
+                    (artBlank || pathKey != canonicalArtistKey(art, ctx)) &&
+                    (albArtBlank || pathKey != canonicalArtistKey(albArt, ctx))
+                ) {
+                    list.add(normPathArt to tr)
+                }
             }
         }
         if (list.isEmpty()) list.add("Unknown Artist" to tr)
         list
+    }
     }
     .groupBy { (artistName, _) -> canonicalArtistKey(artistName, ctx) }
     .map { (_, pairs) ->
@@ -525,7 +578,8 @@ fun List<Track>.artists(
 
 fun sortAlbumTracks(tracks: List<Track>): List<Track> {
     return tracks.sortedWith(
-        compareBy<Track> { tr ->
+        compareBy<Track> { tr -> if (tr.discNumber > 0) tr.discNumber else 1 }
+        .thenBy { tr ->
             if (tr.trackNumber > 0) tr.trackNumber else Int.MAX_VALUE
         }
         .thenBy { tr ->
@@ -558,21 +612,51 @@ private fun albumNameFromFolder(path: String): String? {
     return name.takeIf { it.isNotBlank() && !ALBUM_LOOKS_LIKE_FILENAME_RE.containsMatchIn(it) }
 }
 
+/** The folder an album's files live in, with any "CD 1"/"Disc 2" subfolder collapsed away — so a
+ *  multi-disc set keyed by folder is ONE album, not one per disc. */
+private fun albumFolderKey(path: String): String {
+    if (path.isBlank()) return ""
+    var dir = java.io.File(path).parentFile ?: return path.lowercase()
+    var hops = 0
+    while (hops < 3 && DISC_FOLDER_RE.matches(dir.name.trim())) { dir = dir.parentFile ?: break; hops++ }
+    return dir.absolutePath.lowercase()
+}
+
+/** Normalized album-title half of an identity key: copy-suffix stripped ("[2132]", "(1)", "copy"),
+ *  accent-folded, punctuation-stripped, lowercase. */
+private fun albumTitleKey(album: String): String {
+    var clean = ALBUM_COPY_SUFFIX_RE.replace(album.trim(), "").trim().trim('.', '!', '?', '-', ',', '"', '\'', ' ')
+    clean = runCatching { COMBINING_MARKS_RE.replace(java.text.Normalizer.normalize(clean, java.text.Normalizer.Form.NFD), "") }.getOrDefault(clean)
+    return WHITESPACE_RUN_RE.replace(NON_LETTER_DIGIT_RE.replace(clean, " ").trim(), " ").lowercase()
+}
+
 fun List<Track>.albums(
     ctx: android.content.Context? = null,
     ignoreThe: Boolean = true
 ): List<AlbumGroup> =
+    // Album identity is TAG-first now, folder-second. The old key was purely the parent folder,
+    // which is exactly what an ingest pipeline dumping releases into flat/scene-named/per-disc
+    // folders breaks: one boxset became ten "albums" (one per "Disc N" folder), duplicate copies in
+    // "[2132]"-suffixed folders became separate tiles, and a single album split across two drops
+    // showed up twice. Now:
+    //   • album tag + album_artist tag present → key = albumArtist :: albumTitle (folder-independent;
+    //     a release tag on the folder — "[Vinyl 24-192]" vs "[Master]" — is appended so two
+    //     different pressings of the same title stay distinct tiles),
+    //   • album tag present, no album_artist → key = albumTitle :: disc-collapsed folder (a VA
+    //     compilation mustn't fragment by per-track artist, and two different "Greatest Hits" by
+    //     different unnamed artists mustn't merge — the folder is the tiebreaker),
+    //   • no album tag at all → the disc-collapsed folder, as before.
     groupBy { tr ->
-        val alb = tr.album.trim().lowercase().ifBlank { "unknown:${tr.albumId}" }
-        val parentDir = if (tr.path.isNotBlank()) {
-            java.io.File(tr.path).parent ?: tr.path
-        } else ""
-        if (parentDir.isNotBlank()) {
-            parentDir.lowercase()
-        } else if (alb != "unknown" && !alb.startsWith("unknown:")) {
-            "$alb::$parentDir"
-        } else {
-            "id:${tr.albumId}::$parentDir"
+        val titleKey = albumTitleKey(tr.album)
+        val folderKey = albumFolderKey(tr.path)
+        val folderName = if (folderKey.isNotBlank()) java.io.File(folderKey).name else ""
+        val pressing = releaseTag(folderName) ?: releaseTag(tr.album) ?: ""
+        val albArt = tr.albumArtist.trim()
+        when {
+            titleKey.isBlank() -> if (folderKey.isNotBlank()) "dir:$folderKey" else "id:${tr.albumId}"
+            albArt.isNotBlank() && !isBlankArtistTag(albArt) ->
+                "tag:" + canonicalArtistKey(normalizeArtistName(albArt), ctx) + "::" + titleKey + "::" + pressing
+            else -> "dir:$folderKey::$titleKey::$pressing"
         }
     }
     .map { (_, tracks) ->
@@ -585,12 +669,16 @@ fun List<Track>.albums(
         // 2. Folder Hierarchy Inferred Artist
         val inferredArtist = tracks.mapNotNull { inferAlbumArtistFromPath(it.path, it.album) }.firstOrNull()
 
+        val counts = tracks.map { normalizeArtistName(it.artist) }.filter { !isBlankArtistTag(it) }.groupingBy { it }.eachCount()
+        val top = counts.maxByOrNull { it.value }
+        // A clear per-track majority (≥ 70%) is the album's artist — it beats folder inference, which
+        // is only a guess about how the files were dropped on the card, not what they are.
+        val majority = top?.takeIf { it.value * 10 >= tracks.size * 7 }?.key
         val artistDisplay = when {
             !taggedAlbumArt.isNullOrBlank() && !isBlankArtistTag(taggedAlbumArt) -> normalizeArtistName(taggedAlbumArt)
+            majority != null -> majority
             !inferredArtist.isNullOrBlank() && !isBlankArtistTag(inferredArtist) -> normalizeArtistName(inferredArtist)
             else -> {
-                val counts = tracks.map { normalizeArtistName(it.artist) }.filter { !isBlankArtistTag(it) }.groupingBy { it }.eachCount()
-                val top = counts.maxByOrNull { it.value }
                 if (top != null && top.value * 10 >= tracks.size * 4) {
                     top.key
                 } else if (tracks.size > 2) {
@@ -640,7 +728,7 @@ private fun mergeDuplicateAlbumCopies(groups: List<AlbumGroup>): List<AlbumGroup
     if (groups.size < 2) return groups
     val byKey = LinkedHashMap<String, MutableList<AlbumGroup>>()
     for (g in groups) {
-        val key = normalizeAlbumTitleForDedup(g.name) + " " + g.artist.trim().lowercase()
+        val key = normalizeAlbumTitleForDedup(g.name) + " " + g.artist.trim().lowercase()
         byKey.getOrPut(key) { mutableListOf() }.add(g)
     }
     return byKey.values.map { copies ->
@@ -649,7 +737,7 @@ private fun mergeDuplicateAlbumCopies(groups: List<AlbumGroup>): List<AlbumGroup
             val primary = copies.maxByOrNull { it.tracks.size } ?: copies[0]
             val mergedTracks = sortAlbumTracks(
                 copies.flatMap { it.tracks }
-                    .distinctBy { "${it.trackNumber} ${it.title.trim().lowercase()}" }
+                    .distinctBy { "${it.discNumber}/${it.trackNumber} ${it.title.trim().lowercase()}" }
             )
             AlbumGroup(primary.name, primary.artist, mergedTracks)
         }

@@ -3,6 +3,12 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <!-- Folder cover art (cover.jpg / folder.jpg beside the FLACs) is read through MediaStore.Images
+         when raw file access to the SD card isn't available (scoped storage). -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- Platform-signed: lets the player self-grant its own "All files access" app-op at launch
+         (MikuStorageAccess) instead of stranding SD-card art/scans behind a Settings screen. -->
+    <uses-permission android:name="android.permission.MANAGE_APP_OPS_MODES" tools:ignore="ProtectedPermissions" />
     <!-- Alarm/haptics feedback (AlarmRingService, Haptics). Without this, Vibrator.vibrate
          no-ops and lint flags it as a MissingPermission crash risk. -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -346,6 +352,10 @@
                 <action android:name="com.miku.player.SET_PAUSE_ON_UNPLUG" />
                 <action android:name="com.miku.player.action.TOGGLE_LIKE" />
                 <action android:name="com.miku.player.action.SET_LIKE" />
+                <action android:name="com.miku.player.action.FORCE_LIBRARY_SCAN" />
+                <action android:name="com.miku.player.action.RESCAN_LIBRARY" />
+                <action android:name="com.miku.player.action.SET_INGEST_ENABLED" />
+                <action android:name="com.miku.player.action.PLAY_RANDOM" />
             </intent-filter>
         </receiver>
 

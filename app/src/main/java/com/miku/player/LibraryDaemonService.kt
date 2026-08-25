@@ -37,7 +37,14 @@ class LibraryDaemonService : Service() {
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification("Monitoring audio library · Real-time sync"))
         registerMediaObserver()
-        MikuSyncTransceiver.startMonitoring(this)
+        // The network ingress engine (m500d discovery / rsync transceiver) only runs while the
+        // user has it switched ON (Settings.Global miku_ingest_enabled, default OFF). The local
+        // MediaStore mirror above always runs — "off" means local-SD-only, not "no library".
+        if (MikuIngestGate.isEnabled(this)) MikuSyncTransceiver.startMonitoring(this)
+        MikuIngestGate.observe(this) { enabled ->
+            if (enabled) MikuSyncTransceiver.startMonitoring(this) else MikuSyncTransceiver.stopMonitoring()
+            updateNotification(if (enabled) "Ingress engine ON · monitoring" else "Ingress engine OFF · local SD only", true)
+        }
         try {
             com.miku.player.api.MikuApiServer.start(this)
         } catch (_: Throwable) {}
@@ -151,6 +158,7 @@ class LibraryDaemonService : Service() {
                 val id = c.getLong(iId)
                 val rawTrackNo = if (iTrackNo >= 0 && !c.isNull(iTrackNo)) c.getInt(iTrackNo) else 0
                 val parsedTrackNo = if (rawTrackNo >= 1000) rawTrackNo % 1000 else rawTrackNo
+                val discNo = if (rawTrackNo >= 1000) rawTrackNo / 1000 else 0
                 val path = if (iPath >= 0 && !c.isNull(iPath)) c.getString(iPath) ?: "" else ""
 
                 if (!mediaStoreRowLikelyValid(path)) continue
@@ -171,7 +179,8 @@ class LibraryDaemonService : Service() {
                         albumId = if (iAlbumId >= 0 && !c.isNull(iAlbumId)) c.getLong(iAlbumId) else 0L,
                         trackNumber = parsedTrackNo,
                         albumArtist = albumArtist,
-                        dateAddedSec = if (iDateAdded >= 0 && !c.isNull(iDateAdded)) c.getLong(iDateAdded) else 0L
+                        dateAddedSec = if (iDateAdded >= 0 && !c.isNull(iDateAdded)) c.getLong(iDateAdded) else 0L,
+                        discNumber = discNo
                     )
                 )
             }
@@ -212,7 +221,9 @@ class LibraryDaemonService : Service() {
         val wideBackgroundArt = cachedBannerArt
 
         val sync = MikuSyncTransceiver.state.value
-        val syncDetail = if (sync.isTransferring) {
+        val syncDetail = if (!MikuIngestGate.isEnabled(this)) {
+            "Ingress engine is OFF — local SD card scans only. Flip it on from the MikuOS quick settings."
+        } else if (sync.isTransferring) {
             "Active ingress at ${String.format("%.1f", sync.transferRateMBs)} MB/s to /storage/EAFF-98FE/MUSIC."
         } else {
             "Daemon listening on port ${MikuSyncTransceiver.RSYNC_PORT}. FastLibraryStore index is current."
@@ -235,7 +246,7 @@ class LibraryDaemonService : Service() {
             .setColor(0xFF00E5FF.toInt())
             .setColorized(true)
             .setContentTitle("Miku Monitor")
-            .setSubText("rsyncd :${MikuSyncTransceiver.RSYNC_PORT}")
+            .setSubText(if (MikuIngestGate.isEnabled(this)) "rsyncd :${MikuSyncTransceiver.RSYNC_PORT}" else "local SD only")
             .setContentText(status)
             .setStyle(bigStyle)
             .setContentIntent(appIntent)
@@ -259,6 +270,7 @@ class LibraryDaemonService : Service() {
     }
 
     override fun onDestroy() {
+        MikuIngestGate.unobserve(this)
         contentObserver?.let { contentResolver.unregisterContentObserver(it) }
         scope.cancel()
         super.onDestroy()

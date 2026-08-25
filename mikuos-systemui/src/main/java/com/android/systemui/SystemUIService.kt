@@ -18,25 +18,16 @@ class SystemUIService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.i(TAG, "MikuOS SystemUIService initialized by system_server.")
-        startGestureService()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.i(TAG, "MikuOS SystemUIService running (START_STICKY).")
-        startGestureService()
         return START_STICKY
     }
 
-    private fun startGestureService() {
-        try {
-            val gIntent = Intent().setClassName("com.miku.launcher", "com.miku.launcher.gesture.MikuSystemGestureService")
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                startForegroundService(gIntent)
-            } else {
-                startService(gIntent)
-            }
-        } catch (_: Throwable) {}
-    }
+    // NOTE: this used to start com.miku.launcher's MikuSystemGestureService, which drew a
+    // SECOND navigation pill. That service is gone and there is exactly ONE nav pill now —
+    // the one MikuNotificationShadeService (accessibility) draws. Do not re-add a starter here.
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
