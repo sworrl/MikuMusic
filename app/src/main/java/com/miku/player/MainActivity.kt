@@ -4355,7 +4355,8 @@ private fun ArtistSortSettingsModal(
                     }
                 }
             }
-            .padding(horizontal = 6.dp, vertical = 3.dp),
+            // Extra end padding so glyph corners clear the pointed tips of the diamond/pentagon.
+            .padding(horizontal = 8.dp, vertical = 3.dp),
         contentAlignment = Alignment.Center
     ) {
         val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale

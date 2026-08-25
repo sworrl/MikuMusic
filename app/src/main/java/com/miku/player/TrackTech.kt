@@ -591,13 +591,31 @@ object BadgeShapes {
         GenericShape { size, _ ->
             val cx = size.width / 2f
             val cy = size.height / 2f
-            val r = minOf(size.width, size.height) / 2f * 0.94f
+            // The polygon is built on the chip's HEIGHT and then stretched to its full WIDTH:
+            // the two halves are pushed outward by `ext` and any vertex sitting on the vertical
+            // centre line is split into a left+right pair (flat top/bottom edge). Previously the
+            // polygon was inscribed in min(w,h) — a tiny square gem floating behind wide text,
+            // which read as a badge drawn on top of another badge.
+            val r = size.height / 2f * 0.94f
+            val ext = ((size.width - size.height) / 2f).coerceAtLeast(0f)
             val corner = r * cornerFraction
             val angleStep = (2.0 * Math.PI) / sides
             val rot = Math.toRadians(rotationDeg.toDouble())
-            val pts = (0 until sides).map { i ->
+            val pts = ArrayList<Offset>(sides * 2)
+            for (i in 0 until sides) {
                 val a = rot + angleStep * i
-                Offset(cx + (r * kotlin.math.cos(a)).toFloat(), cy + (r * kotlin.math.sin(a)).toFloat())
+                val px = (r * kotlin.math.cos(a)).toFloat()
+                val py = (r * kotlin.math.sin(a)).toFloat()
+                val onAxis = kotlin.math.abs(px) < r * 0.02f
+                if (onAxis && ext > 0.5f) {
+                    // Winding is clockwise (angle increasing, y-down): a top vertex is entered
+                    // from the left, a bottom vertex from the right.
+                    if (py < 0f) { pts += Offset(cx - ext, cy + py); pts += Offset(cx + ext, cy + py) }
+                    else { pts += Offset(cx + ext, cy + py); pts += Offset(cx - ext, cy + py) }
+                } else {
+                    val shift = if (px < 0f) -ext else ext
+                    pts += Offset(cx + shift + px, cy + py)
+                }
             }
             for (i in pts.indices) {
                 val prev = pts[(i - 1 + pts.size) % pts.size]
