@@ -198,6 +198,7 @@ object PlayerHolder {
         p.addListener(object : androidx.media3.common.Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 WidgetUpdateExecutor.push(app)
+                MikuTrackHud.publish(app, p, if (isPlaying) "play" else "pause")
                 PlayerPreferences.saveWasPlaying(app, isPlaying)
                 com.miku.player.bpm.MikuBpmEngine.onPlaybackChanged(app, p.currentMediaItem, isPlaying)
                 val trackId = p.currentMediaItem?.mediaId?.toLongOrNull()
@@ -218,6 +219,7 @@ object PlayerHolder {
             }
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
                 WidgetUpdateExecutor.push(app)
+                MikuTrackHud.publish(app, p, "transition:$reason")
                 com.miku.player.bpm.MikuBpmEngine.onPlaybackChanged(app, mediaItem, p.isPlaying)
                 val trackId = mediaItem?.mediaId?.toLongOrNull()
                 if (trackId != null) {

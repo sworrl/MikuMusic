@@ -75,7 +75,7 @@ enum class QuiltDensity(val label: String, val gap: Dp, val pad: Dp) {
 data class MikuQuiltConfig(
     val size: QuiltBadgeSize = QuiltBadgeSize.M,
     val density: QuiltDensity = QuiltDensity.COMPACT,
-    val rows: Int = 3
+    val rows: Int = 99   // 99 = all rows
 )
 
 object MikuQuiltPrefs {
@@ -106,7 +106,7 @@ object MikuQuiltPrefs {
         return MikuQuiltConfig(
             size = runCatching { QuiltBadgeSize.valueOf(p.getString(KEY_SIZE, "M") ?: "M") }.getOrDefault(QuiltBadgeSize.M),
             density = runCatching { QuiltDensity.valueOf(p.getString(KEY_DENSITY, "COMPACT") ?: "COMPACT") }.getOrDefault(QuiltDensity.COMPACT),
-            rows = p.getInt(KEY_ROWS, 3).coerceIn(1, 3)
+            rows = p.getInt(KEY_ROWS, 99).coerceIn(1, 99)
         )
     }
 
@@ -271,8 +271,9 @@ fun MikuQuiltOptionsDialog(
                 OptionRow("Density", QuiltDensity.entries.map { it.label }, config.density.ordinal) {
                     onConfigChange(config.copy(density = QuiltDensity.entries[it]))
                 }
-                OptionRow("Rows", listOf("1", "2", "3"), config.rows - 1) {
-                    onConfigChange(config.copy(rows = it + 1))
+                val rowChoices = listOf(3, 5, 99)
+                OptionRow("Rows", listOf("3", "5", "All"), rowChoices.indexOf(config.rows).coerceAtLeast(0).let { if (config.rows !in rowChoices) 2 else it }) {
+                    onConfigChange(config.copy(rows = rowChoices[it]))
                 }
                 Spacer(Modifier.height(MikuDimens.grid))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {

@@ -19,6 +19,8 @@ class SystemUIBootReceiver : BroadcastReceiver() {
             }
             Settings.Secure.putInt(cr, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
         } catch (_: Throwable) {}
+        // The shade's notification list + media card need our NotificationListenerService.
+        MikuNotificationStore.ensureEnabled(context)
     }
 }
 

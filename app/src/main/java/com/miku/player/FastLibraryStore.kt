@@ -15,7 +15,7 @@ object FastLibraryStore {
     private const val TAG = "FastLibraryStore"
     private const val CACHE_FILE_NAME = "library_fast_v2.bin"
     private const val MAGIC_HEADER = 0x4D494B55 // "MIKU"
-    private const val VERSION = 3 // v3: + discNumber per track
+    private const val VERSION = 4 // v3: + discNumber · v4: + disc-image flags / virtual-track clip window
 
     @Volatile private var memoryCache: List<Track>? = null
 
@@ -57,6 +57,11 @@ object FastLibraryStore {
                     val albumArtist = dis.readUTF()
                     val dateAddedSec = dis.readLong()
                     val discNumber = dis.readInt()
+                    val isDiscImage = dis.readBoolean()
+                    val cuePath = dis.readUTF()
+                    val parentId = dis.readLong()
+                    val clipStartMs = dis.readLong()
+                    val clipEndMs = dis.readLong()
 
                     list.add(
                         Track(
@@ -74,7 +79,12 @@ object FastLibraryStore {
                             trackNumber = trackNumber,
                             albumArtist = albumArtist,
                             dateAddedSec = dateAddedSec,
-                            discNumber = discNumber
+                            discNumber = discNumber,
+                            isDiscImage = isDiscImage,
+                            cuePath = cuePath,
+                            parentId = parentId,
+                            clipStartMs = clipStartMs,
+                            clipEndMs = clipEndMs
                         )
                     )
                 }
@@ -124,6 +134,11 @@ object FastLibraryStore {
                     dos.writeUTF(t.albumArtist)
                     dos.writeLong(t.dateAddedSec)
                     dos.writeInt(t.discNumber)
+                    dos.writeBoolean(t.isDiscImage)
+                    dos.writeUTF(t.cuePath)
+                    dos.writeLong(t.parentId)
+                    dos.writeLong(t.clipStartMs)
+                    dos.writeLong(t.clipEndMs)
                 }
                 dos.flush()
             }

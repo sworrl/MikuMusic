@@ -194,7 +194,7 @@ fun MikuPowerMenuScreen(
         // Futuristic Card Frame
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
+                .fillMaxWidth(0.88f)
                 .wrapContentHeight()
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -272,18 +272,18 @@ fun MikuPowerMenuScreen(
                         Spacer(Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "MIKUOS POWER CORE",
+                                text = "POWER  ♥",
                                 color = Color.White,
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Black,
                                 letterSpacing = 1.2.sp
                             )
                             Text(
-                                text = "GLOBAL ACTIONS & HARDWARE SECURITY",
+                                text = "MikuOS · hold to confirm",
                                 color = MikuTealBright.copy(alpha = 0.85f),
-                                fontSize = 9.5.sp,
+                                fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
-                                letterSpacing = 0.8.sp
+                                letterSpacing = 0.6.sp
                             )
                         }
                     }
@@ -369,99 +369,26 @@ fun MikuPowerMenuScreen(
                         }
                     }
                 } else {
-                    // Action Grid: 6 Themed 3D Action Cards (2 Columns x 3 Rows)
+                    // Pixel-11-style vertical stack of large pill actions (56dp, 28dp corners),
+                    // destructive ones arm the 3s confirm countdown above.
                     Column(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // Row 1: Lockdown & Reboot
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            PowerActionTile(
-                                modifier = Modifier.weight(1f),
-                                title = "LOCKDOWN",
-                                subtitle = "Secure & Force AOD",
-                                icon = Icons.Default.Shield,
-                                accentColor = MikuTealBright,
-                                onClick = {
-                                    executeAction("lockdown")
-                                }
-                            )
-                            PowerActionTile(
-                                modifier = Modifier.weight(1f),
-                                title = "REBOOT",
-                                subtitle = "Fast OS Restart",
-                                icon = Icons.Default.RestartAlt,
-                                accentColor = Color(0xFF00E5FF),
-                                onClick = {
-                                    pendingActionName = "REBOOT"
-                                    pendingActionCommand = "reboot"
-                                    pendingActionAccent = Color(0xFF00E5FF)
-                                }
-                            )
+                        PowerPill("LOCKDOWN", "Lock now · secure", Icons.Default.Shield, MikuTealBright) { executeAction("lockdown") }
+                        PowerPill("REBOOT", "Fast OS restart", Icons.Default.RestartAlt, Color(0xFF00E5FF)) {
+                            pendingActionName = "REBOOT"; pendingActionCommand = "reboot"; pendingActionAccent = Color(0xFF00E5FF)
                         }
-
-                        // Row 2: Power Off & Recovery
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            PowerActionTile(
-                                modifier = Modifier.weight(1f),
-                                title = "POWER OFF",
-                                subtitle = "Full Shutdown",
-                                icon = Icons.Default.PowerSettingsNew,
-                                accentColor = MikuPinkBright,
-                                onClick = {
-                                    pendingActionName = "POWER OFF"
-                                    pendingActionCommand = "reboot -p"
-                                    pendingActionAccent = MikuPinkBright
-                                }
-                            )
-                            PowerActionTile(
-                                modifier = Modifier.weight(1f),
-                                title = "RECOVERY",
-                                subtitle = "Recovery Partition",
-                                icon = Icons.Default.SettingsBackupRestore,
-                                accentColor = MikuPurple,
-                                onClick = {
-                                    pendingActionName = "RECOVERY"
-                                    pendingActionCommand = "reboot recovery"
-                                    pendingActionAccent = MikuPurple
-                                }
-                            )
+                        PowerPill("POWER OFF", "Full shutdown", Icons.Default.PowerSettingsNew, MikuPinkBright) {
+                            pendingActionName = "POWER OFF"; pendingActionCommand = "reboot -p"; pendingActionAccent = MikuPinkBright
                         }
-
-                        // Row 3: Fastboot & SystemUI
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            PowerActionTile(
-                                modifier = Modifier.weight(1f),
-                                title = "FASTBOOT",
-                                subtitle = "Bootloader Mode",
-                                icon = Icons.Default.DeveloperMode,
-                                accentColor = MikuGold,
-                                onClick = {
-                                    pendingActionName = "FASTBOOT"
-                                    pendingActionCommand = "reboot bootloader"
-                                    pendingActionAccent = MikuGold
-                                }
-                            )
-                            PowerActionTile(
-                                modifier = Modifier.weight(1f),
-                                title = "SYSTEMUI",
-                                subtitle = "Soft Restart Shell",
-                                icon = Icons.Default.Refresh,
-                                accentColor = Color(0xFF00E676),
-                                onClick = {
-                                    executeAction("systemui")
-                                }
-                            )
+                        PowerPill("RECOVERY", "Recovery partition", Icons.Default.SettingsBackupRestore, MikuPurple) {
+                            pendingActionName = "RECOVERY"; pendingActionCommand = "reboot recovery"; pendingActionAccent = MikuPurple
                         }
+                        PowerPill("FASTBOOT", "Bootloader mode", Icons.Default.DeveloperMode, MikuGold) {
+                            pendingActionName = "FASTBOOT"; pendingActionCommand = "reboot bootloader"; pendingActionAccent = MikuGold
+                        }
+                        PowerPill("RESTART SYSTEMUI", "Soft-restart the shell", Icons.Default.Refresh, Color(0xFF00E676)) { executeAction("systemui") }
                     }
                 }
 
@@ -596,5 +523,46 @@ fun PowerActionTile(
                 )
             }
         }
+    }
+}
+
+
+/** Pixel-style full-width pill action: 56dp tall, icon disc left, label + hint, accent border. */
+@Composable
+fun PowerPill(
+    title: String,
+    hint: String,
+    icon: ImageVector,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    val ctx = LocalContext.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(Brush.horizontalGradient(listOf(accent.copy(alpha = 0.22f), Color(0xFF07171E))))
+            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(28.dp))
+            .clickable {
+                try {
+                    val vib = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                    vib?.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE))
+                } catch (_: Throwable) {}
+                onClick()
+            }
+            .padding(start = 8.dp, end = 16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier.size(40.dp).clip(CircleShape).background(accent.copy(alpha = 0.25f)).border(1.dp, accent.copy(alpha = 0.6f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) { Icon(icon, contentDescription = title, tint = accent, modifier = Modifier.size(22.dp)) }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Black, letterSpacing = 0.8.sp, maxLines = 1)
+            Text(hint, color = MikuMuted, fontSize = 11.sp, maxLines = 1)
+        }
+        Text("›", color = accent.copy(alpha = 0.8f), fontSize = 18.sp, fontWeight = FontWeight.Bold)
     }
 }

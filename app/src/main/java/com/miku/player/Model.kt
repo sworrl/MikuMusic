@@ -44,6 +44,15 @@ data class Track(
     /** Disc number for multi-disc sets (0 = unknown/single disc). MediaStore packs it as
      *  disc*1000+track in the TRACK column; kept separately so disc order survives grouping. */
     val discNumber: Int = 0,
+    /** Whole-CD image rip (one file = the entire disc). See DiscImage. */
+    val isDiscImage: Boolean = false,
+    /** Sibling .cue sheet for a disc image, "" if none. */
+    val cuePath: String = "",
+    /** For a VIRTUAL track cut from a disc image: the image's MediaStore id (0 = a real file). */
+    val parentId: Long = 0L,
+    /** Virtual track clip window inside the parent image (ms); clipEndMs 0 = to the end. */
+    val clipStartMs: Long = 0L,
+    val clipEndMs: Long = 0L,
 )
 
 data class ArtistGroup(val name: String, val tracks: List<Track>) {
@@ -67,6 +76,12 @@ fun ArtistGroup.coverTrack(ctx: android.content.Context): Track? {
 }
 
 data class AlbumGroup(val name: String, val artist: String, val tracks: List<Track>) {
+    /** True when this album is (at least partly) a whole-CD image rip. */
+    val hasDiscImage: Boolean get() = tracks.any { it.isDiscImage }
+    /** Cue-less images still shown as ONE file (no real track list). */
+    val unsplitImageCount: Int get() = tracks.count { it.isDiscImage && it.parentId == 0L }
+    /** Number of physical disc images behind this album (multi-file ".1/.2" images count each). */
+    val discImageFiles: Int get() = tracks.filter { it.isDiscImage }.map { if (it.parentId != 0L) it.parentId else it.id }.distinct().size
     /** Earliest year present on the album (0 if none) — used to order albums chronologically. */
     val year: Int get() = tracks.mapNotNull { it.year.takeIf { y -> y > 0 } }.minOrNull() ?: 0
     /** Most recent add-time across the album's tracks (same reasoning as ArtistGroup above). */
@@ -790,6 +805,9 @@ fun releaseTag(albumName: String): String? =
  *  green) so a "which pressing is this" tag never gets mistaken for a quality-tier badge. */
 val ReleaseTagColor = Color(0xFFCE93D8)
 
+/** Whole-CD image rip badge — warm amber, distinct from every quality/pressing badge family. */
+val DiscImageColor = Color(0xFFFFB74D)
+
 fun formatColor(mime: String): Color = when (mime.substringAfterLast('/').lowercase()) {
     "flac", "x-flac", "wav", "x-wav", "dsd", "dff", "dsf" -> MikuTealBright
     "mp4", "m4a", "aac", "alac" -> MikuTeal
@@ -806,8 +824,12 @@ fun trackMetaSpan(t: Track, resolvedYear: Int? = null): AnnotatedString {
     val cacheKey = if (yr != null) t.id * 31 + yr else t.id
     metaSpanCache.get(cacheKey)?.let { return it }
     val res = buildAnnotatedString {
-        withStyle(SpanStyle(color = Color(0xFFD4E8E5), fontWeight = FontWeight.Normal)) { append(t.artist) }
         fun sep() = withStyle(SpanStyle(color = Color(0xFF3A5450))) { append("  ·  ") }
+        DiscImage.rowLabel(t)?.let { lbl ->
+            withStyle(SpanStyle(color = DiscImageColor, fontWeight = FontWeight.Bold)) { append("💿 $lbl") }
+            sep()
+        }
+        withStyle(SpanStyle(color = Color(0xFFD4E8E5), fontWeight = FontWeight.Normal)) { append(t.artist) }
         if (t.album.isNotBlank()) { sep(); withStyle(SpanStyle(color = Muted)) { append(t.album) } }
         if (yr != null) { sep(); withStyle(SpanStyle(color = MikuGold, fontWeight = FontWeight.SemiBold)) { append("$yr") } }
     }

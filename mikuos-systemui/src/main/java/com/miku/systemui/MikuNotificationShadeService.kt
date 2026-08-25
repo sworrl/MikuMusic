@@ -103,9 +103,14 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     // ------------------------------------------------------------------ broadcasts
 
+    /** Now-Playing HUD (track-change pop-over drawn in our overlay layer). */
+    private var trackHud: MikuTrackHud? = null
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             when (intent?.action) {
+                MikuTrackHud.ACTION_TRACK_CHANGED, MikuTrackHud.ACTION_DEBUG ->
+                    trackHud?.show(MikuTrackHud.Payload.from(intent))
                 ACTION_TRIGGER_BACK, ACTION_DEBUG_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
                 ACTION_DEBUG_HOME -> triggerHome()
                 ACTION_DEBUG_RECENTS -> openRecents()
@@ -122,11 +127,13 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        trackHud = MikuTrackHud(this, windowManager) { dragPx -> openShadeActivity(dragPx) }
         try {
             val filter = IntentFilter().apply {
                 addAction(ACTION_TRIGGER_BACK); addAction(ACTION_DEBUG_BACK)
                 addAction(ACTION_DEBUG_HOME); addAction(ACTION_DEBUG_RECENTS)
                 addAction(ACTION_DEBUG_QUICK_SWITCH)
+                addAction(MikuTrackHud.ACTION_TRACK_CHANGED); addAction(MikuTrackHud.ACTION_DEBUG)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -140,12 +147,14 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         addOverlays()
+        MikuNotificationStore.ensureEnabled(this)
         Log.i(TAG, "MikuNav connected; overlays=$overlaysAdded canGestures=" +
             (serviceInfo?.capabilities?.and(android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0))
     }
 
     override fun onDestroy() {
         try { unregisterReceiver(receiver) } catch (_: Throwable) {}
+        trackHud?.destroy(); trackHud = null
         removeOverlays()
         try { workThread.quitSafely() } catch (_: Throwable) {}
         super.onDestroy()
@@ -403,7 +412,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0xFF39C5BB.toInt() }
         private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0x5500F5D4 }
         private val glyphPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = dp(14f)
+            color = Color.WHITE; textAlign = Paint.Align.CENTER; textSize = dp(12f)
             setShadowLayer(dp(4f), 0f, 0f, 0xAA00F5D4.toInt())
         }
         private val chevronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -418,9 +427,9 @@ class MikuNotificationShadeService : AccessibilityService() {
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             if (visProgress <= 0.01f) return
-            val h = dp(56f)
+            val h = dp(34f)
             val maxW = dp(EDGE_MAX_DP)
-            val w = dp(10f) + maxW * visProgress
+            val w = dp(8f) + maxW * visProgress
             val cy = visY.coerceIn(h / 2f, height - h / 2f)
             val cx = if (isLeft) w / 2f - dp(6f) else width - w / 2f + dp(6f)
             canvas.save()
@@ -428,21 +437,24 @@ class MikuNotificationShadeService : AccessibilityService() {
             // Capsule that emerges from the edge ("D" shape)
             val left = if (isLeft) -dp(20f) else width - w
             val right = if (isLeft) w else width + dp(20f)
-            rect.set(left - dp(5f), cy - h / 2f - dp(5f), right + dp(5f), cy + h / 2f + dp(5f))
-            glowPaint.alpha = (0x55 * visProgress).toInt()
-            canvas.drawRoundRect(rect, h, h, glowPaint)
+            // soft Miku glow (radial shader — stays hardware-accelerated)
+            val gcx = if (isLeft) right - dp(12f) else left + dp(12f)
+            glowPaint.shader = android.graphics.RadialGradient(gcx, cy, h * 1.6f,
+                intArrayOf((0x00FFFFFF and 0x00F5D4) or ((0x80 * visProgress).toInt() shl 24), 0x0000F5D4), null, android.graphics.Shader.TileMode.CLAMP)
+            rect.set(gcx - h * 1.6f, cy - h * 1.6f, gcx + h * 1.6f, cy + h * 1.6f)
+            canvas.drawOval(rect, glowPaint)
             rect.set(left, cy - h / 2f, right, cy + h / 2f)
             fillPaint.alpha = (0xF2 * (0.55f + 0.45f * visProgress)).toInt()
             canvas.drawRoundRect(rect, h, h, fillPaint)
             // Heart glyph + chevron pointing inward (chevron fades in as we approach commit)
-            val gx = if (isLeft) (right - dp(15f)) else (left + dp(15f))
+            val gx = if (isLeft) (right - dp(12f)) else (left + dp(12f))
             glyphPaint.alpha = (255 * visProgress).toInt()
-            canvas.drawText("♥", gx, cy + dp(5f), glyphPaint)
+            canvas.drawText("♥", gx, cy + dp(4.5f), glyphPaint)
             val chevAlpha = ((visProgress - 0.55f) / 0.45f).coerceIn(0f, 1f)
             if (chevAlpha > 0f) {
                 chevronPaint.alpha = (255 * chevAlpha).toInt()
-                val s = dp(5f)
-                val ax = if (isLeft) gx + dp(11f) else gx - dp(11f)
+                val s = dp(4f)
+                val ax = if (isLeft) gx + dp(9f) else gx - dp(9f)
                 chevron.reset()
                 if (isLeft) { chevron.moveTo(ax - s, cy - s); chevron.lineTo(ax, cy); chevron.lineTo(ax - s, cy + s) }
                 else { chevron.moveTo(ax + s, cy - s); chevron.lineTo(ax, cy); chevron.lineTo(ax + s, cy + s) }
@@ -648,11 +660,13 @@ class MikuNotificationShadeService : AccessibilityService() {
             val bottom = h - dp(8f) - lift
             canvas.save()
             canvas.scale(pop, pop, cx, bottom - ph / 2f)
-            rect.set(cx - pw / 2f - dp(4f), bottom - ph - dp(4f), cx + pw / 2f + dp(4f), bottom + dp(4f))
-            glowPaint.alpha = if (armed) 0x80 else (0x38 + (0x40 * stretch).toInt())
-            canvas.drawRoundRect(rect, ph + dp(4f), ph + dp(4f), glowPaint)
+            val glowA = if (armed) 0x90 else (0x30 + (0x50 * stretch).toInt())
+            glowPaint.shader = android.graphics.LinearGradient(cx - pw / 2f - dp(10f), 0f, cx + pw / 2f + dp(10f), 0f,
+                intArrayOf(0x0000F5D4, (glowA shl 24) or 0x00F5D4, 0x0000F5D4), null, android.graphics.Shader.TileMode.CLAMP)
+            rect.set(cx - pw / 2f - dp(10f), bottom - ph - dp(6f), cx + pw / 2f + dp(10f), bottom + dp(6f))
+            canvas.drawRoundRect(rect, ph + dp(6f), ph + dp(6f), glowPaint)
             rect.set(cx - pw / 2f, bottom - ph, cx + pw / 2f, bottom)
-            pillPaint.color = if (armed) 0xFF00F5D4.toInt() else 0xD9FFFFFF.toInt()
+            pillPaint.color = if (armed) 0xFF00F5D4.toInt() else 0xB3FFFFFF.toInt()
             canvas.drawRoundRect(rect, ph / 2f, ph / 2f, pillPaint)
             canvas.restore()
         }

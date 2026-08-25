@@ -185,7 +185,7 @@ class LibraryDaemonService : Service() {
                 )
             }
         }
-        return out
+        return DiscImage.apply(this, out)
     }
 
     private fun createNotificationChannel() {

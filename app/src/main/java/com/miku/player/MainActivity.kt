@@ -290,11 +290,22 @@ fun mediaItemFor(t: Track): MediaItem {
         .setAlbumTitle(t.album)
         .setArtworkUri(if (t.albumId > 0) ContentUris.withAppendedId(ALBUM_ART_URI, t.albumId) else null)
         .build()
-    return MediaItem.Builder()
-        .setUri(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, t.id))
+    val sourceId = if (t.parentId != 0L) t.parentId else t.id
+    val b = MediaItem.Builder()
+        .setUri(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, sourceId))
         .setMediaId(t.id.toString())
         .setMediaMetadata(meta)
-        .build()
+    // Virtual track cut from a whole-disc image: play only its window of the parent file (Media3
+    // wraps this in a ClippingMediaSource — seeks to INDEX 01, ends at the next index).
+    if (t.parentId != 0L) {
+        b.setClippingConfiguration(
+            androidx.media3.common.MediaItem.ClippingConfiguration.Builder()
+                .setStartPositionMs(t.clipStartMs.coerceAtLeast(0L))
+                .apply { if (t.clipEndMs > t.clipStartMs) setEndPositionMs(t.clipEndMs) }
+                .build()
+        )
+    }
+    return b.build()
 }
 
 object QueueManager {
@@ -786,7 +797,8 @@ class MainActivity : ComponentActivity() {
             }
         }
         PlayerPreferences.flushTrackNumbers(this) // one batched write for every saveTrackNumber() call made during this pass, not one per track
-        return out
+        // Whole-CD image rips: flag + label, split into virtual tracks where a cue sheet allows.
+        return DiscImage.apply(this, out)
     }
 }
 
@@ -3939,6 +3951,7 @@ private fun ArtistSortSettingsModal(
                             releaseTag(al.name)?.let { tag ->
                                 DataChip(tag, ReleaseTagColor)
                             }
+                            if (al.hasDiscImage) DataChip(if (al.unsplitImageCount > 0) "💿 FULL-CD RIP" else "💿 CD RIP · CUE SPLIT", DiscImageColor)
                             Text(
                                 alQuality.specTag,
                                 color = when {
@@ -4062,6 +4075,19 @@ private fun ArtistSortSettingsModal(
                             Spacer(Modifier.height(4.dp))
                             val yearText = if (year > 0) "$year  ·  " else ""
                             Text("$yearText${sortedTracks.size} tracks${if (totalPlays > 0) "  ·  ▶ $totalPlays plays" else ""}", color = Muted, fontSize = 12.sp)
+                            val unsplitImages = sortedTracks.count { it.isDiscImage && it.parentId == 0L }
+                            val virtualFromCue = sortedTracks.count { it.parentId != 0L }
+                            if (unsplitImages > 0 || virtualFromCue > 0) {
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    when {
+                                        unsplitImages > 0 && sortedTracks.size == unsplitImages && unsplitImages == 1 -> "💿 This is a single-file CD rip — the whole disc plays as one track"
+                                        unsplitImages > 0 -> "💿 Single-file CD rip · $unsplitImages disc image${if (unsplitImages > 1) "s" else ""} play as whole-disc tracks"
+                                        else -> "💿 Single-file CD rip · $virtualFromCue tracks split from its cue sheet"
+                                    },
+                                    color = DiscImageColor, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 15.sp
+                                )
+                            }
 
                             // Glanceable Data Metric Text Spec Line
                             Spacer(Modifier.height(4.dp))
@@ -5305,6 +5331,14 @@ enum class SettingsCategory(val title: String, val icon: String) {
                             ) { sortIgnoreThe = it; PlayerPreferences.saveSortIgnoreThe(ctx, it) }
                         }
                         item { SettingsSection("Playback") }
+                        item {
+                            var hudOn by remember { mutableStateOf(MikuTrackHud.isEnabled(ctx)) }
+                            SettingsToggleRow(
+                                title = "Now-playing HUD over apps",
+                                subtitle = "MikuOS shows a quick, dismissable card whenever the track changes — even outside the player",
+                                checked = hudOn
+                            ) { hudOn = it; MikuTrackHud.setEnabled(ctx, it) }
+                        }
                         item {
                             SettingsToggleRow(
                                 title = "Auto-start visualizer",

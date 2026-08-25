@@ -355,6 +355,17 @@
             </intent-filter>
         </receiver>
 
+        <!-- Now-playing HUD art for MikuOS SystemUI (MikuTrackHud): read-granted per broadcast. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.miku.player.hudart"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/hud_art_paths" />
+        </provider>
+
         <!-- Graceful-swap update handling (UpdateHandler.kt): the system delivers this to the
              app's own package right after a replacement APK finishes installing — guaranteed even
              for a freshly-updated "stopped" app, no special permission needed. Lets us auto-relaunch

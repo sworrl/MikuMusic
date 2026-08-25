@@ -21,6 +21,8 @@ class MikuShadeActivity : ComponentActivity() {
         /** Pixels the finger had already pulled down when the nav service opened us — the
          *  panel starts that far exposed and finishes the slide, so it appears to follow. */
         const val EXTRA_DRAG_OFFSET_PX = "miku.shade.drag_offset_px"
+        /** Open straight into the full quick-settings grid (second pull / QS tile). */
+        const val EXTRA_START_EXPANDED = "miku.shade.start_expanded"
     }
 
     private fun hideSystemBars() {
@@ -75,7 +77,15 @@ class MikuShadeActivity : ComponentActivity() {
                             val intent = packageManager.getLaunchIntentForPackage("com.miku.settings")
                             if (intent != null) startActivity(intent)
                         } catch (_: Throwable) {}
-                    }
+                    },
+                    onOpenPower = {
+                        try {
+                            startActivity(Intent(this@MikuShadeActivity, MikuPowerMenuActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION
+                            })
+                        } catch (_: Throwable) {}
+                    },
+                    startExpanded = intent?.getBooleanExtra(EXTRA_START_EXPANDED, false) == true
                 )
             }
         }

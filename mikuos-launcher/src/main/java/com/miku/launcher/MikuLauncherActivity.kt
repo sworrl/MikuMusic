@@ -888,13 +888,20 @@ fun MikuLauncherScreen() {
                         ) { launchClockApp(ctx) }
                     ) { CyberPlasmaGlowClock(time = currentTime, date = currentDate) }
                 },
-                QuiltBadge("weather", "Weather & GPS") {
+                QuiltBadge("weather", "Weather") {
+                    com.miku.launcher.ui.MikuKawaiiWeatherBadge(
+                        weather = weatherState.weather,
+                        city = weatherState.gps.city,
+                        onClick = { isWeatherObservatoryOpen = true }
+                    )
+                },
+                QuiltBadge("gps", "GPS") {
                     MikuCyberWeatherGpsBadge(
                         weather = weatherState.weather,
                         gps = weatherState.gps,
                         onWeatherClick = { isWeatherObservatoryOpen = true },
                         onGpsClick = { isGpsModalOpen = true },
-                        modifier = Modifier.width(196.dp)
+                        modifier = Modifier.width(176.dp)
                     )
                 },
                 QuiltBadge("network", "Wi-Fi & LTE") {
@@ -1107,7 +1114,7 @@ fun MikuLauncherScreen() {
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp)
+                    .padding(start = 12.dp, end = 12.dp, top = 14.dp)
                     .pointerInput(Unit) {
                         var totalDragX = 0f
                         var totalDragY = 0f
@@ -1127,6 +1134,12 @@ fun MikuLauncherScreen() {
                             }
                         )
                     }
+            ) {
+                // Shorter glass tray; the pearl above is drawn OUTSIDE it (no clip on the outer Box).
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
                     .clip(RoundedCornerShape(MikuDimens.cornerL))
                     .background(Brush.verticalGradient(listOf(Color(0xEE0D2630), Color(0xFF06141B))))
                     .border(
@@ -1142,7 +1155,7 @@ fun MikuLauncherScreen() {
                         ),
                         RoundedCornerShape(MikuDimens.cornerL)
                     )
-                    .padding(horizontal = 4.dp, vertical = 6.dp)
+                    .padding(start = 4.dp, end = 4.dp, top = 4.dp, bottom = 5.dp)
             ) {
                 Row(
                     Modifier.fillMaxWidth(),
@@ -1164,66 +1177,10 @@ fun MikuLauncherScreen() {
                         modifier = Modifier.weight(1f),
                         onClick = { launchMikuFm(ctx) }
                     )
-                    // MIKU MUSIC ANCHOR: one step larger, rainbow ring + BPM aura, magic-lamp launch.
-                    val mikuMusicInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .weight(1f)
-                            .mikuPressScale(
-                                pressedScale = 0.86f,
-                                glowColor = Color(0xFFFF007F),
-                                interactionSource = mikuMusicInteraction
-                            )
-                            .clickable(
-                                interactionSource = mikuMusicInteraction,
-                                indication = null
-                            ) {
-                                try {
-                                    val intent = Intent().apply {
-                                        setClassName("com.miku.player", "com.miku.player.MainActivity")
-                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                                    }
-                                    val options = android.app.ActivityOptions.makeCustomAnimation(
-                                        ctx,
-                                        R.anim.magic_lamp_expand,
-                                        R.anim.magic_lamp_fade_out
-                                    )
-                                    ctx.startActivity(intent, options.toBundle())
-                                } catch (_: Throwable) {}
-                            }
-                    ) {
-                        Box(
-                            Modifier
-                                .size(MikuDimens.dockHero)
-                                .background(
-                                    Brush.radialGradient(
-                                        listOf(
-                                            if (isBpmAudioPlaying) Color(bpmState.dominantColor).copy(alpha = bpmAuraAlpha) else MikuCyan.copy(alpha = 0.20f),
-                                            Color(0xFFB388FF).copy(alpha = if (isBpmAudioPlaying) 0.25f else 0.08f),
-                                            Color.Transparent
-                                        )
-                                    ),
-                                    CircleShape
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                Modifier
-                                    .fillMaxSize()
-                                    .graphicsLayer { rotationZ = rainbowRotation }
-                                    .border(BorderStroke(2.5.dp, Brush.sweepGradient(colors = rainbowStops)), CircleShape)
-                            )
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_miku_music_brand),
-                                contentDescription = "Miku Music",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(2.5.dp)
-                                    .clip(CircleShape)
-                            )
-                        }
+                    // Reserved slot for the Miku Pearl (drawn above the tray, see below): keeps the
+                    // even 5-cell spacing and holds the label at the same baseline as the others.
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.weight(1f)) {
+                        Spacer(Modifier.size(48.dp))
                         Spacer(Modifier.height(2.dp))
                         Text(
                             text = "Miku Music",
@@ -1255,12 +1212,70 @@ fun MikuLauncherScreen() {
                         }
                     )
                 }
+                }
+                // MIKU PEARL: the Miku Music anchor, larger than the dock icons and protruding above the
+                // bar's top edge (drawn after the tray, so it is above it in z-order). Magic-lamp launch.
+                    val mikuMusicInteraction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 24.dp)
+                            .mikuPressScale(
+                                pressedScale = 0.86f,
+                                glowColor = Color(0xFFFF007F),
+                                interactionSource = mikuMusicInteraction
+                            )
+                            .clickable(
+                                interactionSource = mikuMusicInteraction,
+                                indication = null
+                            ) {
+                                try {
+                                    val intent = Intent().apply {
+                                        setClassName("com.miku.player", "com.miku.player.MainActivity")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                                    }
+                                    val options = android.app.ActivityOptions.makeCustomAnimation(
+                                        ctx,
+                                        R.anim.magic_lamp_expand,
+                                        R.anim.magic_lamp_fade_out
+                                    )
+                                    ctx.startActivity(intent, options.toBundle())
+                                } catch (_: Throwable) {}
+                            }
+                    ) {
+                        Box(
+                            Modifier
+                                .size(62.dp)
+                                .background(
+                                    Brush.radialGradient(
+                                        listOf(
+                                            if (isBpmAudioPlaying) Color(bpmState.dominantColor).copy(alpha = bpmAuraAlpha) else MikuCyan.copy(alpha = 0.20f),
+                                            Color(0xFFB388FF).copy(alpha = if (isBpmAudioPlaying) 0.25f else 0.08f),
+                                            Color.Transparent
+                                        )
+                                    ),
+                                    CircleShape
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                Modifier
+                                    .fillMaxSize()
+                                    .graphicsLayer { rotationZ = rainbowRotation }
+                                    .border(BorderStroke(2.5.dp, Brush.sweepGradient(colors = rainbowStops)), CircleShape)
+                            )
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_miku_music_brand),
+                                contentDescription = "Miku Music",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(2.5.dp)
+                                    .clip(CircleShape)
+                            )
+                        }
+                    }
             }
-            // ============================================================
-            // PIXEL GESTURE NAVIGATION PILL BAR (FLUSH TO BOTTOM EDGE)
-            // Quick Swipe Up -> App Drawer
-            // Long Swipe Up & Hold -> Recents Multi-Tasking Carousel
-            // ============================================================
             // Clearance for the OS-wide gesture pill strip (24dp) + breathing room
             Spacer(Modifier.height(28.dp))
         }
@@ -5262,6 +5277,34 @@ fun CyberNotificationShadeModal(
                                 com.miku.launcher.ingest.MikuIngestEngine.setEngineEnabled(ctx, next)
                             }
                         )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // System-wide track-change popup (SystemUI draws it; Miku Music stops broadcasting
+                        // when 0). State = Settings.Global "miku_track_hud_enabled", default 1.
+                        var trackHudOn by remember {
+                            mutableStateOf(
+                                try { android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_track_hud_enabled", 1) == 1 } catch (_: Throwable) { true }
+                            )
+                        }
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "NOW PLAYING HUD",
+                            subtitle = if (trackHudOn) "TRACK POPUP ON" else "TRACK POPUP OFF",
+                            icon = Icons.Default.MusicNote,
+                            accentColor = if (trackHudOn) Color(0xFF00E676) else MikuNeonPink,
+                            isActive = trackHudOn,
+                            onClick = {
+                                val next = !trackHudOn
+                                trackHudOn = next
+                                scope.launch(Dispatchers.IO) {
+                                    runCatching {
+                                        android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_track_hud_enabled", if (next) 1 else 0)
+                                    }.getOrNull() ?: RootShell.execFast("settings put global miku_track_hud_enabled ${if (next) 1 else 0}")
+                                }
+                            }
+                        )
+                        Spacer(Modifier.weight(1f))
                     }
                 }
 

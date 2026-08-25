@@ -1,0 +1,198 @@
+package com.miku.player
+
+import android.content.Context
+import android.util.Log
+import java.io.File
+
+/**
+ * Whole-disc ("CD image") rip detection + labeling + optional splitting.
+ *
+ * Confirmed on the card (2026-08-25): ~495 album folders hold ONE big audio file for the whole CD
+ * ("00 Remanufacture.flac", "00 CDImage.flac", "00 CDImage.1.flac" / ".2.flac" for multi-disc,
+ * "00.flac", "00 00.flac", "00 <Artist> - <Album>.flac") and only ~6 of them have a .cue beside the
+ * image. So the cue-less case is the MAIN case: detection is filename / duration / track-count
+ * based and costs nothing beyond fields MediaStore already gave us — no decoding.
+ *
+ *  • Detection (any of): track-number-00 style filename · a single audio file ≥ 18 min whose album
+ *    holds ≤ 2 files · title ≈ album title · filename ≈ "<artist> - <album>" · a sibling .cue whose
+ *    FILE line names this audio file.
+ *  • Every image is flagged [Track.isDiscImage] (persisted in the binary index, so it survives
+ *    rescans) and stays playable as one item. Multi-file images (".1", ".2") become discs 1, 2… of
+ *    one album.
+ *  • Where a splitter can produce a real track list (today: the .cue sheet), the image is replaced
+ *    by VIRTUAL tracks — [Track.parentId] + [Track.clipStartMs]/[Track.clipEndMs] — which
+ *    mediaItemFor() plays through Media3's clipping configuration (seek to INDEX 01, end at the
+ *    next index). A later MusicBrainz/Discogs duration-based splitter only needs to implement
+ *    [WholeDiscSplitter] and register in [splitters].
+ */
+object DiscImage {
+    private const val TAG = "DiscImage"
+    const val MIN_IMAGE_MS = 18 * 60_000L
+
+    /** "00 Something.flac", "00.flac", "00_x", "00-x", "00 CDImage.2.flac" */
+    private val IMAGE_NAME_RE = Regex("(?i)^00(?:[ ._-]|$)")
+    /** ".1.flac" / ".2.ape" multi-disc image suffix → disc number. */
+    private val MULTI_DISC_RE = Regex("(?i)\\.(\\d)\\.(flac|ape|wav|wv|dsf|dff|m4a|mp3)$")
+    private val NON_ALNUM_RE = Regex("[^\\p{L}\\p{Nd}]+")
+
+    /** Pluggable "turn one image into its real tracks" strategies, tried in order. */
+    interface WholeDiscSplitter {
+        val name: String
+        /** Return the virtual tracks for [image], or null if this splitter can't split it. */
+        fun split(ctx: Context, image: Track): List<Track>?
+    }
+
+    val splitters: MutableList<WholeDiscSplitter> = mutableListOf(CueSplitter)
+    // TODO(hook): MusicBrainz/Discogs duration-based splitter for cue-less images goes here —
+    //   implement WholeDiscSplitter, look the disc up by total duration/artist/album, and emit the
+    //   same virtual-track shape CueSplitter produces (offsets → clipStartMs/clipEndMs).
+
+    data class Report(var images: Int = 0, var withCue: Int = 0, var virtualTracks: Int = 0)
+    @Volatile var lastReport: Report = Report()
+        private set
+
+    private fun norm(s: String): String = NON_ALNUM_RE.replace(s.lowercase(), "")
+
+    /** Post-pass over a freshly queried library. Flags images, assigns multi-file disc numbers,
+     *  and swaps in virtual tracks where a splitter can produce them. O(n), no I/O except for a
+     *  small directory listing per image candidate (skipped when the SD isn't file-readable). */
+    fun apply(ctx: Context, tracks: List<Track>): List<Track> {
+        if (tracks.isEmpty()) return tracks
+        val report = Report()
+        // Files per album folder (disc subfolders collapsed) — the "single big file" signal.
+        val folderCounts = HashMap<String, Int>(tracks.size / 8 + 16)
+        for (t in tracks) if (t.path.isNotBlank()) {
+            val k = folderKey(t.path); folderCounts[k] = (folderCounts[k] ?: 0) + 1
+        }
+        val canReadFiles = MikuStorageAccess.hasAllFilesAccess()
+        val cueDirCache = HashMap<String, List<File>>()
+        val out = ArrayList<Track>(tracks.size + 64)
+        for (t in tracks) {
+            val name = if (t.path.isNotBlank()) t.path.substringAfterLast('/') else ""
+            val base = name.substringBeforeLast('.')
+            val folderN = folderCounts[folderKey(t.path)] ?: 1
+            val looksImage = when {
+                name.isNotBlank() && IMAGE_NAME_RE.containsMatchIn(name) -> true
+                t.durationMs >= MIN_IMAGE_MS && folderN <= 2 -> true
+                t.durationMs >= MIN_IMAGE_MS && t.album.isNotBlank() && norm(t.title) == norm(t.album) -> true
+                t.durationMs >= MIN_IMAGE_MS && t.album.isNotBlank() &&
+                    (norm(base) == norm("${t.artist} - ${t.album}") || norm(base) == norm("${t.albumArtist} - ${t.album}")) -> true
+                else -> false
+            }
+            if (!looksImage && !t.isDiscImage) { out.add(t); continue }
+            report.images++
+            val disc = MULTI_DISC_RE.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: t.discNumber
+            var cue = t.cuePath
+            if (cue.isBlank() && canReadFiles) cue = findCue(t.path, cueDirCache) ?: ""
+            if (cue.isNotBlank()) report.withCue++
+            val image = t.copy(isDiscImage = true, discNumber = disc, cuePath = cue,
+                trackNumber = if (t.trackNumber == 0) 1 else t.trackNumber)
+            var virtual: List<Track>? = null
+            for (sp in splitters) {
+                virtual = runCatching { sp.split(ctx, image) }.onFailure { Log.w(TAG, "${sp.name} failed on ${t.path}", it) }.getOrNull()
+                if (!virtual.isNullOrEmpty()) break
+            }
+            if (!virtual.isNullOrEmpty()) { report.virtualTracks += virtual.size; out.addAll(virtual) } else out.add(image)
+        }
+        lastReport = report
+        if (report.images > 0) Log.i(TAG, "Whole-disc images: ${report.images} (with cue: ${report.withCue}, virtual tracks: ${report.virtualTracks})")
+        return out
+    }
+
+    private val DISC_DIR_RE = Regex("(?i)^(cd|disc|disk)\\s*\\.?\\s*\\d{1,2}$")
+    private fun folderKey(path: String): String {
+        if (path.isBlank()) return ""
+        var dir = File(path).parentFile ?: return ""
+        if (DISC_DIR_RE.matches(dir.name.trim())) dir = dir.parentFile ?: dir
+        return dir.absolutePath.lowercase()
+    }
+
+    /** The .cue that references [audioPath] (FILE "…" line), or the folder's only cue when the
+     *  folder holds a single audio file. Directory listings are cached per call. */
+    private fun findCue(audioPath: String, cache: HashMap<String, List<File>>): String? {
+        if (audioPath.isBlank()) return null
+        return try {
+            val f = File(audioPath)
+            val dir = f.parentFile ?: return null
+            val cues = cache.getOrPut(dir.absolutePath) {
+                dir.listFiles { x -> x.isFile && x.name.endsWith(".cue", ignoreCase = true) }?.toList() ?: emptyList()
+            }
+            if (cues.isEmpty()) return null
+            val want = f.name.lowercase()
+            for (c in cues) {
+                val head = runCatching { c.inputStream().use { ins -> String(ins.readNBytes(8192), Charsets.UTF_8) } }.getOrNull() ?: continue
+                if (head.lowercase().contains("\"$want\"")) return c.absolutePath
+            }
+            // Single cue + this is the only audio file in the folder → it's ours even if the FILE line names a .wav
+            if (cues.size == 1) {
+                val audioCount = dir.listFiles { x -> x.isFile && x.extension.lowercase() in AUDIO_EXTS }?.size ?: 0
+                if (audioCount == 1) return cues[0].absolutePath
+            }
+            null
+        } catch (_: Throwable) { null }
+    }
+    private val AUDIO_EXTS = setOf("flac", "ape", "wav", "wv", "dsf", "dff", "m4a", "mp3", "ogg", "opus", "tta", "mpc")
+
+    /** Human label for a track row: "Whole disc · 1 file · 47:12" (cue-less image). */
+    fun rowLabel(t: Track): String? {
+        if (!t.isDiscImage || t.parentId != 0L) return null
+        val s = t.durationMs / 1000
+        val disc = if (t.discNumber > 1) "disc ${t.discNumber} · " else ""
+        return "Whole disc · ${disc}1 file · ${s / 60}:${(s % 60).toString().padStart(2, '0')}"
+    }
+}
+
+/** .cue sheet → virtual tracks (INDEX 01 offsets). */
+object CueSplitter : DiscImage.WholeDiscSplitter {
+    override val name = "cue"
+
+    data class Entry(val number: Int, val title: String, val performer: String, val startMs: Long)
+
+    private val TIME_RE = Regex("(\\d+):(\\d{1,2}):(\\d{1,2})")
+
+    fun parse(file: File): List<Entry> {
+        val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull() ?: return emptyList()
+        val out = ArrayList<Entry>()
+        var num = 0; var title = ""; var performer = ""; var start: Long? = null; var inTrack = false
+        var globalPerformer = ""
+        fun flush() { if (inTrack && start != null) out.add(Entry(num, title.ifBlank { "Track $num" }, performer.ifBlank { globalPerformer }, start!!)) }
+        for (raw in text.lines()) {
+            val line = raw.trim()
+            when {
+                line.startsWith("TRACK ", true) -> { flush(); inTrack = true; start = null; title = ""; performer = ""
+                    num = line.substring(6).trim().substringBefore(' ').toIntOrNull() ?: (num + 1) }
+                line.startsWith("TITLE ", true) -> { val v = line.substring(6).trim().trim('"'); if (inTrack) title = v }
+                line.startsWith("PERFORMER ", true) -> { val v = line.substring(10).trim().trim('"'); if (inTrack) performer = v else globalPerformer = v }
+                line.startsWith("INDEX 01", true) -> TIME_RE.find(line)?.let { m ->
+                    val (mm, ss, ff) = m.destructured
+                    start = (mm.toLong() * 60 + ss.toLong()) * 1000L + ff.toLong() * 1000L / 75L
+                }
+            }
+        }
+        flush()
+        return out.sortedBy { it.startMs }
+    }
+
+    override fun split(ctx: Context, image: Track): List<Track>? {
+        if (image.cuePath.isBlank()) return null
+        val entries = parse(File(image.cuePath))
+        if (entries.size < 2) return null
+        val total = image.durationMs
+        return entries.mapIndexed { i, e ->
+            val end = entries.getOrNull(i + 1)?.startMs ?: total
+            val dur = if (end > e.startMs) end - e.startMs else 0L
+            image.copy(
+                id = -(image.id * 1000L + (i + 1)),          // stable synthetic id: parent id + slot
+                title = e.title,
+                artist = e.performer.ifBlank { image.artist },
+                durationMs = dur,
+                sizeBytes = 0L,
+                trackNumber = e.number.takeIf { it > 0 } ?: (i + 1),
+                isDiscImage = true,
+                parentId = image.id,
+                clipStartMs = e.startMs,
+                clipEndMs = if (end > e.startMs && end < total) end else 0L
+            )
+        }
+    }
+}
