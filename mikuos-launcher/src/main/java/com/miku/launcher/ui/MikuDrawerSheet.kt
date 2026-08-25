@@ -44,7 +44,6 @@ class DrawerSheetState(private val scope: CoroutineScope) {
         job?.cancel()
         dragging = true
         val target = (progress.value + (-dyPx / heightPx)).coerceIn(0f, 1f)
-        android.util.Log.d("MikuDrawerSheet", "dragBy dy=$dyPx h=$heightPx -> $target")
         job = scope.launch { progress.snapTo(target) }
     }
 

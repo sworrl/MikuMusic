@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Process
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.android.asCoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,6 +55,14 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+    /**
+     * Every qcom.fmradio call runs on this Looper thread: FmReceiver's constructor builds a
+     * PhoneStateListener (needs a Looper) and the library posts to Handlers internally, so a
+     * plain IO thread NPEs in Handler.<init> (seen on-device 2026-08-25).
+     */
+    private val tunerThread = android.os.HandlerThread("MikuFmTuner").apply { start() }
+    private val tunerDispatcher = android.os.Handler(tunerThread.looper).asCoroutineDispatcher("MikuFmTuner")
 
     private var audioTrackHelper: AudioTrackHelper? = null
     private var audioRecord: AudioRecord? = null
@@ -127,8 +136,30 @@ class QualcommFmHardwareEngine(private val context: Context) {
     }
 
     init {
+        loadJni()
         registerHeadsetListener()
         registerDebugReceiver()
+    }
+
+    /**
+     * HiBy's qcom.fmradio.jar does NOT load its own JNI library — the app must (stock FM2's
+     * FMAdapterApp logs "Loading FM-JNI Library"). libqcomfm_jni.so is bundled in this APK
+     * (copied from /system_ext/app/FM2/lib/arm64) and registers qcom/fmradio/FmReceiverJNI in
+     * JNI_OnLoad. Its deps (libandroid_runtime, libcutils, libbtconfigstore) are only reachable
+     * from the SHARED linker namespace, i.e. when this app is BUNDLED in the system image — an
+     * adb-installed update in /data gets an isolated namespace and this load fails (surfaced
+     * to the UI as a real error, never faked).
+     */
+    @Volatile private var jniLoaded = false
+    private fun loadJni() {
+        try {
+            System.loadLibrary("qcomfm_jni")
+            jniLoaded = true
+            Log.i(TAG, "FM JNI library loaded")
+        } catch (t: Throwable) {
+            Log.e(TAG, "FM JNI library NOT loadable (needs bundled/system-image install): $t")
+            hardwareError.value = "FM driver library not loadable: ${t.message}"
+        }
     }
 
     private fun mhz(khz: Int) = String.format("%.1f MHz", khz / 1000.0)
@@ -140,13 +171,15 @@ class QualcommFmHardwareEngine(private val context: Context) {
         if (isPoweredOn.value) return
         isPoweredOn.value = true
         hardwareError.value = null
-        scope.launch {
+        scope.launch(tunerDispatcher) {
             try {
                 // 1. Audio HAL: FM active (HiBy HAL flips the analog FM path / AGND select).
                 configureAudioHal(true, currentFrequencyKHz.value)
 
                 // 2. Open the tuner through the framework FM library (may throw
                 //    UnsatisfiedLinkError / InstantiationException — surfaced, never faked).
+                if (!jniLoaded) loadJni()
+                if (!jniLoaded) throw UnsatisfiedLinkError("libqcomfm_jni.so not loadable from this install location")
                 val rx = receiver ?: FmReceiver(FM_DEVICE_PATH, callbacks).also { receiver = it }
                 Log.i(TAG, "FmReceiver created; soc=${runCatching { rx.socName }.getOrNull()} " +
                     "smd=${runCatching { rx.isSmdTransportLayer }.getOrNull()} state=${runCatching { rx.fmState }.getOrNull()}")
@@ -204,7 +237,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
     fun powerOff() {
         if (!isPoweredOn.value) return
         isPoweredOn.value = false
-        scope.launch {
+        scope.launch(tunerDispatcher) {
             try {
                 mute()
                 rssiJob?.cancel(); rssiJob = null
@@ -232,7 +265,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
         val clamped = freqKHz.coerceIn(BAND_LOW_KHZ, BAND_HIGH_KHZ)
         currentFrequencyKHz.value = clamped
         stationName.value = defaultName(clamped)
-        scope.launch {
+        scope.launch(tunerDispatcher) {
             try {
                 val rx = receiver
                 if (rx != null && hardwareOnline.value) {
@@ -253,7 +286,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
             stepManual(up); return
         }
         isScanning.value = true
-        scope.launch {
+        scope.launch(tunerDispatcher) {
             val ok = runCatching {
                 rx.searchStations(
                     FmReceiver.FM_RX_SRCH_MODE_SEEK,

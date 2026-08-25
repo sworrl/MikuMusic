@@ -21,6 +21,7 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -1485,10 +1486,20 @@ fun MikuLauncherScreen() {
         // ============================================================
         // Pixel-style drawer SHEET: translated by (1 - progress) * height so it follows the finger
         // from the home swipe, settles with a spring, scrim fades with progress, grid parallax.
-        if (drawerSheet.visible || isAllAppsOpen) {
-            val drawerProgress = drawerSheet.progress.value
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f * drawerProgress.coerceIn(0f, 1f))))
-            Box(Modifier.fillMaxSize().graphicsLayer { translationY = (1f - drawerProgress) * drawerHeightPx }) {
+        run {
+            // Scrim + sheet translation are driven from the Animatable inside draw/layer lambdas
+            // (frame-rate work only, zero recomposition of this screen); the sheet stays composed
+            // even when closed (translated fully off-screen) so opening never pays a first-frame
+            // composition hitch.
+            Box(Modifier.fillMaxSize().drawBehind {
+                val a = 0.6f * drawerSheet.progress.value.coerceIn(0f, 1f)
+                if (a > 0.004f) drawRect(Color.Black.copy(alpha = a))
+            })
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                val pr = drawerSheet.progress.value
+                translationY = (1f - pr) * drawerHeightPx
+                alpha = if (pr <= 0.001f) 0f else 1f
+            }) {
                 CyberAllAppsDrawer(
                     apps = allApps,
                     searchQuery = searchQuery,
@@ -1506,7 +1517,7 @@ fun MikuLauncherScreen() {
                     },
                     onClose = { isAllAppsOpen = false },
                     sheet = drawerSheet,
-                    revealProgress = drawerProgress
+                    revealProgress = { drawerSheet.progress.value }
                 )
             }
         }
@@ -2436,7 +2447,7 @@ fun CyberAllAppsDrawer(
     onOpenQuickSettings: () -> Unit = {},
     onClose: () -> Unit,
     sheet: com.miku.launcher.ui.DrawerSheetState? = null,
-    revealProgress: Float = 1f
+    revealProgress: () -> Float = { 1f }
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val categories = remember { listOf("All", "Audio", "Tools", "Media", "System") }
@@ -2532,7 +2543,7 @@ fun CyberAllAppsDrawer(
                 .systemBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 6.dp)
                 // Content lags the sheet by up to 12dp while revealing (Pixel drawer parallax).
-                .graphicsLayer { translationY = (1f - revealProgress.coerceIn(0f, 1f)) * parallaxPx }
+                .graphicsLayer { translationY = (1f - revealProgress().coerceIn(0f, 1f)) * parallaxPx }
                 .nestedScroll(swipeDownDismiss)
         ) {
             // Drag Down Dismiss Pull-Bar (Tapping or pulling down triggers close or QS)
@@ -2775,28 +2786,43 @@ fun DockIconItem(
  * that package name runs in the SELinux vendor_fm_app domain and can touch /dev/radio0. The FM tab
  * inside com.miku.player cannot tune and only shows a fake tuner, so it is a last-resort fallback.
  */
+/**
+ * True when the system FM tuner package (com.caf.fmradio) is installed AND enabled — whichever
+ * build it is (HiBy's stock FM2 or the Miku FM system build). It is the only package SELinux
+ * lets touch /dev/radio0, so the launcher always prefers it over Miku Music's in-app radio tab.
+ * No versionCode gate: an adb-installed Miku FM update can't load its JNI from /data, so the
+ * active copy may legitimately be the stock v14.
+ */
 fun isRealMikuFmInstalled(ctx: Context): Boolean = try {
-    val pi = ctx.packageManager.getPackageInfo("com.caf.fmradio", 0)
-    @Suppress("DEPRECATION")
-    (if (android.os.Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode.toLong()) >= 1000L
+    val pm = ctx.packageManager
+    val ai = pm.getApplicationInfo("com.caf.fmradio", 0)
+    val state = pm.getApplicationEnabledSetting("com.caf.fmradio")
+    val enabled = ai.enabled && state != android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED &&
+        state != android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER &&
+        state != android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED
+    enabled && pm.getLaunchIntentForPackage("com.caf.fmradio") != null
 } catch (_: Throwable) { false }
 
 fun launchMikuFm(ctx: Context) {
-    val opts = MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN)
+    val opts = MikuCompositing.optionsForLaunch(ctx, MikuTransitionEvent.APP_OPEN, com.miku.launcher.ui.MikuLaunchSource.take())
     if (isRealMikuFmInstalled(ctx)) {
-        try {
-            ctx.startActivity(Intent(Intent.ACTION_MAIN).apply {
-                component = ComponentName("com.caf.fmradio", "com.caf.fmradio.MikuFMRadioActivity")
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }, opts)
-            return
-        } catch (_: Throwable) {}
+        // Resolve the tuner's LAUNCHER activity dynamically: stock FM2 = .FMRadio, Miku FM = .MikuFMRadioActivity.
         try {
             val li = ctx.packageManager.getLaunchIntentForPackage("com.caf.fmradio")?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             if (li != null) { ctx.startActivity(li, opts); return }
         } catch (_: Throwable) {}
+        for (cls in listOf("com.caf.fmradio.FMRadio", "com.caf.fmradio.MikuFMRadioActivity")) {
+            try {
+                ctx.startActivity(Intent(Intent.ACTION_MAIN).apply {
+                    component = ComponentName("com.caf.fmradio", cls)
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }, opts)
+                return
+            } catch (_: Throwable) {}
+        }
     }
+    // Package absent: the in-app radio tab (no tuner access — it hands off / shows unavailable).
     try {
         ctx.startActivity(Intent(Intent.ACTION_MAIN).apply {
             component = ComponentName("com.miku.player", "com.miku.player.radio.MikuFMRadioActivity")
