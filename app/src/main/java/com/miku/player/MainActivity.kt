@@ -2742,10 +2742,13 @@ private fun tabColor(t: Tab): Color = when (t) {
                             Box(Modifier.size(110.dp).clip(RoundedCornerShape(14.dp))) {
                                 AlbumArtImage(trackId = t.id, modifier = Modifier.fillMaxSize(), trackPath = t.path)
                                 // Bit-depth / sample rate quality badges overlaid directly on album art
-                                Box(
+                                // Must be a Row: TechBadgeRow emits sibling chips and a Box would
+                                // stack them on top of each other at the same origin.
+                                Row(
                                     modifier = Modifier
                                         .align(Alignment.BottomStart)
-                                        .padding(4.dp)
+                                        .padding(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     TechBadgeRow(ctx, t, fontSize = 7.5.sp, spacing = 2.dp)
                                 }
@@ -4441,6 +4444,9 @@ private fun ArtistSortSettingsModal(
     val isVinyl = remember(track.path, track.album, track.title) { TrackTech.isVinyl(track) }
     var shown = false
 
+    // Own Row so the chips always lay out side-by-side regardless of the parent (a Box parent
+    // used to draw the bit-depth and sample-rate chips on top of each other).
+    Row(verticalAlignment = Alignment.CenterVertically) {
     if (isVinyl) {
         VinylBadgeChip(fontSize = fontSize)
         shown = true
@@ -4507,6 +4513,7 @@ private fun ArtistSortSettingsModal(
             fontSize = fontSize,
             isRainbow = isRainbow
         )
+    }
     }
 }
 
