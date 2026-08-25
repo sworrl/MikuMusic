@@ -3787,7 +3787,9 @@ private fun ArtistSortSettingsModal(
                         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
                         val alQuality = remember(al.tracks) { TrackTech.computeQualityBreakdown(ctx, al.tracks) }
                         Column(
-                            Modifier.width(112.dp).padding(vertical = 2.dp).combinedClickable(
+                            // 108dp (was 112) so THREE album tiles fit per row on the 360dp-wide
+                            // M500 (3*108 + 2*4dp gaps = 332 <= 336dp usable) instead of two.
+                            Modifier.width(108.dp).padding(vertical = 2.dp).combinedClickable(
                                 onClick = { onAlbum(al) },
                                 onLongClick = {
                                     if (albumRepr != null) {
@@ -3799,7 +3801,7 @@ private fun ArtistSortSettingsModal(
                                 }
                             )
                         ) {
-                            Box(Modifier.size(112.dp).clip(RoundedCornerShape(14.dp))) {
+                            Box(Modifier.size(108.dp).clip(RoundedCornerShape(14.dp))) {
                                 if (albumRepr != null) {
                                     AlbumArtImage(trackId = albumRepr.id, modifier = Modifier.fillMaxSize(), trackPath = albumRepr.path)
                                 } else {
