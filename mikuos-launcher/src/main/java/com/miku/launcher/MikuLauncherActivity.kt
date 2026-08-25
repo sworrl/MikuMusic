@@ -1181,8 +1181,8 @@ fun MikuLauncherScreen() {
                 )
             }
 
-            // Anchor bar: ONE evenly-spaced row of 5 equal cells (Browser · FM · Miku Music · Settings ·
-            // Files), 48dp icons, the Miku anchor one step larger (56dp), 11sp labels on every cell,
+            // Anchor bar: ONE evenly-spaced row of 5 equal cells (Hardware · FM · Miku Music · Settings ·
+            // Weather) — Miku-suite destinations ONLY, no third-party apps. 48dp icons, the Miku anchor one step larger (56dp), 11sp labels on every cell,
             // nothing absolutely positioned, so nothing can overlap or wrap at 360dp.
             Box(
                 Modifier
@@ -1235,14 +1235,14 @@ fun MikuLauncherScreen() {
                     horizontalArrangement = Arrangement.SpaceEvenly,
                     verticalAlignment = Alignment.Bottom
                 ) {
+                    // Anchor bar is Miku-suite ONLY (no third-party apps). This cell used to
+                    // launch Chrome/Firefox; it now opens the in-launcher Hardware (Anatomical/DAC)
+                    // observatory — the device's real hardware readout, no external dependency.
                     DockIconItem(
-                        iconRes = R.drawable.ic_browser_miku,
-                        label = "Browser",
+                        iconRes = R.drawable.ic_miku_monitor_status,
+                        label = "Hardware",
                         modifier = Modifier.weight(1f),
-                        onClick = {
-                            val browserApp = allApps.firstOrNull { it.packageName.contains("chrome") || it.packageName.contains("firefox") || it.packageName.contains("browser") }
-                            if (browserApp != null) launchApp(ctx, browserApp)
-                        }
+                        onClick = { isBrainModalOpen = true }
                     )
                     DockIconItem(
                         iconRes = R.drawable.ic_fm_miku,
@@ -1275,14 +1275,12 @@ fun MikuLauncherScreen() {
                             if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                         }
                     )
+                    // Was Files (launched DocumentsUI); now the in-launcher Weather observatory.
                     DockIconItem(
-                        iconRes = R.drawable.ic_file_miku,
-                        label = "Files",
+                        iconRes = R.drawable.ic_weather_miku,
+                        label = "Weather",
                         modifier = Modifier.weight(1f),
-                        onClick = {
-                            val fileApp = allApps.firstOrNull { it.packageName.contains("file", ignoreCase = true) || it.packageName.contains("documentsui", ignoreCase = true) }
-                            if (fileApp != null) launchApp(ctx, fileApp)
-                        }
+                        onClick = { isWeatherObservatoryOpen = true }
                     )
                 }
                 }
