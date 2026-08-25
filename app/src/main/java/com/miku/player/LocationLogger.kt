@@ -29,6 +29,7 @@ object LocationLogger {
         artist: String = "",
         album: String = ""
     ) {
+        if (!MikuPowerGovernor.allowLocation) return   // power governor: no location work while screen-off / idle
         scope.launch {
             try {
                 val weatherState = MikuWeatherService.state.value

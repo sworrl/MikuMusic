@@ -348,6 +348,7 @@ private const val LIKED_KEY = " LIKED"
 class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
     private var sustainedPerfListener: androidx.media3.common.Player.Listener? = null
+    private var powerProfileListener: ((MikuPowerGovernor.Profile) -> Unit)? = null
     // Dev workflow today, future in-app OTA installer tomorrow: whoever is about to trigger an
     companion object {
         var globalBackHandler: (() -> Unit)? = null
@@ -438,10 +439,15 @@ class MainActivity : ComponentActivity() {
         // CPU pegging) — see the GLSurfaceView lifecycle fix in ProjectMVisualizerView for the
         // other half of that. Toggled purely off player.isPlaying so "paused while browsing" also
         // falls back to normal scaling instead of needlessly holding a high clock state.
-        window.setSustainedPerformanceMode(player.isPlaying)
+        // Driven by MikuPowerGovernor now: PERF (vis / Now Playing visible while playing, or
+        // charging) holds the sustained clock state; BALANCED/AUDIO_ONLY/IDLE release it.
+        MikuPowerGovernor.init(applicationContext)
+        window.setSustainedPerformanceMode(MikuPowerGovernor.sustainedPerfWanted)
+        powerProfileListener = { _: MikuPowerGovernor.Profile -> runOnUiThread { runCatching { window.setSustainedPerformanceMode(MikuPowerGovernor.sustainedPerfWanted) } } }
+        powerProfileListener?.let { MikuPowerGovernor.addListener(it) }
         sustainedPerfListener = object : androidx.media3.common.Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
-                window.setSustainedPerformanceMode(isPlaying)
+                MikuPowerGovernor.onPlaybackState(applicationContext, isPlaying)
             }
         }.also { player.addListener(it) }
         LibraryDaemonService.start(this)
@@ -534,6 +540,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         sustainedPerfListener?.let { player.removeListener(it) }
+        powerProfileListener?.let { MikuPowerGovernor.removeListener(it) }
         runCatching { unregisterReceiver(updateStartingReceiver) }
         runCatching { unregisterReceiver(screenOffReceiver) }
         runCatching { unregisterReceiver(gestureBackReceiver) }
@@ -813,8 +820,9 @@ fun schedulePeriodicLibraryScan(ctx: android.content.Context) {
     val ONE_DAY = 24 * 60 * 60 * 1000L
     val ONE_WEEK = 7 * ONE_DAY
 
-    // Trigger if last scan was > 1 week ago (or first time)
-    if (now - lastScanTime > ONE_WEEK) {
+    // Trigger if last scan was > 1 week ago (or first time) — and only in a profile that allows
+    // background work (never while the screen is off in audio-only / idle).
+    if (now - lastScanTime > ONE_WEEK && MikuPowerGovernor.allowBackgroundWork) {
         android.util.Log.i("MainActivity", "Triggering automated deep library scan...")
         MikuSyncTransceiver.deepScanDirectory(ctx, MikuSyncTransceiver.getSdMusicPath(ctx)) { count ->
             prefs.edit().putLong("last_auto_scan_ms", System.currentTimeMillis()).apply()
@@ -877,6 +885,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     }
     LaunchedEffect(showFullNowPlaying, showTape) {
         com.miku.player.screentime.MikuSmartScreenTimeEngine.isNowPlayingOrTapeActive = showFullNowPlaying || showTape
+        MikuPowerGovernor.setNowPlayingVisible(showFullNowPlaying || showTape)
     }
     val appScope = rememberCoroutineScope()
 
@@ -5339,6 +5348,8 @@ enum class SettingsCategory(val title: String, val icon: String) {
                                 checked = hudOn
                             ) { hudOn = it; MikuTrackHud.setEnabled(ctx, it) }
                         }
+                        item { SettingsSection("Power Governor") }
+                        item { PowerGovernorCard(ctx) }
                         item {
                             SettingsToggleRow(
                                 title = "Auto-start visualizer",
@@ -7247,5 +7258,73 @@ private fun fmtDurationLong(ms: Long): String {
             )
         }
         Icon(Icons.Default.PlayArrow, null, tint = glow, modifier = Modifier.size(22.dp))
+    }
+}
+
+
+/** Settings → "Power Governor": manual override, live profile readout, per-profile toggles. */
+@Composable private fun PowerGovernorCard(ctx: android.content.Context) {
+    LaunchedEffect(Unit) { MikuPowerGovernor.init(ctx) }
+    val profile = MikuPowerGovernor.profile
+    val mode = MikuPowerGovernor.mode
+    val ac = MikuArtTheme.colors()
+    val profileColor = when (profile) {
+        MikuPowerGovernor.Profile.PERF -> MikuPink
+        MikuPowerGovernor.Profile.BALANCED -> ac.accent
+        MikuPowerGovernor.Profile.AUDIO_ONLY -> MikuGold
+        MikuPowerGovernor.Profile.IDLE -> Muted
+    }
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+            .background(Color.White.copy(alpha = 0.04f))
+            .border(1.dp, profileColor.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+            .padding(12.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("ACTIVE PROFILE", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+            Spacer(Modifier.weight(1f))
+            Text(profile.key.uppercase().replace('_', ' '), color = profileColor, fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = OrbitronFont)
+        }
+        Text(MikuPowerGovernor.describe(), color = Color(0xFFC9DEDB), fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 2.dp))
+        Text(
+            when (profile) {
+                MikuPowerGovernor.Profile.PERF -> "Sustained clocks + render hints: visualizer and Now Playing at full speed."
+                MikuPowerGovernor.Profile.BALANCED -> "Normal clocks, normal background work."
+                MikuPowerGovernor.Profile.AUDIO_ONLY -> "Screen off — everything but the DAC path is starved; battery saver ${if (MikuPowerGovernor.saverInAudioOnly) "ON" else "off"}."
+                MikuPowerGovernor.Profile.IDLE -> "Nothing playing — engines idle, saver while the screen is off."
+            },
+            color = Muted, fontSize = 10.5.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 4.dp)
+        )
+        Spacer(Modifier.height(10.dp))
+        Text("MODE", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(
+                MikuPowerGovernor.Mode.AUTO to "Auto",
+                MikuPowerGovernor.Mode.PERF to "Perf",
+                MikuPowerGovernor.Mode.SAVE to "Save"
+            ).forEach { (m, label) ->
+                val sel = m == mode
+                Box(
+                    Modifier.weight(1f).clip(RoundedCornerShape(10.dp))
+                        .background(if (sel) profileColor.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.05f))
+                        .border(1.dp, if (sel) profileColor else Color.White.copy(alpha = 0.12f), RoundedCornerShape(10.dp))
+                        .clickable { Haptics.tick(ctx); MikuPowerGovernor.setMode(ctx, m) }
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text(label, color = if (sel) Color.White else Muted, fontSize = 12.5.sp, fontWeight = FontWeight.Bold) }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        SettingsToggleRow(
+            title = "Battery saver in Audio-Only",
+            subtitle = "Screen off + playing → system battery saver ON (restored on exit); the DAC path is never touched",
+            checked = MikuPowerGovernor.saverInAudioOnly
+        ) { MikuPowerGovernor.setSaverInAudioOnly(ctx, it) }
+        SettingsToggleRow(
+            title = "Cap visualizer at 30 FPS",
+            subtitle = "Always (auto-applies at ≥ 42 °C regardless)",
+            checked = MikuPowerGovernor.userVisFpsCap30
+        ) { MikuPowerGovernor.setUserVisFpsCap30(ctx, it) }
     }
 }

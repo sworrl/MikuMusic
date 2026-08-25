@@ -1,46 +1,44 @@
 package com.miku.launcher.ui
 
-import android.content.Context
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.*
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.miku.launcher.MikuCyan
-import com.miku.launcher.MikuNeonPink
-import com.miku.launcher.haptics.MikuTactileHaptics
+import com.miku.launcher.haptics.MikuHaptics
+import kotlinx.coroutines.launch
 
 /**
- * Universal Tactile Cyberpunk Press & Release Interactive Modifier.
- *
- * Delivers:
- *  - Tactile physical spring squash (scale down to 0.88f) on touch down
- *  - Springy overshoot bounce back to 1.0f on release with medium damping
- *  - Luminescent neon cyber glow aura on press
- *  - Mechanical micro-tick haptic feedback
+ * Pixel press physics with a Miku glow:
+ *  - touch down: scale → [pressedScale] (0.92) in 80 ms ease-out
+ *  - release:    spring back (medium bouncy) — the "settle"
+ *  - a neon aura fades in while held; one ratchet tick on press
  */
 fun Modifier.mikuPressScale(
-    pressedScale: Float = 0.88f,
+    pressedScale: Float = 0.92f,
     glowColor: Color = MikuCyan,
     hapticFeedback: Boolean = true,
     interactionSource: MutableInteractionSource? = null,
@@ -52,23 +50,18 @@ fun Modifier.mikuPressScale(
 
     val scale by animateFloatAsState(
         targetValue = if (isPressed) pressedScale else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
+        animationSpec = if (isPressed) tween(MikuMotion.PRESS_MS, easing = FastOutSlowInEasing) else MikuMotion.snapBack,
         label = "mikuPressScaleAnim"
     )
 
     val glowAlpha by animateFloatAsState(
         targetValue = if (isPressed) 0.85f else 0f,
-        animationSpec = tween(durationMillis = if (isPressed) 80 else 240),
+        animationSpec = tween(durationMillis = if (isPressed) MikuMotion.PRESS_MS else 240),
         label = "mikuPressGlowAnim"
     )
 
     LaunchedEffect(isPressed) {
-        if (isPressed && hapticFeedback) {
-            MikuTactileHaptics.playRatchetTick(ctx)
-        }
+        if (isPressed && hapticFeedback) MikuHaptics.tick(ctx)
     }
 
     this
@@ -90,43 +83,67 @@ fun Modifier.mikuPressScale(
 }
 
 /**
- * Interactive App Icon Press Modifier with combined click + long-press,
- * spring bounce physics, and cyan/pink glowing feedback.
+ * App-icon interaction (Pixel feel):
+ *  - press 0.92 in 80 ms, release springs back
+ *  - long-press: 1.06 pop + [MikuHaptics.pop], then [onLongClick] (menu scales from the icon)
+ *  - remembers the icon's window bounds in [MikuLaunchSource] on click so the app can scale up
+ *    OUT of the icon, and plays a small settle bounce when the user returns home to it
  */
 @OptIn(ExperimentalFoundationApi::class)
 fun Modifier.mikuAppIconClickable(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
-    glowColor: Color = MikuCyan
+    glowColor: Color = MikuCyan,
+    launchPackage: String? = null
 ): Modifier = composed {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val pop = remember { Animatable(1f) }
 
-    val scale by animateFloatAsState(
-        targetValue = if (isPressed) 0.86f else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMedium
-        ),
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.92f else 1f,
+        animationSpec = if (isPressed) tween(MikuMotion.PRESS_MS, easing = FastOutSlowInEasing) else MikuMotion.snapBack,
         label = "mikuAppIconScale"
     )
 
-    LaunchedEffect(isPressed) {
-        if (isPressed) {
-            MikuTactileHaptics.playRatchetTick(ctx)
+    LaunchedEffect(isPressed) { if (isPressed) MikuHaptics.tick(ctx) }
+
+    // Return-home settle: the icon we launched from bounces once when the launcher resumes.
+    val returnTick by MikuLaunchSource.homeReturnTick.collectAsState()
+    LaunchedEffect(returnTick) {
+        if (returnTick > 0L && launchPackage != null && MikuLaunchSource.lastPackage == launchPackage) {
+            pop.snapTo(1.08f)
+            pop.animateTo(1f, MikuMotion.snapBack)
         }
     }
 
     this
+        .onGloballyPositioned { c -> bounds = try { c.boundsInWindow() } catch (_: Throwable) { null } }
         .graphicsLayer {
-            scaleX = scale
-            scaleY = scale
+            val s = pressScale * pop.value
+            scaleX = s
+            scaleY = s
         }
         .combinedClickable(
             interactionSource = interactionSource,
             indication = null,
-            onClick = onClick,
-            onLongClick = onLongClick
+            onClick = {
+                MikuLaunchSource.set(bounds, launchPackage)
+                onClick()
+            },
+            onLongClick = onLongClick?.let { cb ->
+                {
+                    MikuLaunchSource.set(bounds, launchPackage)
+                    MikuHaptics.pop(ctx)
+                    scope.launch {
+                        pop.snapTo(1.06f)
+                        pop.animateTo(1f, MikuMotion.popNow)
+                    }
+                    cb()
+                }
+            }
         )
 }

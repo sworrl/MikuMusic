@@ -23,12 +23,18 @@ object WidgetUpdateExecutor {
     private val executor = Executors.newSingleThreadExecutor { r -> Thread(r, "miku-widget-update").apply { isDaemon = true } }
     private val pending = AtomicBoolean(false)
 
+    @Volatile private var lastRenderMs = 0L
+
     fun push(context: Context) {
         // Captured HERE, synchronously, on the calling thread — every real call site (Player.
         // Listener callbacks, BroadcastReceiver.onReceive) already runs on main, which is the only
         // thread Media3's Player contract allows reading these fields from. Only the snapshot
         // (plain data, safe from any thread) crosses over to the background executor below.
         val snapshot = PlayerHolder.snapshot()
+        // Screen off (AUDIO_ONLY/IDLE): nobody sees the widget — no repaint faster than every 30 s.
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!MikuPowerGovernor.allowBackgroundWork && now - lastRenderMs < MikuPowerGovernor.WIDGET_MIN_INTERVAL_SAVING_MS) return
+        lastRenderMs = now
         if (!pending.compareAndSet(false, true)) return // a render is already queued/running — it'll pick up the latest state
         val app = context.applicationContext
         executor.execute {

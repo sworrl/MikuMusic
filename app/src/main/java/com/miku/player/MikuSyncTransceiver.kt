@@ -258,6 +258,7 @@ object MikuSyncTransceiver {
 
             while (isActive) {
                 var nextDelayMs = 2500L
+                if (!MikuPowerGovernor.allowBackgroundWork) { delay(60_000L); continue }   // starved profile: no discovery, 1-min heartbeat
                 try {
                     val now = SystemClock.elapsedRealtime()
 

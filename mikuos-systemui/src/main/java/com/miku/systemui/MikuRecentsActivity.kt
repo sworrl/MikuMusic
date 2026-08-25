@@ -47,6 +47,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -121,12 +122,13 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
     LaunchedEffect(Unit) {
         while (true) {
             media = withContext(Dispatchers.IO) { runCatching { MikuMediaHub.now(ctx) }.getOrNull() }
-            kotlinx.coroutines.delay(1000)
+            kotlinx.coroutines.delay(MikuPowerProfile.pollMs(1000L))
         }
     }
 
     // Load the task list off-thread immediately; snapshots fill in per card.
     LaunchedEffect(Unit) {
+        MikuPowerProfile.observe(ctx)
         val list = withContext(Dispatchers.IO) { MikuTaskStack.recents(ctx, 10) }
         tasks.clear(); tasks.addAll(list)
         loaded = true
@@ -134,15 +136,15 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
         list.forEachIndexed { i, e ->
             launch(Dispatchers.IO) {
                 // The task we came from is still "fresh" — ask WM to take one if missing.
-                MikuTaskStack.snapshot(e.taskId, lowRes = true, takeIfNeeded = i == 0)?.let { bmp ->
+                MikuTaskStack.snapshot(e.taskId, lowRes = true, takeIfNeeded = i == 0 && !MikuPowerProfile.lowPower)?.let { bmp ->
                     withContext(Dispatchers.Main) { snapshots[e.taskId] = bmp }
                 }
             }
         }
     }
 
-    val enterScale by animateFloatAsState(if (entered) 1f else 0.92f, tween(140, easing = FastOutSlowInEasing), label = "s")
-    val enterAlpha by animateFloatAsState(if (entered) 1f else 0f, tween(120), label = "a")
+    val enterScale by animateFloatAsState(if (entered) 1f else 0.92f, tween(MikuPowerProfile.ms(140), easing = FastOutSlowInEasing), label = "s")
+    val enterAlpha by animateFloatAsState(if (entered) 1f else 0f, tween(MikuPowerProfile.ms(120)), label = "a")
 
     BackHandler { onClose() }
 
@@ -248,7 +250,7 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
                 }
             }
         }
-        sparkleAt?.let { SparkleBurst(it, sparkleKey) }
+        if (!MikuPowerProfile.lowPower) sparkleAt?.let { SparkleBurst(it, sparkleKey) }
     }
     // Keep density referenced for future px math (avoids unused warning on some configs).
     @Suppress("UNUSED_VARIABLE") val d = density
@@ -270,6 +272,12 @@ private fun RecentTaskCard(
     val iconBitmap = remember(entry.pkg) {
         runCatching { entry.icon?.toBitmap(96, 96)?.asImageBitmap() }.getOrNull()
     }
+    val accentRaw by MikuAccent.accent.collectAsState()
+    val isMusic = entry.pkg == "com.miku.player"
+    val haloA by androidx.compose.animation.animateColorAsState(
+        if (isMusic && accentRaw != 0) Color(accentRaw) else MikuTealBright.copy(alpha = 0.85f), tween(400), label = "haloA")
+    val haloB by androidx.compose.animation.animateColorAsState(
+        if (isMusic && accentRaw != 0) Color(MikuAccent.mix(0xFFFF4081.toInt(), accentRaw, 0.5f)) else MikuPinkBright.copy(alpha = 0.55f), tween(400), label = "haloB")
 
     Column(
         Modifier
@@ -328,8 +336,8 @@ private fun RecentTaskCard(
                 .clip(RoundedCornerShape(20.dp))
                 .background(MikuCardBg)
                 .border(
-                    1.2.dp,
-                    Brush.verticalGradient(listOf(MikuTealBright.copy(alpha = 0.85f), MikuPurple.copy(alpha = 0.45f), MikuPinkBright.copy(alpha = 0.55f))),
+                    if (isMusic && accentRaw != 0) 1.6.dp else 1.2.dp,
+                    Brush.verticalGradient(listOf(haloA, MikuPurple.copy(alpha = 0.45f), haloB)),
                     RoundedCornerShape(20.dp)
                 )
                 .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen() }

@@ -63,7 +63,8 @@ class MikuTrackHud(
     data class Payload(
         val title: String, val artist: String, val album: String,
         val durationMs: Long, val positionMs: Long, val artUri: String?,
-        val quality: String?, val liked: Boolean, val isPlaying: Boolean
+        val quality: String?, val liked: Boolean, val isPlaying: Boolean,
+        val accent: Int = 0
     ) {
         companion object {
             fun from(i: Intent) = Payload(
@@ -75,7 +76,8 @@ class MikuTrackHud(
                 artUri = i.getStringExtra("artUri"),
                 quality = i.getStringExtra("quality"),
                 liked = i.getBooleanExtra("liked", false),
-                isPlaying = i.getBooleanExtra("isPlaying", true)
+                isPlaying = i.getBooleanExtra("isPlaying", true),
+                accent = i.getIntExtra("accent", 0)
             )
         }
     }
@@ -158,6 +160,7 @@ class MikuTrackHud(
         private var downX = 0f; private var downY = 0f; private var swiped = false
 
         private val glass = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = dp(1f) }
         private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFF0FDFB.toInt(); textSize = dp(14f); isFakeBoldText = true }
@@ -175,7 +178,7 @@ class MikuTrackHud(
 
         fun bind(np: Payload) {
             p = np; boundAt = SystemClock.elapsedRealtime()
-            art = null; accent = 0xFF39C5BB.toInt()
+            art = null; accent = if (np.accent != 0) np.accent else (MikuAccent.accent.value.takeIf { it != 0 } ?: 0xFF39C5BB.toInt())
             invalidate()
             val uri = np.artUri
             if (!uri.isNullOrBlank()) Thread {
@@ -196,26 +199,25 @@ class MikuTrackHud(
             raw?.let { Bitmap.createScaledBitmap(it, dp(56f).toInt(), dp(56f).toInt(), true) }
         }.getOrNull()
 
-        private fun startMarqueeIfNeeded() {
-            marqueeAnim?.cancel(); marquee = 0f
-            val pp = p ?: return
-            val avail = width - dp(56f + 12f + 16f + 12f + 44f + 40f)
-            val tw = titlePaint.measureText("${pp.title}   ·   ${pp.artist}")
-            if (width > 0 && tw > avail) {
-                marqueeAnim = ValueAnimator.ofFloat(0f, tw - avail + dp(24f)).apply {
-                    duration = ((tw - avail) / dp(22f) * 1000f).toLong().coerceIn(2000L, 12000L)
-                    startDelay = 1600; repeatCount = ValueAnimator.INFINITE; repeatMode = ValueAnimator.REVERSE
-                    addUpdateListener { marquee = it.animatedValue as Float; invalidate() }
-                    start()
-                }
-            }
+        private fun startMarqueeIfNeeded() { marqueeAnim?.cancel(); marquee = 0f; invalidate() }
+
+        /** Marquee offset for the title line: still for 1.6s after bind, then a slow ping-pong. */
+        private fun marqueeOffset(line: String, avail: Float): Float {
+            val tw = titlePaint.measureText(line)
+            if (tw <= avail || MikuPowerProfile.lowPower) return 0f
+            val span = tw - avail + dp(24f)
+            val period = ((span / dp(22f)) * 1000f).toLong().coerceIn(2000L, 12000L)
+            val t = SystemClock.elapsedRealtime() - boundAt - 1600L
+            if (t < 0) return 0f
+            val phase = t % (2 * period)
+            return if (phase < period) span * phase / period else span * (1f - (phase - period).toFloat() / period)
         }
 
         override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) { super.onSizeChanged(w, h, oldw, oldh); startMarqueeIfNeeded() }
 
         fun slideIn() {
             ValueAnimator.ofFloat(-1f, 0f).apply {
-                duration = 200; interpolator = OvershootInterpolator(1.1f)
+                duration = MikuPowerProfile.ms(200).toLong(); interpolator = if (MikuPowerProfile.lowPower) DecelerateInterpolator() else OvershootInterpolator(1.1f)
                 addUpdateListener { slide = it.animatedValue as Float; invalidate() }
                 start()
             }
@@ -224,7 +226,7 @@ class MikuTrackHud(
         fun slideOut(end: () -> Unit) {
             marqueeAnim?.cancel()
             ValueAnimator.ofFloat(slide, -1.2f).apply {
-                duration = 160; interpolator = DecelerateInterpolator()
+                duration = MikuPowerProfile.ms(160).toLong(); interpolator = DecelerateInterpolator()
                 addUpdateListener { slide = it.animatedValue as Float; invalidate() }
                 addListener(object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(a: android.animation.Animator) { end() }
@@ -253,13 +255,14 @@ class MikuTrackHud(
             canvas.clipPath(artPath)
             val a = art
             if (a != null) canvas.drawBitmap(a, null, artDst, artPaint)
-            else { glass.shader = null; glass.color = accent and 0x66FFFFFF; canvas.drawRect(artDst, glass); heartPaint.textSize = dp(22f); canvas.drawText("♪", artDst.exactCenterX(), artDst.exactCenterY() + dp(8f), heartPaint); heartPaint.textSize = dp(13f) }
+            else { fillPaint.color = (accent and 0x00FFFFFF) or 0x66000000; canvas.drawRect(artDst, fillPaint); heartPaint.textSize = dp(22f); canvas.drawText("♪", artDst.exactCenterX(), artDst.exactCenterY() + dp(8f), heartPaint); heartPaint.textSize = dp(13f) }
             canvas.restore()
             // text block (clipped, marquee)
             val tx = pad + artSz + dp(12f)
             val textRight = w - dp(44f) - dp(8f)
             canvas.save(); canvas.clipRect(tx, 0f, textRight, h)
             val line = "${pp.title}   ·   ${pp.artist}"
+            marquee = marqueeOffset(line, textRight - tx)
             canvas.drawText(line, tx - marquee, dp(24f), titlePaint)
             canvas.drawText(pp.album.ifBlank { pp.artist }, tx, dp(41f), artistPaint)
             canvas.restore()
@@ -269,7 +272,7 @@ class MikuTrackHud(
                 chipPaint.color = accent
                 val cw = chipPaint.measureText(q) + dp(12f)
                 rect.set(cx, dp(49f), cx + cw, dp(63f))
-                glass.shader = null; glass.color = accent and 0x33FFFFFF; canvas.drawRoundRect(rect, dp(7f), dp(7f), glass)
+                fillPaint.color = (accent and 0x00FFFFFF) or 0x33000000; canvas.drawRoundRect(rect, dp(7f), dp(7f), fillPaint)
                 canvas.drawText(q, cx + dp(6f), dp(59.5f), chipPaint)
                 cx += cw + dp(8f)
             }
@@ -282,7 +285,8 @@ class MikuTrackHud(
             val frac = (pos.toFloat() / dur).coerceIn(0f, 1f)
             progressPaint.color = accent
             rect.set(cardR, h - dp(3f), cardR + (w - 2 * cardR) * frac, h - dp(1f)); canvas.drawRoundRect(rect, dp(1f), dp(1f), progressPaint)
-            if (pp.isPlaying) postInvalidateDelayed(500)
+            if (titlePaint.measureText(line) > textRight - tx && !MikuPowerProfile.lowPower) postInvalidateOnAnimation()
+            else if (pp.isPlaying) postInvalidateDelayed(MikuPowerProfile.pollMs(500L))
         }
 
         override fun onTouchEvent(e: MotionEvent): Boolean {

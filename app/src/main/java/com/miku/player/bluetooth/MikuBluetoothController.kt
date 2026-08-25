@@ -286,6 +286,7 @@ object MikuBluetoothController {
     }
 
     fun startScan() {
+        if (!com.miku.player.MikuPowerGovernor.allowBackgroundWork) return   // no BT discovery while screen-off / idle
         val adapter = bluetoothAdapter ?: return
         try {
             if (!adapter.isEnabled) return

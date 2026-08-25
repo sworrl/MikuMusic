@@ -1,5 +1,6 @@
 package com.miku.player.weather
 
+import com.miku.player.MikuPowerGovernor
 import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
@@ -198,7 +199,7 @@ object MikuWeatherService {
         if (weatherJob == null) {
             weatherJob = scope.launch {
                 while (isActive) {
-                    refreshWeather(ctx)
+                    if (MikuPowerGovernor.allowBackgroundWork) refreshWeather(ctx)   // deferred while screen-off / idle
                     delay(8 * 60 * 1000L) // 8 minutes update cycle
                 }
             }

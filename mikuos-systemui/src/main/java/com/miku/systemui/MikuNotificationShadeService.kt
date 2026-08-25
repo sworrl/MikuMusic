@@ -30,6 +30,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 /**
  * MikuOS navigation layer (this device's stock SystemUI draws NO nav bar / status bar, so
@@ -106,11 +107,41 @@ class MikuNotificationShadeService : AccessibilityService() {
     /** Now-Playing HUD (track-change pop-over drawn in our overlay layer). */
     private var trackHud: MikuTrackHud? = null
 
+    /** Album accent bled ≈25% into the nav chrome (pill glow, back capsule), animated 400ms. */
+    @Volatile private var navTeal = MikuAccent.TEAL
+    @Volatile private var navTealBright = MikuAccent.TEAL_BRIGHT
+    private var accentAnim: ValueAnimator? = null
+    private var accentJob: kotlinx.coroutines.Job? = null
+    private val accentScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main + kotlinx.coroutines.SupervisorJob())
+    private fun startAccentObserver() {
+        MikuAccent.observe(this)
+        accentJob?.cancel()
+        accentJob = accentScope.launch {
+            MikuAccent.accent.collect { a ->
+                val toTeal = MikuAccent.tealTinted(a, 0.25f); val toBright = MikuAccent.tealBrightTinted(a, 0.25f)
+                val fromTeal = navTeal; val fromBright = navTealBright
+                accentAnim?.cancel()
+                accentAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+                    duration = MikuPowerProfile.ms(400).toLong()
+                    addUpdateListener {
+                        val f = it.animatedValue as Float
+                        navTeal = MikuAccent.mix(fromTeal, toTeal, f); navTealBright = MikuAccent.mix(fromBright, toBright, f)
+                        pillView?.invalidate(); leftEdgeView?.invalidate(); rightEdgeView?.invalidate()
+                    }
+                    start()
+                }
+            }
+        }
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             when (intent?.action) {
-                MikuTrackHud.ACTION_TRACK_CHANGED, MikuTrackHud.ACTION_DEBUG ->
+                MikuTrackHud.ACTION_TRACK_CHANGED, MikuTrackHud.ACTION_DEBUG -> {
+                    val a = intent.getIntExtra("accent", 0); val a2 = intent.getIntExtra("accent2", 0)
+                    if (a != 0) MikuAccent.push(a, a2)
                     trackHud?.show(MikuTrackHud.Payload.from(intent))
+                }
                 ACTION_TRIGGER_BACK, ACTION_DEBUG_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
                 ACTION_DEBUG_HOME -> triggerHome()
                 ACTION_DEBUG_RECENTS -> openRecents()
@@ -128,6 +159,8 @@ class MikuNotificationShadeService : AccessibilityService() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         trackHud = MikuTrackHud(this, windowManager) { dragPx -> openShadeActivity(dragPx) }
+        MikuPowerProfile.observe(this)
+        startAccentObserver()
         try {
             val filter = IntentFilter().apply {
                 addAction(ACTION_TRIGGER_BACK); addAction(ACTION_DEBUG_BACK)
@@ -155,6 +188,7 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onDestroy() {
         try { unregisterReceiver(receiver) } catch (_: Throwable) {}
         trackHud?.destroy(); trackHud = null
+        accentJob?.cancel(); accentAnim?.cancel()
         removeOverlays()
         try { workThread.quitSafely() } catch (_: Throwable) {}
         super.onDestroy()
@@ -439,11 +473,13 @@ class MikuNotificationShadeService : AccessibilityService() {
             val right = if (isLeft) w else width + dp(20f)
             // soft Miku glow (radial shader — stays hardware-accelerated)
             val gcx = if (isLeft) right - dp(12f) else left + dp(12f)
+            val gb = navTealBright and 0x00FFFFFF
             glowPaint.shader = android.graphics.RadialGradient(gcx, cy, h * 1.6f,
-                intArrayOf((0x00FFFFFF and 0x00F5D4) or ((0x80 * visProgress).toInt() shl 24), 0x0000F5D4), null, android.graphics.Shader.TileMode.CLAMP)
+                intArrayOf(gb or ((0x80 * visProgress).toInt() shl 24), gb), null, android.graphics.Shader.TileMode.CLAMP)
             rect.set(gcx - h * 1.6f, cy - h * 1.6f, gcx + h * 1.6f, cy + h * 1.6f)
             canvas.drawOval(rect, glowPaint)
             rect.set(left, cy - h / 2f, right, cy + h / 2f)
+            fillPaint.color = navTeal
             fillPaint.alpha = (0xF2 * (0.55f + 0.45f * visProgress)).toInt()
             canvas.drawRoundRect(rect, h, h, fillPaint)
             // Heart glyph + chevron pointing inward (chevron fades in as we approach commit)
@@ -661,12 +697,13 @@ class MikuNotificationShadeService : AccessibilityService() {
             canvas.save()
             canvas.scale(pop, pop, cx, bottom - ph / 2f)
             val glowA = if (armed) 0x90 else (0x30 + (0x50 * stretch).toInt())
+            val gb = navTealBright and 0x00FFFFFF
             glowPaint.shader = android.graphics.LinearGradient(cx - pw / 2f - dp(10f), 0f, cx + pw / 2f + dp(10f), 0f,
-                intArrayOf(0x0000F5D4, (glowA shl 24) or 0x00F5D4, 0x0000F5D4), null, android.graphics.Shader.TileMode.CLAMP)
+                intArrayOf(gb, (glowA shl 24) or gb, gb), null, android.graphics.Shader.TileMode.CLAMP)
             rect.set(cx - pw / 2f - dp(10f), bottom - ph - dp(6f), cx + pw / 2f + dp(10f), bottom + dp(6f))
             canvas.drawRoundRect(rect, ph + dp(6f), ph + dp(6f), glowPaint)
             rect.set(cx - pw / 2f, bottom - ph, cx + pw / 2f, bottom)
-            pillPaint.color = if (armed) 0xFF00F5D4.toInt() else 0xB3FFFFFF.toInt()
+            pillPaint.color = if (armed) navTealBright else 0xB3FFFFFF.toInt()
             canvas.drawRoundRect(rect, ph / 2f, ph / 2f, pillPaint)
             canvas.restore()
         }

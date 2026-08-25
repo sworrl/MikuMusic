@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -57,6 +58,9 @@ object MikuTrackHud {
     fun publish(ctx: Context, player: ExoPlayer, reason: String) {
         val app = ctx.applicationContext
         if (!isEnabled(app)) return
+        // Screen off: the HUD has no audience and art/palette work is starved — skipped; the
+        // governor listener in PlayerHolder republishes when a working profile returns.
+        if (!MikuPowerGovernor.allowBackgroundWork && reason != "resume-work") return
         val item = player.currentMediaItem ?: return
         val trackId = item.mediaId.toLongOrNull() ?: return
         val isPlaying = player.isPlaying
@@ -86,6 +90,14 @@ object MikuTrackHud {
             val quality = track?.let { qualityLabel(app, it) }.orEmpty()
             val liked = runCatching { LikeStore.init(app); LikeStore.isLiked(trackId) }.getOrDefault(false)
             val (artUri, artPath) = artForHud(app, trackId, track?.path.orEmpty())
+            // OS accent colors — the palette the app chrome already uses for this track. If the
+            // theme hasn't caught up yet (no UI up), extract from the thumb we just handled and
+            // push it so the app + Settings.Global stay in sync from one extraction.
+            val palette = if (MikuArtTheme.trackId == trackId) MikuArtTheme.palette else {
+                val bm = AlbumArtCache.get(trackId) ?: loadArtThumb(app, trackId, track?.path.orEmpty())
+                extractArtPalette(bm).also { p -> withContext(Dispatchers.Main) { MikuArtTheme.push(trackId, p, app) } }
+            }
+            val (accent, accent2) = MikuAccentPublisher.accentsFor(palette)
             val intent = Intent(ACTION).apply {
                 setPackage(TARGET_PACKAGE)
                 putExtra("trackId", trackId)
@@ -98,6 +110,8 @@ object MikuTrackHud {
                 putExtra("artAlbumUri", albumArtUri)
                 putExtra("artPath", artPath.orEmpty())
                 putExtra("quality", quality)
+                putExtra("accent", accent)
+                putExtra("accent2", accent2)
                 putExtra("liked", liked)
                 putExtra("isPlaying", isPlaying)
                 putExtra("reason", reason)

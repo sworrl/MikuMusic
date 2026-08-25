@@ -79,7 +79,8 @@ class LibraryDaemonService : Service() {
             override fun onChange(selfChange: Boolean, uri: Uri?) {
                 super.onChange(selfChange, uri)
                 val now = SystemClock.elapsedRealtime()
-                if (now - lastChangeMs > 3000L) { // Debounce rapid filesystem churn
+                val debounce = if (MikuPowerGovernor.allowBackgroundWork) 3000L else MikuPowerGovernor.DAEMON_DEBOUNCE_SAVING_MS
+                if (now - lastChangeMs > debounce) { // Debounce rapid filesystem churn (5 min while screen-off / idle)
                     lastChangeMs = now
                     syncLibrary("Storage event detected")
                 }

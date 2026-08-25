@@ -200,6 +200,7 @@ object MikuNetworkService {
     }
 
     fun triggerScan(ctx: Context) {
+        if (!com.miku.player.MikuPowerGovernor.allowBackgroundWork) return   // no Wi-Fi scans while screen-off / idle
         scope.launch {
             try {
                 _state.value = _state.value.copy(isScanning = true)

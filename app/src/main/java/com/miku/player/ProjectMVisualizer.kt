@@ -240,6 +240,11 @@ fun ProjectMVisualizerView(
     preset: ProjectMPreset,
     modifier: Modifier = Modifier
 ) {
+    // Power governor input: a live visualizer = PERF (full clocks, render hints) while playing.
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        MikuPowerGovernor.setVisualizerVisible(true)
+        onDispose { MikuPowerGovernor.setVisualizerVisible(false) }
+    }
     // Idle dim/ambient means either nobody's looking or they're looking at the deliberately
     // minimal ambient screen — either way, this is the single most expensive continuous piece of
     // UI in the app (a 60fps GL render loop), so it's the first thing to stop.
@@ -452,7 +457,34 @@ private class ProjectMRenderer(private var audioSessionId: Int, private val appC
     private var frameCount = 0
     private var lastFpsTime = System.currentTimeMillis()
 
+    // ---- MikuPowerGovernor render-thread integration ----
+    private var hintSession: android.os.PerformanceHintManager.Session? = null
+    private var frameStartNs = 0L
+    private var lastFrameEndNs = 0L
+    private fun syncPerfHint() {
+        if (android.os.Build.VERSION.SDK_INT < 31) return
+        val want = MikuPowerGovernor.perfHintWanted
+        if (want && hintSession == null) {
+            hintSession = runCatching {
+                (appCtx.getSystemService(Context.PERFORMANCE_HINT_SERVICE) as? android.os.PerformanceHintManager)
+                    ?.createHintSession(intArrayOf(android.os.Process.myTid()), 16_666_666L)   // 60 fps budget
+            }.getOrNull()
+        } else if (!want && hintSession != null) {
+            runCatching { hintSession?.close() }; hintSession = null
+        }
+    }
+
     override fun onDrawFrame(gl: GL10?) {
+        // FPS cap (30 when hot / user-capped / SAVE mode): sleep off the remainder of the frame
+        // budget so the continuous render loop can't burn more than it's allowed to.
+        val cap = MikuPowerGovernor.visFpsCap
+        if (cap in 1..59 && lastFrameEndNs != 0L) {
+            val budgetNs = 1_000_000_000L / cap
+            val waitNs = budgetNs - (System.nanoTime() - lastFrameEndNs)
+            if (waitNs > 500_000L) runCatching { Thread.sleep(waitNs / 1_000_000L, (waitNs % 1_000_000L).toInt()) }
+        }
+        syncPerfHint()
+        frameStartNs = System.nanoTime()
         val elapsed = (System.currentTimeMillis() - startTime) / 1000.0f
         ProjectMNative.drainActions()   // GL-thread: apply queued gesture actions safely
         AudioCapture.ensure(audioSessionId)   // bind the shared capture to this player session
@@ -472,5 +504,7 @@ private class ProjectMRenderer(private var audioSessionId: Int, private val appC
             PresetPerf.tick(appCtx, ProjectMNative.presetName(), measuredFps)
             frameCount = 0; lastFpsTime = now
         }
+        lastFrameEndNs = System.nanoTime()
+        if (android.os.Build.VERSION.SDK_INT >= 31) hintSession?.let { h -> runCatching { h.reportActualWorkDuration(lastFrameEndNs - frameStartNs) } }
     }
 }

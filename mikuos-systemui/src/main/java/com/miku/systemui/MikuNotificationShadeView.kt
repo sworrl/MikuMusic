@@ -14,6 +14,7 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -147,6 +148,13 @@ fun MikuNotificationShadeView(
     var tiles by remember { mutableStateOf<List<QsTile>>(emptyList()) }
     val notifs by MikuNotificationStore.items.collectAsState()
     val listenerOk by MikuNotificationStore.connected.collectAsState()
+    // Album accent (Miku Music → Settings.Global miku_np_accent), ≈30% into teal, animated 400ms.
+    LaunchedEffect(Unit) { MikuAccent.observe(ctx); MikuPowerProfile.observe(ctx) }
+    val powerProfile by MikuPowerProfile.profile.collectAsState()
+    val quiet = powerProfile == "audio_only" || powerProfile == "idle"
+    val accentRaw by MikuAccent.accent.collectAsState()
+    val osAccent by animateColorAsState(Color(MikuAccent.tealTinted(accentRaw, 0.30f)), tween(400), label = "osAccent")
+    val osAccentBright by animateColorAsState(Color(MikuAccent.tealBrightTinted(accentRaw, 0.30f)), tween(400), label = "osAccentBright")
 
     fun refreshTiles() {
         tiles = QuickSettingsModel.getTiles(ctx, scope) { tick++ } + extraTiles(ctx) { tick++ }
@@ -166,7 +174,7 @@ fun MikuNotificationShadeView(
                 st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
             }.getOrDefault(false)
             media = withContext(Dispatchers.IO) { runCatching { MikuMediaHub.now(ctx) }.getOrNull() }
-            delay(1000)
+            delay(MikuPowerProfile.pollMs(1000L))
         }
     }
 
@@ -184,7 +192,8 @@ fun MikuNotificationShadeView(
     var dragStartValue by remember { mutableStateOf(0f) }
     val panelIn = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        panelIn.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
+        if (MikuPowerProfile.lowPower) panelIn.animateTo(1f, tween(120))
+        else panelIn.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
     }
 
     fun settle() {
@@ -192,6 +201,7 @@ fun MikuNotificationShadeView(
             val v = expand.value
             when {
                 dragStartValue < 0.5f && v < -0.14f -> onDismiss()
+                MikuPowerProfile.lowPower -> expand.animateTo(if (v >= 0.5f) 1f else 0f, tween(120))
                 v >= 0.5f -> expand.animateTo(1f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow))
                 else -> expand.animateTo(0f, spring(dampingRatio = 0.74f, stiffness = Spring.StiffnessMediumLow))
             }
@@ -255,7 +265,7 @@ fun MikuNotificationShadeView(
                         .height(64.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    CyberPlasmaGlowClock(time = currentTime, date = currentDate)
+                    if (quiet) QuietClock(currentTime, currentDate) else CyberPlasmaGlowClock(time = currentTime, date = currentDate)
                     Spacer(Modifier.weight(1f))
                     // battery chip
                     Row(
@@ -289,6 +299,11 @@ fun MikuNotificationShadeView(
                         Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = MikuTextSecondary, modifier = Modifier.size(24.dp))
                     }
                 }
+                // header underline — carries the album accent
+                Box(
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(2.dp)
+                        .background(Brush.horizontalGradient(listOf(osAccentBright, osAccent.copy(alpha = 0.35f), Color.Transparent)))
+                )
 
                 Spacer(Modifier.height(8.dp))
 
@@ -310,7 +325,7 @@ fun MikuNotificationShadeView(
                             Modifier.fillMaxWidth().height(compactH).graphicsLayer { alpha = 1f - e },
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            compact.forEach { t -> CompactTile(t, Modifier.weight(1f)) }
+                            compact.forEach { t -> CompactTile(t, Modifier.weight(1f), osAccent, osAccentBright) }
                         }
                     }
                     // expanded grid
@@ -321,7 +336,7 @@ fun MikuNotificationShadeView(
                         ) {
                             tiles.chunked(2).forEach { pair ->
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    pair.forEach { t -> GridTile(t, Modifier.weight(1f)) }
+                                    pair.forEach { t -> GridTile(t, Modifier.weight(1f), osAccent, osAccentBright) }
                                     if (pair.size == 1) Spacer(Modifier.weight(1f))
                                 }
                             }
@@ -354,7 +369,7 @@ fun MikuNotificationShadeView(
                             }
                         },
                         valueRange = 8f..255f,
-                        colors = SliderDefaults.colors(thumbColor = MikuWhite, activeTrackColor = MikuTeal, inactiveTrackColor = Color(0xFF12313A)),
+                        colors = SliderDefaults.colors(thumbColor = osAccentBright, activeTrackColor = osAccent, inactiveTrackColor = Color(0xFF12313A)),
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -486,15 +501,15 @@ private fun extraTiles(ctx: Context, onRefresh: () -> Unit): List<QsTile> {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun CompactTile(t: QsTile, modifier: Modifier) {
+private fun CompactTile(t: QsTile, modifier: Modifier, accent: Color = MikuTeal, accentBright: Color = MikuTealBright) {
     val view = LocalView.current
     val bg by animateFloatAsState(if (t.isActive) 1f else 0f, tween(160), label = "tileBg")
     Column(
         modifier
             .height(56.dp)
             .clip(RoundedCornerShape(28.dp))
-            .background(lerpColor(MikuSurface2, MikuTeal, bg))
-            .border(1.dp, if (t.isActive) MikuTealBright.copy(alpha = 0.9f) else MikuTeal.copy(alpha = 0.25f), RoundedCornerShape(28.dp))
+            .background(lerpColor(MikuSurface2, accent, bg))
+            .border(1.dp, if (t.isActive) accentBright.copy(alpha = 0.9f) else accent.copy(alpha = 0.25f), RoundedCornerShape(28.dp))
             .combinedClickable(
                 onClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK); t.onClick() },
                 onLongClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); t.onLongClick?.invoke() }
@@ -514,15 +529,15 @@ private fun CompactTile(t: QsTile, modifier: Modifier) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GridTile(t: QsTile, modifier: Modifier) {
+private fun GridTile(t: QsTile, modifier: Modifier, accent: Color = MikuTeal, accentBright: Color = MikuTealBright) {
     val view = LocalView.current
     val bg by animateFloatAsState(if (t.isActive) 1f else 0f, tween(160), label = "gridTileBg")
     Row(
         modifier
             .height(64.dp)
             .clip(RoundedCornerShape(TileCorner))
-            .background(lerpColor(MikuSurface2, MikuTeal, bg))
-            .border(1.dp, if (t.isActive) MikuTealBright.copy(alpha = 0.9f) else MikuTeal.copy(alpha = 0.25f), RoundedCornerShape(TileCorner))
+            .background(lerpColor(MikuSurface2, accent, bg))
+            .border(1.dp, if (t.isActive) accentBright.copy(alpha = 0.9f) else accent.copy(alpha = 0.25f), RoundedCornerShape(TileCorner))
             .combinedClickable(
                 onClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK); t.onClick() },
                 onLongClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); t.onLongClick?.invoke() }
@@ -697,5 +712,20 @@ private fun NotifRow(n: MikuNotif, onOpen: () -> Unit, onDismiss: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+
+/** Static hearts clock for audio_only / idle power profiles — no infinite plasma transitions. */
+@Composable
+private fun QuietClock(time: String, date: String) {
+    val parts = time.split(":")
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(parts.getOrNull(0) ?: time, color = MikuTextPrimary, fontSize = 36.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont, letterSpacing = 1.sp)
+            KawaiiHeartColon(color = MikuPinkBright, scale = 1f)
+            Text(parts.getOrNull(1) ?: "", color = MikuTextPrimary, fontSize = 36.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont, letterSpacing = 1.sp)
+        }
+        Text(date, color = MikuTextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
     }
 }

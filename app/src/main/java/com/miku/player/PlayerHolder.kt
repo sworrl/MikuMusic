@@ -107,6 +107,7 @@ object PlayerHolder {
         // engine preference was a 16-bit resampled path — it is no longer selectable, and any
         // stale stored value is overwritten here so a prior tap can never silently degrade audio.
         runCatching { if (PlayerPreferences.loadAudioEngine(app) != "exoplayer") PlayerPreferences.saveAudioEngine(app, "exoplayer") }
+        runCatching { MikuPowerGovernor.init(app) }
 
         // Integer PCM output with bit-perfect DIRECT support for dual CS43198 DACs:
         // Media3's stock DefaultAudioSink either downsamples 24/32-bit to 16-bit (float=false)
@@ -199,6 +200,9 @@ object PlayerHolder {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 WidgetUpdateExecutor.push(app)
                 MikuTrackHud.publish(app, p, if (isPlaying) "play" else "pause")
+                MikuAccentPublisher.onPlaybackState(app, isPlaying)
+                MikuPowerGovernor.onPlaybackState(app, isPlaying)
+                if (isPlaying) p.currentMediaItem?.mediaId?.toLongOrNull()?.let { MikuArtTheme.updateForTrackId(app, it) }
                 PlayerPreferences.saveWasPlaying(app, isPlaying)
                 com.miku.player.bpm.MikuBpmEngine.onPlaybackChanged(app, p.currentMediaItem, isPlaying)
                 val trackId = p.currentMediaItem?.mediaId?.toLongOrNull()
@@ -220,6 +224,7 @@ object PlayerHolder {
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
                 WidgetUpdateExecutor.push(app)
                 MikuTrackHud.publish(app, p, "transition:$reason")
+                mediaItem?.mediaId?.toLongOrNull()?.let { MikuArtTheme.updateForTrackId(app, it) }
                 com.miku.player.bpm.MikuBpmEngine.onPlaybackChanged(app, mediaItem, p.isPlaying)
                 val trackId = mediaItem?.mediaId?.toLongOrNull()
                 if (trackId != null) {
@@ -286,6 +291,17 @@ object PlayerHolder {
             }
         })
         player = p
+        // Work deferred by the power governor (art/palette/HUD while the screen was off) catches up
+        // the moment a profile that allows background work is back.
+        MikuPowerGovernor.addListener { prof ->
+            if (prof == MikuPowerGovernor.Profile.PERF || prof == MikuPowerGovernor.Profile.BALANCED) {
+                p.currentMediaItem?.mediaId?.toLongOrNull()?.let { id ->
+                    MikuArtTheme.updateForTrackId(app, id)
+                    MikuTrackHud.publish(app, p, "resume-work")
+                }
+                WidgetUpdateExecutor.push(app)
+            }
+        }
         LastFmScrobbler.attach(app, p)
         // Redundant hardware gate (see MainActivity.isSupportedDevice) — deliberately different
         // fields/logic so patching just the Activity's check doesn't also unlock playback here.

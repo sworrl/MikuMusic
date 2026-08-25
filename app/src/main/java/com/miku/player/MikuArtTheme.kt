@@ -32,8 +32,10 @@ object MikuArtTheme {
         private set
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var job: Job? = null
+    @Volatile private var appCtx: Context? = null
 
     fun update(ctx: Context, track: Track?) {
+        appCtx = ctx.applicationContext
         if (track == null) { trackId = -1L; palette = ArtPalette(); return }
         if (track.id == trackId) return
         trackId = track.id
@@ -42,12 +44,30 @@ object MikuArtTheme {
         job = scope.launch {
             val bm = AlbumArtCache.get(track.id) ?: loadArtThumb(app, track.id, track.path)
             val p = extractArtPalette(bm)
-            withContext(Dispatchers.Main) { if (trackId == track.id) palette = p }
+            withContext(Dispatchers.Main) { if (trackId == track.id) { palette = p; MikuAccentPublisher.onPalette(app, p) } }
         }
     }
 
-    /** Push a palette computed elsewhere (Now Playing already has the hi-res art decoded). */
-    fun push(id: Long, p: ArtPalette) { trackId = id; palette = p }
+    /** Push a palette computed elsewhere (Now Playing already has the hi-res art decoded, the HUD
+     *  publisher already has the thumb). Also what lets the OS accents update when art loads late. */
+    fun push(id: Long, p: ArtPalette, ctx: Context? = null) {
+        val changed = id != trackId || p != palette
+        trackId = id; palette = p
+        val app = (ctx ?: appCtx)?.applicationContext
+        if (changed && app != null) MikuAccentPublisher.onPalette(app, p)
+    }
+
+    /** Resolve + publish the palette for a track id even when no UI is up (background playback,
+     *  PLAY_RANDOM from the launcher). Cheap: in-memory index lookup + the cached thumb. */
+    fun updateForTrackId(ctx: Context, trackId: Long) {
+        val app = ctx.applicationContext
+        if (trackId == this.trackId) return
+        if (!MikuPowerGovernor.allowBackgroundWork) return   // deferred until the screen is back
+        scope.launch {
+            val t = FastLibraryStore.loadSync(app)?.firstOrNull { it.id == trackId } ?: return@launch
+            withContext(Dispatchers.Main) { update(app, t) }
+        }
+    }
 
     /** Chrome-ready, contrast-safe derivations of the raw palette. */
     class Colors(

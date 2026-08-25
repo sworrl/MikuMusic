@@ -1,5 +1,6 @@
 package com.miku.player.bpm
 
+import com.miku.player.MikuPowerGovernor
 import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
@@ -56,6 +57,12 @@ object MikuBpmEngine {
         if (mediaItem == null || !playing) {
             stopBeatPulse(context)
             publishState(context, currentBpm, false)
+            return
+        }
+        // Power governor: BPM analysis is screen-facing work — skipped while the screen is off
+        // (AUDIO_ONLY/IDLE). The listener in PlayerHolder re-triggers it when the profile returns.
+        if (!MikuPowerGovernor.allowBackgroundWork) {
+            stopBeatPulse(context)
             return
         }
 

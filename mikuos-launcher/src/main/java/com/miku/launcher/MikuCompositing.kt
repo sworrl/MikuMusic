@@ -88,6 +88,31 @@ object MikuCompositing {
         return ActivityOptions.makeCustomAnimation(ctx, fx.enter, fx.exit).toBundle()
     }
 
+    /**
+     * Pixel "open from icon": when the launch started from an icon ([source] = its window
+     * bounds, taken from [com.miku.launcher.ui.MikuLaunchSource]) and the palette picked the
+     * ZOOM or DISSOLVE effect, scale the new window up out of that icon instead; the other KDE
+     * effects (glide / burn / whirl / slide) keep their own choreography.
+     */
+    fun optionsForLaunch(ctx: Context, event: MikuTransitionEvent, source: androidx.compose.ui.geometry.Rect?): Bundle {
+        val fx = nextEffect(event)
+        if (source != null && (fx == KdeEffect.ZOOM || fx == KdeEffect.DISSOLVE)) {
+            val decor = (ctx as? Activity)?.window?.decorView
+            if (decor != null) {
+                return try {
+                    ActivityOptions.makeScaleUpAnimation(
+                        decor,
+                        source.left.toInt(), source.top.toInt(),
+                        source.width.toInt().coerceAtLeast(1), source.height.toInt().coerceAtLeast(1)
+                    ).toBundle()
+                } catch (_: Throwable) {
+                    ActivityOptions.makeCustomAnimation(ctx, fx.enter, fx.exit).toBundle()
+                }
+            }
+        }
+        return ActivityOptions.makeCustomAnimation(ctx, fx.enter, fx.exit).toBundle()
+    }
+
     /** Force a specific effect (e.g. the lock curtain) rather than the varied palette. */
     fun optionsFor(ctx: Context, effect: KdeEffect): Bundle =
         ActivityOptions.makeCustomAnimation(ctx, effect.enter, effect.exit).toBundle()
