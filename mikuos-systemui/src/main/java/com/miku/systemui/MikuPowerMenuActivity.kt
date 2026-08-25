@@ -57,41 +57,22 @@ import kotlinx.coroutines.launch
  */
 class MikuPowerMenuActivity : ComponentActivity() {
 
-    private fun hideSystemBars() {
-        try {
-            val insetsController = WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetsController.hide(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.navigationBars())
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
-        } catch (_: Throwable) {}
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
             @Suppress("DEPRECATION")
-            overridePendingTransition(R.anim.fade_in, R.anim.fade_out)
+            overridePendingTransition(0, 0)
         } catch (_: Throwable) {}
 
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        window.setBackgroundDrawableResource(android.R.color.transparent)
         @Suppress("DEPRECATION")
         window.addFlags(
-            WindowManager.LayoutParams.FLAG_FULLSCREEN or
-            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
             WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+            WindowManager.LayoutParams.FLAG_DIM_BEHIND
         )
-        hideSystemBars()
+        window.setDimAmount(0.60f)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         setContent {
             MikuPowerMenuScreen(
@@ -100,16 +81,11 @@ class MikuPowerMenuActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        hideSystemBars()
-    }
-
     override fun finish() {
         super.finish()
         try {
             @Suppress("DEPRECATION")
-            overridePendingTransition(R.anim.fade_in, R.anim.fade_out)
+            overridePendingTransition(0, 0)
         } catch (_: Throwable) {}
     }
 }
@@ -266,16 +242,20 @@ fun MikuPowerMenuScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Cyan energy core icon
                         Box(
                             modifier = Modifier
-                                .size(28.dp)
+                                .size(34.dp)
                                 .clip(CircleShape)
                                 .background(
                                     Brush.radialGradient(
                                         listOf(
-                                            MikuTealBright.copy(alpha = 0.8f * coreGlow),
-                                            Color(0xFF03262E)
+                                            MikuTealBright.copy(alpha = 0.4f * coreGlow),
+                                            Color.Transparent
                                         )
                                     )
                                 )

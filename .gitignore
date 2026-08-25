@@ -5,8 +5,3 @@
 !minified_apks/
 !minified_apks/**
 !.gitignore
-
-# Explicit secret-file exclusion (defense in depth on top of the blanket rule
-# above): local-only arcobocconotto RGB integration credentials. Never commit.
-mikuos-launcher/arco.properties
-**/arco.properties

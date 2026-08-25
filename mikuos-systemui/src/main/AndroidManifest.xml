@@ -61,14 +61,29 @@
             </intent-filter>
         </activity>
 
+        <!-- MikuOS power modal. Reached two ways:
+             1. Framework long-press-power -> "assistant" path (no accessibility service needed):
+                Settings.Global power_button_long_press=5 (LONG_PRESS_POWER_ASSISTANT) makes
+                PhoneWindowManager call StatusBar.startAssist(), and stock SystemUI launches the
+                component named in Settings.Secure `assistant` with ACTION_ASSIST — that is us.
+                Both settings are seeded by the ROM rc (build_mikuos_super.sh).
+             2. MikuNotificationShadeService (accessibility key filter / GlobalActions sniff)
+                as a fallback. singleInstance + singleTop so a double trigger is a no-op. -->
         <activity
             android:name=".MikuPowerMenuActivity"
             android:exported="true"
             android:label="Power Core"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
             android:screenOrientation="portrait"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:theme="@style/Theme.M500Hardware.Translucent">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.ACTION_POWER_MENU" />
                 <action android:name="com.miku.systemui.action.POWER_MENU" />

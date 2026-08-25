@@ -2041,6 +2041,73 @@ fun DisplayScreen(ctx: Context) {
         }
 
         item {
+            var isProtectorMode by remember {
+                mutableStateOf(
+                    try {
+                        Settings.Secure.getInt(cr, "touch_sensitivity_enabled", 0) == 1 ||
+                        Settings.System.getInt(cr, "touch_sensitivity_enabled", 0) == 1 ||
+                        Settings.System.getInt(cr, "screen_protector_mode", 0) == 1
+                    } catch (_: Throwable) { false }
+                )
+            }
+
+            Column(Modifier.mikuCard().padding(14.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "SCREEN PROTECTOR MODE",
+                            color = MikuTealBright,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Increases touch sensitivity when using glass screen protectors",
+                            color = MikuMuted,
+                            fontSize = 10.sp
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Switch(
+                        checked = isProtectorMode,
+                        onCheckedChange = { enabled ->
+                            isProtectorMode = enabled
+                            val v = if (enabled) 1 else 0
+                            try {
+                                Settings.Secure.putInt(cr, "touch_sensitivity_enabled", v)
+                                Settings.System.putInt(cr, "touch_sensitivity_enabled", v)
+                                Settings.System.putInt(cr, "screen_protector_mode", v)
+                            } catch (_: Throwable) {}
+                            RootShell.execFast(
+                                "settings put secure touch_sensitivity_enabled $v; " +
+                                "settings put system touch_sensitivity_enabled $v; " +
+                                "settings put system screen_protector_mode $v; " +
+                                "setprop persist.sys.screen_protector $v; " +
+                                "setprop persist.sys.touch_sensitivity $v"
+                            )
+                            Toast.makeText(
+                                ctx,
+                                if (enabled) "Screen Protector Mode (Touch Boost) Enabled"
+                                else "Screen Protector Mode Disabled",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.Black,
+                            checkedTrackColor = MikuTealBright,
+                            uncheckedThumbColor = MikuMuted,
+                            uncheckedTrackColor = MikuSurface2
+                        )
+                    )
+                }
+            }
+        }
+
+        item {
             Column(Modifier.mikuCard().padding(14.dp)) {
                 Text("UI SCALE & DISPLAY DENSITY", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Text("Scale up UI elements, touch targets & buttons across MikuOS", color = MikuMuted, fontSize = 10.sp)
@@ -2050,15 +2117,16 @@ fun DisplayScreen(ctx: Context) {
                 var selectedDpi by remember { mutableIntStateOf(currentDpi) }
 
                 val dpiOptions = listOf(
-                    320 to "320 DPI\n(Default)",
-                    360 to "360 DPI\n(Large)",
-                    400 to "400 DPI\n(XL UI)",
-                    440 to "440 DPI\n(Huge DAP)"
+                    270 to "270 DPI\n(Compact)",
+                    320 to "320 DPI\n(Standard)",
+                    360 to "360 DPI\n(Native)",
+                    400 to "400 DPI\n(Large)",
+                    440 to "440 DPI\n(Huge UI)"
                 )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     dpiOptions.forEach { (dpi, label) ->
                         val isSelected = selectedDpi == dpi || (selectedDpi !in dpiOptions.map { it.first } && dpi == 320)
@@ -2075,17 +2143,18 @@ fun DisplayScreen(ctx: Context) {
                                 )
                                 .clickable {
                                     selectedDpi = dpi
-                                    RootShell.execFast("wm density $dpi")
-                                    RootShell.execFast("settings put secure display_density_forced $dpi")
+                                    applyDisplayDensity(cr, dpi)
+                                    Toast.makeText(ctx, "UI Scale updated to $dpi DPI", Toast.LENGTH_SHORT).show()
                                 },
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
                                 text = label,
                                 color = if (isSelected) MikuTealBright else Color.White,
-                                fontSize = 9.sp,
+                                fontSize = 8.5.sp,
                                 fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.Center
+                                textAlign = TextAlign.Center,
+                                lineHeight = 11.sp
                             )
                         }
                     }
@@ -2133,10 +2202,8 @@ fun DisplayScreen(ctx: Context) {
                                 )
                                 .clickable {
                                     currentFontScale = scale
-                                    try {
-                                        Settings.System.putFloat(cr, Settings.System.FONT_SCALE, scale)
-                                    } catch (_: Throwable) {}
-                                    RootShell.execFast("settings put system font_scale $scale")
+                                    applyFontScale(cr, scale)
+                                    Toast.makeText(ctx, "Font Scale updated to ${scale}x", Toast.LENGTH_SHORT).show()
                                 },
                             contentAlignment = Alignment.Center
                         ) {
@@ -2491,3 +2558,73 @@ fun AboutSpecRow(label: String, value: String) {
         Text(value, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
+
+fun applyDisplayDensity(cr: android.content.ContentResolver, dpi: Int) {
+    android.util.Log.i("MikuSettings", "applyDisplayDensity: setting density to $dpi")
+    try {
+        val wmClass = Class.forName("android.view.WindowManagerGlobal")
+        val getWm = wmClass.getMethod("getWindowManagerService")
+        val wmService = getWm.invoke(null)
+        if (wmService != null) {
+            var invoked = false
+            for (m in wmService.javaClass.methods) {
+                if (m.name.startsWith("setForcedDisplayDensity")) {
+                    m.isAccessible = true
+                    val paramTypes = m.parameterTypes
+                    android.util.Log.i("MikuSettings", "Found method: ${m.name} with params: ${paramTypes.map { it.simpleName }}")
+                    try {
+                        when (paramTypes.size) {
+                            2 -> {
+                                m.invoke(wmService, 0, dpi)
+                                invoked = true
+                                android.util.Log.i("MikuSettings", "Invoked 2-param method successfully")
+                            }
+                            3 -> {
+                                m.invoke(wmService, 0, dpi, 0)
+                                invoked = true
+                                android.util.Log.i("MikuSettings", "Invoked 3-param method successfully")
+                            }
+                        }
+                    } catch (invokeEx: Throwable) {
+                        android.util.Log.e("MikuSettings", "Method invocation threw: ${invokeEx.message}", invokeEx)
+                    }
+                    if (invoked) break
+                }
+            }
+        }
+    } catch (e: Throwable) {
+        android.util.Log.e("MikuSettings", "WindowManagerGlobal density reflection: ${e.message}", e)
+    }
+    try {
+        Settings.Secure.putString(cr, "display_density_forced", dpi.toString())
+        Settings.Secure.putInt(cr, "display_density_forced", dpi)
+    } catch (_: Throwable) {}
+    RootShell.execFast("wm density $dpi")
+}
+
+fun applyFontScale(cr: android.content.ContentResolver, scale: Float) {
+    try {
+        val amClass = Class.forName("android.app.ActivityManager")
+        val getService = amClass.getMethod("getService")
+        val am = getService.invoke(null)
+        if (am != null) {
+            val getConf = am.javaClass.getMethod("getConfiguration")
+            val config = getConf.invoke(am) as android.content.res.Configuration
+            config.fontScale = scale
+            val updateConf = am.javaClass.getMethod(
+                "updatePersistentConfiguration",
+                android.content.res.Configuration::class.java
+            )
+            updateConf.isAccessible = true
+            updateConf.invoke(am, config)
+        }
+    } catch (e: Throwable) {
+        android.util.Log.w("MikuSettings", "ActivityManager fontScale reflection: ${e.message}")
+    }
+    try {
+        Settings.System.putFloat(cr, Settings.System.FONT_SCALE, scale)
+    } catch (_: Throwable) {}
+    RootShell.execFast("settings put system font_scale $scale")
+}
+
+

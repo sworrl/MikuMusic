@@ -67,6 +67,11 @@ object PlayerPreferences {
     fun saveRootEnabled(context: Context, on: Boolean) { prefs(context).edit().putBoolean(KEY_ROOT_ENABLED, on).apply() }
     fun loadRootEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_ROOT_ENABLED, true)
 
+    // Audio playback engine ("swappable bone"): "exoplayer" (default) or "vlc"
+    private const val KEY_AUDIO_ENGINE = "miku_audio_engine"
+    fun saveAudioEngine(context: Context, engine: String) { prefs(context).edit().putString(KEY_AUDIO_ENGINE, engine).apply() }
+    fun loadAudioEngine(context: Context): String = prefs(context).getString(KEY_AUDIO_ENGINE, "exoplayer") ?: "exoplayer"
+
     // Pulsar LED & CPU performance — default ON
     private const val KEY_PULSAR_ENABLED = "pulsar_light_enabled"
     private const val KEY_CPU_PERF_ENABLED = "cpu_perf_enabled"

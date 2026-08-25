@@ -399,12 +399,29 @@ object MikuWebRemoteHtml {
         </div>
     </div>
 
+    <audio id="tvAudioElement" preload="auto"></audio>
+
     <script>
         let isPlaying = false;
         let curDuration = 0;
         let curPosition = 0;
         let lastSyncTime = Date.now();
         let isUserSeeking = false;
+        let currentTrackId = -1;
+        const isTvMode = ${if (isTvMode) "true" else "false"};
+        const tvAudio = document.getElementById('tvAudioElement');
+        let tvAudioUnlocked = false;
+
+        function connectTvAudio() {
+            if (!tvAudio) return;
+            tvAudioUnlocked = true;
+            tvAudio.play().then(() => {
+                const banner = document.getElementById('tvAudioBanner');
+                if (banner) banner.style.display = 'none';
+            }).catch(e => {
+                console.log("Audio unlock triggered", e);
+            });
+        }
 
         // Build animated spectrum bars
         const specBox = document.getElementById('spectrumBox');
@@ -462,8 +479,36 @@ object MikuWebRemoteHtml {
             document.getElementById('volSlider').value = data.playback.volume_pct;
 
             // Refresh artwork if changed
-            const art = document.getElementById('artImg');
-            art.src = '/api/v1/artwork/current?t=' + (data.track.id || Date.now());
+            if (data.track.id !== currentTrackId) {
+                currentTrackId = data.track.id;
+                const art = document.getElementById('artImg');
+                art.src = '/api/v1/artwork/current?t=' + (data.track.id || Date.now());
+
+                // Sync TV Sound System Audio Stream
+                if (isTvMode && tvAudio && currentTrackId > 0) {
+                    tvAudio.src = '/api/v1/audio/stream/current?t=' + currentTrackId;
+                    if (data.playback.position_ms > 0) {
+                        tvAudio.currentTime = data.playback.position_ms / 1000;
+                    }
+                    if (isPlaying) {
+                        tvAudio.play().catch(_ => {});
+                    }
+                }
+            }
+
+            // Sync live audio state in TV Mode
+            if (isTvMode && tvAudio && currentTrackId > 0) {
+                const targetSec = (data.playback.position_ms || 0) / 1000;
+                if (Math.abs(tvAudio.currentTime - targetSec) > 2.5) {
+                    tvAudio.currentTime = targetSec;
+                }
+                tvAudio.volume = Math.min(1.0, Math.max(0.0, (data.playback.volume_pct || 70) / 100.0));
+                if (isPlaying && tvAudio.paused) {
+                    tvAudio.play().catch(_ => {});
+                } else if (!isPlaying && !tvAudio.paused) {
+                    tvAudio.pause();
+                }
+            }
         }
 
         function formatTime(ms) {

@@ -285,6 +285,10 @@ fun MikuVolumeQuiltBadge(
     val isDanger = volState.volumePct >= 80
     val dynamicColor = sampleVolumeGradientColor(volState.volumePct, volState.isMuted)
 
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
+    val badgeFontSize = (7.8f / fontScale * effectiveScale).sp
+
     val infiniteTransition = rememberInfiniteTransition(label = "VolPulse")
     val hazardGlow by infiniteTransition.animateFloat(
         initialValue = 0.6f,
@@ -297,46 +301,35 @@ fun MikuVolumeQuiltBadge(
     )
 
     val badgeBorderColor = if (isDanger) dynamicColor.copy(alpha = hazardGlow) else dynamicColor.copy(alpha = 0.9f)
+    val badgeShape = remember { CutCornerShape(4.dp) }
 
-    Box(
-        modifier = modifier
-            .height(24.dp)
-            .clip(CutCornerShape(5.dp))
-            .background(
-                Brush.horizontalGradient(
-                    if (isDanger) listOf(Color(0x66FF1744), Color(0xFF200508))
-                    else listOf(dynamicColor.copy(alpha = 0.28f), Color(0xFF030D14))
-                )
-            )
-            .border(1.dp, badgeBorderColor, CutCornerShape(5.dp))
-            .clickable { onClick() }
-            .padding(horizontal = 6.dp, vertical = 1.dp),
-        contentAlignment = Alignment.Center
+    CyberBespokeBadge(
+        onClick = onClick,
+        modifier = modifier,
+        accentColor = dynamicColor,
+        shape = badgeShape,
+        gradient = if (isDanger) listOf(Color(0x66FF1744), Color(0xFF200508)) else listOf(dynamicColor.copy(alpha = 0.28f), Color(0xFF030D14)),
+        borderAlphaBase = if (isDanger) hazardGlow else 0.9f
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Icon(
-                imageVector = when {
-                    volState.isMuted || volState.volumePct == 0 -> Icons.AutoMirrored.Filled.VolumeMute
-                    volState.volumePct < 40 -> Icons.AutoMirrored.Filled.VolumeDown
-                    else -> Icons.AutoMirrored.Filled.VolumeUp
-                },
-                contentDescription = "Volume",
-                tint = dynamicColor,
-                modifier = Modifier.size(13.dp)
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = if (volState.isMuted) "MUTE" else "VOL ${volState.volumePct}%",
-                color = Color.White,
-                fontSize = 11.5.sp,
-                fontWeight = FontWeight.Black,
-                fontFamily = AudiowideFont,
-                maxLines = 1
-            )
-        }
+        Icon(
+            imageVector = when {
+                volState.isMuted || volState.volumePct == 0 -> Icons.AutoMirrored.Filled.VolumeMute
+                volState.volumePct < 40 -> Icons.AutoMirrored.Filled.VolumeDown
+                else -> Icons.AutoMirrored.Filled.VolumeUp
+            },
+            contentDescription = "Volume",
+            tint = dynamicColor,
+            modifier = Modifier.size(10.dp)
+        )
+        Spacer(Modifier.width(2.5.dp))
+        Text(
+            text = if (volState.isMuted) "MUTE" else "${volState.volumePct}%",
+            color = Color.White,
+            fontSize = badgeFontSize,
+            fontWeight = FontWeight.Black,
+            fontFamily = AudiowideFont,
+            maxLines = 1
+        )
     }
 }
 

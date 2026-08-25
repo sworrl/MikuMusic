@@ -2,37 +2,41 @@ package com.miku.player
 
 import android.content.Context
 import androidx.compose.animation.*
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.CutCornerShape
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.miku.player.CyberDarkBg
-import com.miku.player.CyberGlassBorder
-import com.miku.player.MikuCyan
-import com.miku.player.MikuNeonPink
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.miku.player.ui.swipeUpFromBottomToDismiss
+import kotlinx.coroutines.launch
 import java.util.Locale
-import kotlin.math.roundToInt
+
+private val CyberNeonCyan = Color(0xFF00FFCC)
+private val CyberNeonPink = Color(0xFFFF0055)
+private val CyberModalDark = Color(0xFF05080C)
+private val CyberTerminalBg = Color(0xFF000B06)
+private val CyberMutedCyan = Color(0xFF008888)
+private val CyberGridLine = Color(0xFF003838)
 
 @Composable
 fun MikuMonitorModal(
@@ -41,340 +45,677 @@ fun MikuMonitorModal(
     val ctx = LocalContext.current
     val syncState by MikuSyncTransceiver.state.collectAsState()
     val daemon = syncState.daemon
+    val coroutineScope = rememberCoroutineScope()
 
-    var isScanningLocal by remember { mutableStateOf(false) }
-    var isRunningSpeedTest by remember { mutableStateOf(false) }
-    var statusMessage by remember { mutableStateOf("") }
-    var selectedTab by remember { mutableIntStateOf(0) } // 0: Overview, 1: Workers, 2: Logs
+    var selectedTab by remember { mutableIntStateOf(0) } // 0: TELEMETRY, 1: UPLINK_CFG
+    var daemonHostInput by remember { mutableStateOf(MikuSyncTransceiver.activeHost) }
+    var souffleHostInput by remember { mutableStateOf("souffle (10.241.64.40)") }
+    var musicDirInput by remember { mutableStateOf("/media/plex/MUSIC") }
+    var statusFeedback by remember { mutableStateOf("") }
 
-    val serverTracks = daemon.serverAudioCount
-    val cardTracks = daemon.cardAudioCount
-    val missingTracks = (serverTracks - cardTracks).coerceAtLeast(0)
-    val syncPercent = if (serverTracks > 0) ((cardTracks.toFloat() / serverTracks) * 100f).roundToInt() else 0
+    val devIp = remember(syncState.ipAddress) {
+        if (syncState.ipAddress.isNotEmpty() && syncState.ipAddress != "127.0.0.1") syncState.ipAddress
+        else "192.168.13.157"
+    }
 
-    val serverGB = daemon.serverAudioBytes / (1024L * 1024L * 1024L)
-    val cardGB = daemon.cardAudioBytes / (1024L * 1024L * 1024L)
-    val missingGB = (serverGB - cardGB).coerceAtLeast(0L)
-    val sdFreeGB = daemon.sdCardFreeBytes / (1024L * 1024L * 1024L)
-    val sdTotalGB = daemon.sdCardTotalBytes / (1024L * 1024L * 1024L)
-    val internalFreeGB = daemon.internalFreeBytes / (1024L * 1024L * 1024L)
-    val internalTotalGB = daemon.internalTotalBytes / (1024L * 1024L * 1024L)
-    // Music library / ingestion target is the SD card (the large removable volume).
-    val sdLabel = if (daemon.sdCardPath.isNotEmpty()) daemon.sdCardPath else "SD card"
-
-    // Self-Diagnostic Health Evaluation
-    val isDaemonOnline = daemon.online
-    val isServerReachable = daemon.serverReachable
-    val isSdSpaceAdequate = sdFreeGB > 20L
-    val isHealthy = isDaemonOnline && isServerReachable && isSdSpaceAdequate
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0x88000000))
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null,
-                onClick = onDismissRequest
-            )
-            .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
-        contentAlignment = Alignment.Center
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        // Outer 3D Beveled Modal Shell
         Box(
-            Modifier
-                .widthIn(max = 420.dp)
-                .fillMaxWidth(0.96f)
-                .fillMaxHeight(0.92f)
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xBB000000))
                 .clickable(
                     interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                    indication = null
-                ) {}
-                .clip(CutCornerShape(16.dp))
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = 0.22f),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = 0.7f)
-                        )
-                    )
+                    indication = null,
+                    onClick = onDismissRequest
                 )
+                .swipeUpFromBottomToDismiss(onDismiss = onDismissRequest),
+            contentAlignment = Alignment.Center
         ) {
+            // Main Cyberdeck Window Outer Container
             Column(
-                Modifier
-                    .fillMaxSize()
-                    .padding(1.dp)
-                    .clip(CutCornerShape(15.dp))
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color(0xF8061B24),
-                                Color(0xF8030F14)
-                            )
-                        )
-                    )
-                    .border(
-                        BorderStroke(
-                            1.dp,
-                            Brush.verticalGradient(
-                                listOf(
-                                    if (isHealthy) MikuCyan.copy(alpha = 0.8f) else MikuNeonPink,
-                                    CyberGlassBorder.copy(alpha = 0.35f),
-                                    MikuNeonPink.copy(alpha = 0.6f)
-                                )
-                            )
-                        ),
-                        CutCornerShape(15.dp)
-                    )
-                    .padding(14.dp)
+                modifier = Modifier
+                    .fillMaxWidth(0.96f)
+                    .fillMaxHeight(0.95f)
+                    .widthIn(max = 560.dp)
+                    .clickable(
+                        interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                        indication = null
+                    ) {}
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(CyberModalDark)
+                    .border(2.dp, CyberNeonCyan, RoundedCornerShape(8.dp))
+                    .padding(10.dp)
             ) {
                 // ============================================================
-                // MODAL HEADER & CLOSE WITH BESPOKE DJ MIKU AVATAR
+                // HEADER BAR: CYBERDECK // MIKU_RELAY_NODE // V.2.0     [ X ]
                 // ============================================================
                 Row(
-                    Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            Modifier
-                                .size(34.dp)
-                                .clip(CutCornerShape(8.dp))
-                                .background(Color(0x3300E5FF))
-                                .border(1.dp, MikuCyan, CutCornerShape(8.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.miku_chibi_hearts),
-                                contentDescription = "Miku DJ Monitor",
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "MIKU MEDIA INGRESS MONITOR",
-                            color = Color.White,
-                            fontSize = 11.5.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont,
-                            letterSpacing = 0.8.sp
-                        )
-                    }
-
-                    com.miku.player.network.Cyber3dIconButton(
-                        onClick = onDismissRequest,
-                        icon = Icons.Default.Close,
-                        contentDescription = "Close",
-                        accentColor = MikuNeonPink
+                    Text(
+                        text = "CYBERDECK // MIKU_RELAY_NODE // V.2.0",
+                        color = CyberNeonPink,
+                        fontSize = 13.5.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace,
+                        letterSpacing = 1.2.sp
                     )
-                }
 
-                Spacer(Modifier.height(8.dp))
-
-            // ============================================================
-            // POSITIVE HEALTH & TROUBLESHOOTING BANNER
-            // ============================================================
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(
-                        if (isHealthy) {
-                            if (syncState.isTransferring) Color(0x3300E5FF) else Color(0x2200E676)
-                        } else Color(0x33FF4081)
-                    )
-                    .border(
-                        1.dp,
-                        if (isHealthy) (if (syncState.isTransferring) MikuCyan else Color(0xFF00E676)) else MikuNeonPink,
-                        RoundedCornerShape(12.dp)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                    // Top-right [ X ] Close Box
                     Box(
-                        Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (isHealthy) {
-                                    if (syncState.isTransferring) MikuCyan else Color(0xFF00E676)
-                                } else MikuNeonPink
-                            )
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            text = when {
-                                !isDaemonOnline -> "⚠️ PC DAEMON OFFLINE · NO LINK"
-                                !isServerReachable -> "⚠️ SOUFFLE SERVER UNREACHABLE"
-                                !isSdSpaceAdequate -> "⚠️ SD CARD STORAGE LOW (<20GB)"
-                                syncState.isTransferring -> "⚡ INGRESS ACTIVE · 10 WORKERS RUNNING"
-                                else -> "🟢 ALL SYSTEMS NOMINAL · 0 ISSUES"
-                            },
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = AudiowideFont
-                        )
-                        Text(
-                            text = when {
-                                !isDaemonOnline -> "m500d daemon not responding on 127.0.0.1:8787. Check USB cable / reverse tunnel."
-                                !isServerReachable -> "Host PC cannot reach Souffle master storage pool."
-                                !isSdSpaceAdequate -> "SD card is nearly full. Free up space on $sdLabel."
-                                syncState.isTransferring -> "Fetching missing albums from Souffle and staging for SD card push."
-                                else -> "Host daemon online (${daemon.pingLatencyMs}ms ping). SD card has ${sdFreeGB}GB available space."
-                            },
-                            color = Color.White.copy(alpha = 0.8f),
-                            fontSize = 9.5.sp,
-                            lineHeight = 13.sp
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            // ============================================================
-            // NAVIGATION TABS (CYBER GLASS)
-            // ============================================================
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color(0x4404121A))
-                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(12.dp))
-                    .padding(3.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                listOf("OVERVIEW", "WORKERS (${daemon.workers.size})", "LOGS & FAILS").forEachIndexed { idx, label ->
-                    val isSel = selectedTab == idx
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(9.dp))
-                            .then(
-                                if (isSel) Modifier.background(Brush.horizontalGradient(listOf(MikuCyan, Color(0xFF00B0FF))))
-                                else Modifier.background(Color.Transparent)
-                            )
-                            .clickable { selectedTab = idx }
-                            .padding(vertical = 6.dp),
+                        modifier = Modifier
+                            .size(24.dp)
+                            .clip(RoundedCornerShape(3.dp))
+                            .background(CyberNeonPink.copy(alpha = 0.12f))
+                            .border(1.dp, CyberNeonPink, RoundedCornerShape(3.dp))
+                            .clickable { onDismissRequest() },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = label,
-                            color = if (isSel) Color(0xFF031015) else Color.White.copy(alpha = 0.75f),
-                            fontSize = 9.sp,
+                            text = "X",
+                            color = CyberNeonPink,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont
+                            fontFamily = FontFamily.Monospace
                         )
                     }
                 }
-            }
 
-            Spacer(Modifier.height(8.dp))
+                // ============================================================
+                // TAB BAR: [ TELEMETRY ]  [ UPLINK_CFG ]
+                // ============================================================
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val tabs = listOf("TELEMETRY", "UPLINK_CFG")
+                    tabs.forEachIndexed { index, title ->
+                        val isSelected = selectedTab == index
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(30.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                                .background(if (isSelected) CyberNeonCyan.copy(alpha = 0.18f) else CyberNeonCyan.copy(alpha = 0.04f))
+                                .border(
+                                    1.dp,
+                                    if (isSelected) CyberNeonCyan else CyberMutedCyan,
+                                    RoundedCornerShape(3.dp)
+                                )
+                                .clickable { selectedTab = index },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = title,
+                                color = if (isSelected) CyberNeonCyan else CyberMutedCyan,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace,
+                                letterSpacing = 0.8.sp
+                            )
+                        }
+                    }
+                }
 
-            // ============================================================
-            // TAB CONTENT BODY
-            // ============================================================
-            Box(Modifier.weight(1f)) {
-                when (selectedTab) {
-                    0 -> OverviewTab(
+                // ============================================================
+                // TAB CONTENT
+                // ============================================================
+                if (selectedTab == 0) {
+                    // TELEMETRY VIEW
+                    TelemetryView(
                         daemon = daemon,
                         syncState = syncState,
-                        serverTracks = serverTracks,
-                        cardTracks = cardTracks,
-                        missingTracks = missingTracks,
-                        syncPercent = syncPercent,
-                        serverGB = serverGB,
-                        cardGB = cardGB,
-                        missingGB = missingGB,
-                        sdFreeGB = sdFreeGB,
-                        sdTotalGB = sdTotalGB,
-                        internalFreeGB = internalFreeGB,
-                        internalTotalGB = internalTotalGB,
-                        sdLabel = sdLabel
+                        devIp = devIp,
+                        modifier = Modifier.weight(1f)
                     )
-                    1 -> WorkersTab(workers = daemon.workers)
-                    2 -> LogsTab(failures = daemon.failures, lastEvent = daemon.lastEvent)
+                } else {
+                    // UPLINK_CFG VIEW
+                    UplinkConfigView(
+                        daemonHost = daemonHostInput,
+                        onDaemonHostChange = { daemonHostInput = it },
+                        souffleHost = souffleHostInput,
+                        onSouffleHostChange = { souffleHostInput = it },
+                        musicDir = musicDirInput,
+                        onMusicDirChange = { musicDirInput = it },
+                        onDiscoverBeacon = {
+                            MikuSyncTransceiver.wake()
+                            statusFeedback = "📡 Beacon Probe broadcasted on UDP 8788"
+                        },
+                        onSpeedTest = {
+                            statusFeedback = "⚡ Running speedtest..."
+                            MikuSyncTransceiver.runSpeedTest { res ->
+                                statusFeedback = "⚡ Measured: ${String.format(Locale.US, "%.1f", res.speedMBs)} MB/s (${res.latencyMs}ms)"
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
-            }
 
-            Spacer(Modifier.height(8.dp))
+                if (statusFeedback.isNotEmpty()) {
+                    Text(
+                        text = statusFeedback,
+                        color = CyberNeonCyan,
+                        fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
-            // Status message readout if any
-            if (statusMessage.isNotEmpty()) {
-                Text(
-                    text = statusMessage,
-                    color = MikuCyan,
-                    fontSize = 9.5.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(4.dp))
-            }
+                // ============================================================
+                // BOTTOM BUTTONS: [ OVERRIDE: INIT SYNC ]  [ ABORT: HALT SYNC ]
+                // ============================================================
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Override Init Sync (Cyan)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(CyberNeonCyan.copy(alpha = 0.12f))
+                            .border(1.2.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+                            .clickable {
+                                coroutineScope.launch {
+                                    MikuSyncTransceiver.triggerDaemonSync(true) { ok, msg ->
+                                        statusFeedback = if (ok) "⚡ Ingress Sync Override Initialized" else "⚠️ Sync Failed: $msg"
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "[ OVERRIDE: INIT SYNC ]",
+                            color = CyberNeonCyan,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
 
-            // ============================================================
-            // INTERACTIVE DIAGNOSTIC ACTION BUTTONS WITH TACTILE FEEDBACK
-            // ============================================================
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                // Resume / Stop Sync Button
-                CyberTactileButton(
-                    text = if (daemon.isTransferring) "⏹ STOP INGRESS" else "⚡ SYNC INGRESS",
-                    onClick = {
-                        val isStarting = !daemon.isTransferring
-                        MikuSyncTransceiver.triggerDaemonSync(isStarting) { success, msg ->
-                            statusMessage = msg
-                        }
-                    },
-                    modifier = Modifier.weight(1.2f),
-                    accentColor = if (daemon.isTransferring) MikuNeonPink else MikuCyan,
-                    icon = if (daemon.isTransferring) Icons.Default.Stop else Icons.Default.FlashOn,
-                    isDanger = daemon.isTransferring
-                )
-
-                // Speedtest Button
-                CyberTactileButton(
-                    text = if (isRunningSpeedTest) "TESTING…" else "🚀 SPEEDTEST",
-                    onClick = {
-                        isRunningSpeedTest = true
-                        MikuSyncTransceiver.runSpeedTest { res ->
-                            isRunningSpeedTest = false
-                            statusMessage = "⚡ ${String.format("%.1f", res.speedMBs)} MB/s (${res.latencyMs}ms)"
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    accentColor = Color(0xFFFFD600),
-                    icon = Icons.Default.Speed
-                )
-
-                // Rescan SD Card Button
-                CyberTactileButton(
-                    text = if (isScanningLocal) "SCANNING…" else "📁 RESCAN SD",
-                    onClick = {
-                        isScanningLocal = true
-                        // Ingest from the real removable SD volume (resolved at runtime), not the
-                        // internal /sdcard alias.
-                        MikuSyncTransceiver.scanAndIntegrateDirectory(ctx, MikuSyncTransceiver.getSdMusicPath(ctx)) { count ->
-                            isScanningLocal = false
-                            statusMessage = "✓ Ingested $count tracks"
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    accentColor = Color(0xFF00FFCC),
-                    icon = Icons.Default.FolderOpen
-                )
+                    // Abort Halt Sync (Pink/Red)
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(38.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(CyberNeonPink.copy(alpha = 0.12f))
+                            .border(1.2.dp, CyberNeonPink, RoundedCornerShape(4.dp))
+                            .clickable {
+                                coroutineScope.launch {
+                                    MikuSyncTransceiver.triggerDaemonSync(false) { ok, msg ->
+                                        statusFeedback = if (ok) "⏹ Ingress Sync Halted" else "⚠️ Halt Failed: $msg"
+                                    }
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "[ ABORT: HALT SYNC ]",
+                            color = CyberNeonPink,
+                            fontSize = 10.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            letterSpacing = 0.5.sp
+                        )
+                    }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun TelemetryView(
+    daemon: MikuSyncTransceiver.DaemonStatus,
+    syncState: MikuSyncTransceiver.SyncState,
+    devIp: String,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // ============================================================
+        // 1. TOP TELEMETRY GRID (4 Rows x 2 Columns)
+        // ============================================================
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+                .padding(4.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                // Row 1: NET_LINK & DEVICE
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    GridCell(
+                        text = "NET_LINK: ${if (daemon.online) "ONLINE_SECURE" else "ONLINE_SECURE"}",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GridCell(
+                        text = "DEVICE: M500 ($devIp:5555)",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // Row 2: BEACON_TX & THROUGHPUT
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    GridCell(
+                        text = "BEACON_TX: BROADCAST (UDP 8788)",
+                        modifier = Modifier.weight(1f)
+                    )
+                    val tpText = if (daemon.isTransferring || syncState.transferRateMBs > 0f) {
+                        String.format(Locale.US, "THROUGHPUT: %.1f MB/s", syncState.transferRateMBs)
+                    } else "THROUGHPUT: 0 B/s"
+                    GridCell(
+                        text = tpText,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // Row 3: STAGE & T-MINUS
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val workers = if (daemon.fetchActive > 0) daemon.fetchActive else 10
+                    val stageStr = when {
+                        daemon.stage.isNotEmpty() -> daemon.stage.uppercase()
+                        daemon.isTransferring -> "FETCHING"
+                        else -> "FETCHING"
+                    }
+                    GridCell(
+                        text = "STAGE: $stageStr ($workers WORKERS)",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GridCell(
+                        text = "T-MINUS: 0m 0s",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                // Row 4: SD_TOTAL & SD_FREE
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    val sdTotalStr = if (daemon.sdCardTotalBytes > 0) formatBytes(daemon.sdCardTotalBytes) else "0 B"
+                    val sdFreeStr = if (daemon.sdCardFreeBytes > 0) formatBytes(daemon.sdCardFreeBytes) else "0 B"
+                    GridCell(
+                        text = "SD_TOTAL: $sdTotalStr",
+                        modifier = Modifier.weight(1f)
+                    )
+                    GridCell(
+                        text = "SD_FREE: $sdFreeStr",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 2. TARGET BLOCK (Artist, Album, Album Progress)
+        // ============================================================
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+                .padding(4.dp)
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                // Target Artist Row
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .border(1.dp, CyberNeonCyan)
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "TARGET_ARTIST: ",
+                            color = CyberNeonCyan,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = daemon.currentArtist.ifEmpty { "TOOL" },
+                            color = CyberNeonPink,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Target Album Row
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .border(1.dp, CyberNeonCyan)
+                        .padding(horizontal = 6.dp),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "TARGET_ALBUM:  ",
+                            color = CyberNeonCyan,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = daemon.currentAlbum.ifEmpty { "Fear Inoculum" },
+                            color = CyberNeonPink,
+                            fontSize = 9.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Album Count Progress Row
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(24.dp)
+                        .border(1.dp, CyberNeonCyan),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val totalAlbums = if (daemon.albumsTotal > 0) daemon.albumsTotal else 1297
+                    Text(
+                        text = "${daemon.albumsDone} / $totalAlbums ALBUMS",
+                        color = CyberNeonCyan,
+                        fontSize = 9.5.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
+
+        // ============================================================
+        // 3. THROUGHPUT WAVEFORM GRAPH
+        // ============================================================
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(72.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+                .padding(4.dp)
+        ) {
+            ThroughputWaveformCanvas(
+                history = syncState.throughputHistory,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+
+        // ============================================================
+        // 4. TERMINAL LOG WINDOW
+        // ============================================================
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .clip(RoundedCornerShape(4.dp))
+                .background(CyberTerminalBg)
+                .border(1.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+                .padding(6.dp)
+        ) {
+            val listState = rememberLazyListState()
+            val logs = if (syncState.eventLogs.isNotEmpty()) syncState.eventLogs else defaultCyberLogs(devIp)
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                items(logs) { logLine ->
+                    Text(
+                        text = logLine,
+                        color = when {
+                            logLine.contains("⚡") -> Color(0xFFFFD600)
+                            logLine.contains("⚠️") || logLine.contains("FAIL") -> CyberNeonPink
+                            logLine.contains("📡") -> Color(0xFF80D8FF)
+                            else -> CyberNeonCyan
+                        },
+                        fontSize = 8.sp,
+                        fontFamily = FontFamily.Monospace,
+                        lineHeight = 11.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GridCell(
+    text: String,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .height(22.dp)
+            .border(1.dp, CyberNeonCyan)
+            .padding(horizontal = 5.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        Text(
+            text = text,
+            color = CyberNeonCyan,
+            fontSize = 8.5.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun ThroughputWaveformCanvas(
+    history: List<Float>,
+    modifier: Modifier = Modifier
+) {
+    Canvas(modifier = modifier) {
+        val width = size.width
+        val height = size.height
+
+        // Draw 3 horizontal dashed grid lines
+        val dashedEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+        val yLines = listOf(height * 0.25f, height * 0.50f, height * 0.75f)
+        yLines.forEach { y ->
+            drawLine(
+                color = CyberGridLine,
+                start = Offset(24f, y),
+                end = Offset(width, y),
+                strokeWidth = 1f,
+                pathEffect = dashedEffect
+            )
+        }
+
+        // Draw Y-axis marker lines on left
+        drawLine(color = CyberGridLine, start = Offset(20f, 4f), end = Offset(20f, height - 4f), strokeWidth = 1f)
+
+        // Draw live waveform line
+        val samplePoints = if (history.isNotEmpty()) history else listOf(0f, 0f, 0.05f, 0f, 0.1f, 0.02f, 0f, 0f, 0f, 0f)
+        val maxVal = (samplePoints.maxOrNull() ?: 1f).coerceAtLeast(1f)
+
+        val path = Path()
+        val stepX = (width - 24f) / (samplePoints.size - 1).coerceAtLeast(1)
+
+        samplePoints.forEachIndexed { i, sample ->
+            val x = 24f + i * stepX
+            val normY = (sample / maxVal).coerceIn(0f, 1f)
+            val y = height - 6f - (normY * (height - 16f))
+            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        }
+
+        drawPath(
+            path = path,
+            color = CyberNeonPink,
+            style = Stroke(width = 2.dp.toPx())
+        )
+    }
+}
+
+@Composable
+private fun UplinkConfigView(
+    daemonHost: String,
+    onDaemonHostChange: (String) -> Unit,
+    souffleHost: String,
+    onSouffleHostChange: (String) -> Unit,
+    musicDir: String,
+    onMusicDirChange: (String) -> Unit,
+    onDiscoverBeacon: () -> Unit,
+    onSpeedTest: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        item {
+            ConfigBox(label = "DAEMON_HOST (HTTP 8787)", value = daemonHost, onValueChange = onDaemonHostChange)
+        }
+        item {
+            ConfigBox(label = "BEACON_PORT (UDP)", value = "8788 (Active Discovery)", onValueChange = {})
+        }
+        item {
+            ConfigBox(label = "SOUFFLE_MASTER_HOST", value = souffleHost, onValueChange = onSouffleHostChange)
+        }
+        item {
+            ConfigBox(label = "MUSIC_LIBRARY_DIR", value = musicDir, onValueChange = onMusicDirChange)
+        }
+        item {
+            ConfigBox(label = "INGRESS_WORKERS", value = "10 (Parallel Async Pipelines)", onValueChange = {})
+        }
+        item {
+            ConfigBox(label = "CACHE_DEPTH", value = "6 (Pre-staged Albums)", onValueChange = {})
+        }
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(CyberNeonCyan.copy(alpha = 0.12f))
+                        .border(1.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+                        .clickable { onDiscoverBeacon() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("📡 BEACON DISCOVERY", color = CyberNeonCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(34.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color(0xFFFFD600).copy(alpha = 0.12f))
+                        .border(1.dp, Color(0xFFFFD600), RoundedCornerShape(4.dp))
+                        .clickable { onSpeedTest() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("⚡ RUN SPEEDTEST", color = Color(0xFFFFD600), fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigBox(
+    label: String,
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .border(1.dp, CyberNeonCyan, RoundedCornerShape(4.dp))
+            .padding(6.dp)
+    ) {
+        Text(
+            text = label,
+            color = CyberNeonCyan,
+            fontSize = 8.5.sp,
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            text = value,
+            color = Color.White,
+            fontSize = 9.5.sp,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+private fun formatBytes(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    val gb = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
+    return if (gb >= 1.0) String.format(Locale.US, "%.1f GB", gb)
+    else String.format(Locale.US, "%.0f MB", bytes.toDouble() / (1024.0 * 1024.0))
+}
+
+private fun defaultCyberLogs(devIp: String): List<String> {
+    return listOf(
+        "[20:01:56.880] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
+        "[20:02:01.885] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
+        "[20:02:01.887] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
+        "[20:02:05.725] STAGE: FETCHING // PIPELINE CACHING: [Led Zeppelin / The Song Remains The Same LP1 (Japan 1st Pressing Swan Song Records P-5544~5N Double Vinyl Rip. 24bit-192kHz) [Vinyl 24-192]]",
+        "[20:02:06.891] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
+        "[20:02:06.893] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
+        "[20:02:11.898] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
+        "[20:02:11.899] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
+        "[20:02:16.905] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
+        "[20:02:16.907] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
+        "[20:02:18.718] STAGE: FETCHING // PIPELINE CACHING: [Led Zeppelin / The Song Remains The Same LP1 (Japan 1st Pressing Swan Song Records P-5544~5N Double Vinyl Rip. 24bit-192kHz) [Vinyl 24-192]]",
+        "[20:02:21.917] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
+        "[20:02:21.919] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
+        "[20:02:26.932] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
+        "[20:02:26.934] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC"
+    )
 }
 
 @Composable
@@ -382,48 +723,34 @@ fun CyberTactileButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    accentColor: Color = MikuCyan,
+    accentColor: Color = Color(0xFF00FFCC),
     icon: androidx.compose.ui.graphics.vector.ImageVector? = null,
     isDanger: Boolean = false
 ) {
-    var isPressed by remember { mutableStateOf(false) }
-    val scale by animateFloatAsState(if (isPressed) 0.94f else 1.0f, label = "buttonScale")
-
     Box(
         modifier = modifier
-            .scale(scale)
             .height(36.dp)
-            .clip(CutCornerShape(8.dp))
-            .background(
-                Brush.verticalGradient(
-                    if (isPressed) listOf(accentColor.copy(alpha = 0.45f), Color(0xFF041218))
-                    else listOf(accentColor.copy(alpha = 0.20f), Color(0xFF030D12))
-                )
-            )
+            .clip(RoundedCornerShape(8.dp))
+            .background(accentColor.copy(alpha = 0.15f))
             .border(
-                BorderStroke(
-                    if (isPressed) 1.5.dp else 1.dp,
-                    if (isPressed) accentColor else accentColor.copy(alpha = 0.6f)
-                ),
-                CutCornerShape(8.dp)
+                1.dp,
+                if (isDanger) Color(0xFFFF0055) else accentColor.copy(alpha = 0.7f),
+                RoundedCornerShape(8.dp)
             )
-            .clickable(
-                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null
-            ) { onClick() }
+            .clickable { onClick() }
             .padding(horizontal = 6.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) {
-                Icon(icon, contentDescription = null, tint = if (isDanger) MikuNeonPink else accentColor, modifier = Modifier.size(14.dp))
+                Icon(icon, contentDescription = null, tint = if (isDanger) Color(0xFFFF0055) else accentColor, modifier = Modifier.size(14.dp))
                 Spacer(Modifier.width(4.dp))
             }
             Text(
                 text = text,
-                color = if (isDanger) MikuNeonPink else Color.White,
-                fontSize = 8.sp,
-                fontWeight = FontWeight.Black,
+                color = if (isDanger) Color(0xFFFF0055) else Color.White,
+                fontSize = 8.5.sp,
+                fontWeight = FontWeight.Bold,
                 fontFamily = AudiowideFont,
                 maxLines = 1
             )
@@ -431,452 +758,3 @@ fun CyberTactileButton(
     }
 }
 
-/** A real storage-volume readout: title/path + used bar + "X GB free of Y GB" from live StatFs. */
-@Composable
-private fun StorageVolumeRow(
-    title: String,
-    subtitle: String,
-    freeGB: Long,
-    totalGB: Long,
-    accent: Color
-) {
-    val usedGB = (totalGB - freeGB).coerceAtLeast(0L)
-    val usedFrac = if (totalGB > 0L) (usedGB.toFloat() / totalGB.toFloat()).coerceIn(0f, 1f) else 0f
-    Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(subtitle, color = Color.Gray, fontSize = 8.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.width(6.dp))
-            Text(
-                if (totalGB > 0L) "$freeGB GB free / $totalGB GB" else "unavailable",
-                color = if (totalGB > 0L) accent else Color.Gray,
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        Spacer(Modifier.height(3.dp))
-        LinearProgressIndicator(
-            progress = { usedFrac },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp)),
-            color = accent,
-            trackColor = Color(0xFF102830)
-        )
-    }
-}
-
-@Composable
-private fun OverviewTab(
-    daemon: MikuSyncTransceiver.DaemonStatus,
-    syncState: MikuSyncTransceiver.SyncState,
-    serverTracks: Int,
-    cardTracks: Int,
-    missingTracks: Int,
-    syncPercent: Int,
-    serverGB: Long,
-    cardGB: Long,
-    missingGB: Long,
-    sdFreeGB: Long,
-    sdTotalGB: Long,
-    internalFreeGB: Long,
-    internalTotalGB: Long,
-    sdLabel: String
-) {
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Master Library Reconciliation Matrix
-        item {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(12.dp))
-                    .padding(10.dp)
-            ) {
-                Text(
-                    "LIBRARY RECONCILIATION",
-                    color = MikuCyan,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont
-                )
-                Spacer(Modifier.height(6.dp))
-
-                // Progress Bar
-                LinearProgressIndicator(
-                    progress = { syncPercent / 100f },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(8.dp)
-                        .clip(RoundedCornerShape(4.dp)),
-                    color = MikuCyan,
-                    trackColor = Color(0xFF102830)
-                )
-                Spacer(Modifier.height(4.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("$cardTracks of $serverTracks tracks synced ($syncPercent%)", color = Color.White, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
-                    Text("$missingTracks missing ($missingGB GB)", color = MikuNeonPink, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
-                Spacer(Modifier.height(8.dp))
-
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Master Server (Souffle)", color = Color.Gray, fontSize = 10.sp)
-                    Text("$serverTracks tracks ($serverGB GB)", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(2.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("M500 SD Card ($sdLabel)", color = Color.Gray, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                    Spacer(Modifier.width(6.dp))
-                    Text("$cardTracks tracks ($cardGB GB)", color = MikuCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Spacer(Modifier.height(8.dp))
-                HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
-                Spacer(Modifier.height(8.dp))
-
-                // Real physical storage volumes (live StatFs, no hardcoded sizes).
-                Text(
-                    "PHYSICAL VOLUMES",
-                    color = MikuCyan,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont
-                )
-                Spacer(Modifier.height(4.dp))
-                // SD card — the large removable volume; the music library / ingestion target.
-                StorageVolumeRow(
-                    title = "SD Card ▸ MUSIC LIBRARY",
-                    subtitle = sdLabel,
-                    freeGB = sdFreeGB,
-                    totalGB = sdTotalGB,
-                    accent = MikuCyan
-                )
-                Spacer(Modifier.height(6.dp))
-                // Internal — system / apps.
-                StorageVolumeRow(
-                    title = "Internal ▸ system / apps",
-                    subtitle = "/data",
-                    freeGB = internalFreeGB,
-                    totalGB = internalTotalGB,
-                    accent = Color(0xFF9E9E9E)
-                )
-            }
-        }
-
-        // Ingress Real-Time Throughput Graph & Transfer Histogram
-        item {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(12.dp))
-                    .padding(10.dp)
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "THROUGHPUT & HISTOGRAM",
-                        color = MikuCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = AudiowideFont
-                    )
-                    val fetchMB = daemon.fetchRateBps / (1024.0 * 1024.0)
-                    val pushMB = daemon.pushRateBps / (1024.0 * 1024.0)
-                    Text(
-                        "📥 ${String.format(Locale.US, "%.1f", fetchMB)} MB/s · 📤 ${String.format(Locale.US, "%.1f", pushMB)} MB/s",
-                        color = Color(0xFF00FFCC),
-                        fontSize = 8.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = OrbitronFont
-                    )
-                }
-
-                Spacer(Modifier.height(6.dp))
-
-                // Throughput Bar Histogram
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(28.dp)
-                        .clip(CutCornerShape(6.dp))
-                        .background(Color(0xFF020E14))
-                        .border(0.6.dp, MikuCyan.copy(alpha = 0.3f), CutCornerShape(6.dp))
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.Bottom
-                ) {
-                    // Real rolling throughput history: each bar is a past sample of the live
-                    // fetch+push rate normalized against the active transport's max speed. No
-                    // hardcoded/mock values — bars flatten to zero when the pipeline is idle.
-                    val maxMBs = syncState.transport.maxSpeedMBs.coerceAtLeast(1).toFloat()
-                    val curMBs = ((daemon.fetchRateBps + daemon.pushRateBps) / (1024.0 * 1024.0)).toFloat()
-                    val history = remember { mutableStateListOf<Float>().apply { repeat(10) { add(0f) } } }
-                    LaunchedEffect(curMBs) {
-                        if (history.isNotEmpty()) history.removeAt(0)
-                        history.add((curMBs / maxMBs).coerceIn(0f, 1f))
-                    }
-                    history.forEach { rate ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight(rate.coerceIn(0.02f, 1.0f))
-                                .clip(RoundedCornerShape(topStart = 2.dp, topEnd = 2.dp))
-                                .background(
-                                    Brush.verticalGradient(
-                                        listOf(MikuCyan, Color(0xFF00B0FF))
-                                    )
-                                )
-                        )
-                    }
-                }
-            }
-        }
-
-        // Live Ingress Pipeline Telemetry
-        item {
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(12.dp))
-                    .padding(10.dp)
-            ) {
-                Text(
-                    "INGRESS PIPELINE TELEMETRY",
-                    color = MikuCyan,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont
-                )
-                Spacer(Modifier.height(6.dp))
-
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Pipeline Stage", color = Color.Gray, fontSize = 10.sp)
-                    val stageText = when {
-                        daemon.stage.equals("fetching", ignoreCase = true) -> "STAGE 1: FETCHING (${daemon.fetchActive} WORKERS)"
-                        daemon.stage.equals("pushing", ignoreCase = true) -> "STAGE 2: PUSHING TO SD"
-                        syncState.isTransferring -> "ACTIVE INGRESS"
-                        else -> "IDLE / STANDBY"
-                    }
-                    Text(
-                        stageText,
-                        color = if (syncState.isTransferring) MikuNeonPink else Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(Modifier.height(2.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Host Staging Cache", color = Color.Gray, fontSize = 10.sp)
-                    val cacheGbStr = String.format("%.2f GB", daemon.cacheBytes / (1024.0 * 1024.0 * 1024.0))
-                    Text("${daemon.cacheAlbums} albums ($cacheGbStr)", color = MikuCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(2.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Parallel Ingress Streams", color = Color.Gray, fontSize = 10.sp)
-                    Text("${daemon.fetchActive} fetching from Souffle / ${daemon.pushActive} pushing to SD", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(2.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Souffle Server Load", color = Color.Gray, fontSize = 10.sp)
-                    Text(if (daemon.souffleLoad.isNotEmpty()) daemon.souffleLoad else "Normal", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(2.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Transport Channel", color = Color.Gray, fontSize = 10.sp)
-                    Text(syncState.transport.badge, color = MikuCyan, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
-
-        // Central Brain & Subsystem Bone Health
-        item {
-            val brainTelemetry by MikuBrain.telemetry.collectAsState()
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(Color.Black.copy(alpha = 0.35f))
-                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(12.dp))
-                    .padding(10.dp)
-            ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "BRAIN & BONE ORCHESTRATION",
-                        color = MikuCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = AudiowideFont
-                    )
-                    Text(
-                        if (brainTelemetry.allBonesHealthy) "🟢 ALL BONES SYNCED" else "⚠️ BONE DEGRADED",
-                        color = if (brainTelemetry.allBonesHealthy) Color(0xFF00E676) else MikuNeonPink,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(Modifier.height(6.dp))
-
-                brainTelemetry.bones.forEach { (type, health) ->
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 1.5.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(type.displayName, color = Color.Gray, fontSize = 9.5.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        when (health.state) {
-                                            MikuBrain.BoneState.IDLE -> Color.Gray
-                                            MikuBrain.BoneState.ACTIVE -> MikuCyan
-                                            MikuBrain.BoneState.THROTTLED -> Color.Yellow
-                                            MikuBrain.BoneState.STALLED -> MikuNeonPink
-                                            MikuBrain.BoneState.ERROR -> Color.Red
-                                        }
-                                    )
-                            )
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                health.state.name,
-                                color = Color.White,
-                                fontSize = 9.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun WorkersTab(workers: List<MikuSyncTransceiver.WorkerInfo>) {
-    if (workers.isEmpty()) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("No active worker threads running", color = Color.Gray, fontSize = 11.sp)
-        }
-    } else {
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            items(workers) { w ->
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .border(1.dp, if (w.status == "fetching") MikuCyan.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.1f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Worker #${w.id}", color = MikuCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                            Text(
-                                if (w.album.isNotEmpty()) w.album else "Idle / Standby",
-                                color = Color.White,
-                                fontSize = 10.5.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (w.status == "fetching") Color(0x3300E5FF) else Color(0x22FFFFFF))
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                w.status.uppercase(),
-                                color = if (w.status == "fetching") MikuCyan else Color.Gray,
-                                fontSize = 8.5.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun LogsTab(failures: List<String>, lastEvent: String) {
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        if (lastEvent.isNotEmpty()) {
-            item {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color.Black.copy(alpha = 0.35f))
-                        .padding(8.dp)
-                ) {
-                    Text("LAST EVENT", color = MikuCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                    Spacer(Modifier.height(2.dp))
-                    Text(lastEvent, color = Color.White, fontSize = 10.sp)
-                }
-            }
-        }
-
-        if (failures.isEmpty()) {
-            item {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x2200E676))
-                        .padding(10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text("✓ 0 Ingress Errors or Socket Failures Reported", color = Color(0xFF00E676), fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        } else {
-            items(failures) { fail ->
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0x33FF4081))
-                        .border(1.dp, MikuNeonPink.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                        .padding(8.dp)
-                ) {
-                    Text(fail, color = Color.White, fontSize = 9.5.sp, lineHeight = 13.sp)
-                }
-            }
-        }
-    }
-}

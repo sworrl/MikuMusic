@@ -727,10 +727,15 @@ fun MikuKawaiiLockscreenScreen(
         )
 
         // 4. Main Lockscreen Layout
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        val fontScale = density.fontScale
+        val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.15f
+        fun Number.dampedSp(): androidx.compose.ui.unit.TextUnit = (this.toFloat() / fontScale * effectiveScale).sp
+
         Column(
             Modifier
                 .fillMaxSize()
-                .padding(top = 10.dp, bottom = 12.dp, start = 12.dp, end = 12.dp),
+                .padding(top = 8.dp, bottom = 10.dp, start = 10.dp, end = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
@@ -756,25 +761,27 @@ fun MikuKawaiiLockscreenScreen(
                 // Left: DAC Bitperfect Badge
                 Box(
                     Modifier
-                        .clip(CutCornerShape(6.dp))
+                        .height(20.dp)
+                        .clip(CutCornerShape(4.dp))
                         .background(Color(0x9904121A))
-                        .border(0.8.dp, palette.accent.copy(alpha = 0.7f), CutCornerShape(6.dp))
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
+                        .border(0.8.dp, palette.accent.copy(alpha = 0.7f), CutCornerShape(4.dp))
+                        .padding(horizontal = 4.5.dp, vertical = 1.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             Modifier
-                                .size(5.dp)
+                                .size(3.5.dp)
                                 .clip(CircleShape)
                                 .background(palette.accent)
                         )
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(2.5.dp))
                         Text(
-                            "CS43131",
+                            "CS43198",
                             color = palette.accent,
-                            fontSize = 12.5.sp,
+                            fontSize = 7.8.dampedSp(),
                             fontWeight = FontWeight.Bold,
-                            fontFamily = AudiowideFont
+                            fontFamily = AudiowideFont,
+                            maxLines = 1
                         )
                     }
                 }
@@ -783,29 +790,31 @@ fun MikuKawaiiLockscreenScreen(
                 Row(
                     modifier = Modifier.quiltPatch(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Box(
                         Modifier
-                            .clip(CutCornerShape(6.dp))
+                            .height(20.dp)
+                            .clip(CutCornerShape(4.dp))
                             .background(Color(0x9904121A))
-                            .border(0.8.dp, Color(0xFF00FF7F).copy(alpha = 0.7f), CutCornerShape(6.dp))
-                            .padding(horizontal = 6.dp, vertical = 3.dp)
+                            .border(0.8.dp, Color(0xFF00FF7F).copy(alpha = 0.7f), CutCornerShape(4.dp))
+                            .padding(horizontal = 4.5.dp, vertical = 1.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(
                                 Modifier
-                                    .size(5.dp)
+                                    .size(3.5.dp)
                                     .clip(CircleShape)
                                     .background(Color(0xFF00FF7F))
                             )
-                            Spacer(Modifier.width(3.dp))
+                            Spacer(Modifier.width(2.5.dp))
                             Text(
                                 "BRAIN",
                                 color = Color(0xFF00FF7F),
-                                fontSize = 12.5.sp,
+                                fontSize = 7.8.dampedSp(),
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = AudiowideFont
+                                fontFamily = AudiowideFont,
+                                maxLines = 1
                             )
                         }
                     }
@@ -820,25 +829,27 @@ fun MikuKawaiiLockscreenScreen(
 
                     Box(
                         Modifier
-                            .clip(CutCornerShape(8.dp))
+                            .height(20.dp)
+                            .clip(CutCornerShape(4.dp))
                             .background(Brush.horizontalGradient(batteryGradient))
-                            .border(1.dp, batteryColor, CutCornerShape(8.dp))
-                            .padding(horizontal = 7.dp, vertical = 4.dp)
+                            .border(0.8.dp, batteryColor, CutCornerShape(4.dp))
+                            .padding(horizontal = 4.5.dp, vertical = 1.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(
                                 imageVector = if (isCharging) Icons.Default.Bolt else Icons.Default.BatteryChargingFull,
                                 contentDescription = null,
                                 tint = batteryColor,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(11.dp)
                             )
-                            Spacer(Modifier.width(4.dp))
+                            Spacer(Modifier.width(3.dp))
                             Text(
                                 "$batteryPercent%",
                                 color = Color.White,
-                                fontSize = 13.5.sp,
+                                fontSize = 7.8.dampedSp(),
                                 fontWeight = FontWeight.Bold,
-                                fontFamily = AudiowideFont
+                                fontFamily = AudiowideFont,
+                                maxLines = 1
                             )
                         }
                     }
@@ -853,18 +864,18 @@ fun MikuKawaiiLockscreenScreen(
                 Text(
                     text = currentTime.ifBlank { "12:00" },
                     color = Color.White,
-                    fontSize = 64.sp,
+                    fontSize = 38.dampedSp(),
                     fontWeight = FontWeight.Black,
                     fontFamily = AudiowideFont,
-                    letterSpacing = 2.sp
+                    letterSpacing = 1.5.sp
                 )
                 Text(
                     text = currentDate.ifBlank { "01/01/2026" },
                     color = palette.primary,
-                    fontSize = 16.sp,
+                    fontSize = 11.5.dampedSp(),
                     fontWeight = FontWeight.Bold,
                     fontFamily = AudiowideFont,
-                    letterSpacing = 1.sp
+                    letterSpacing = 0.8.sp
                 )
             }
 
@@ -875,7 +886,7 @@ fun MikuKawaiiLockscreenScreen(
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(2.dp))
 
             // ================= UPGRADED NOW PLAYING LOCKSCREEN MUSIC WIDGET =================
             if (nowPlaying.hasSession) {
@@ -914,7 +925,7 @@ fun MikuKawaiiLockscreenScreen(
                             // Mini Vinyl Artwork Ring (Coil)
                             Box(
                                 Modifier
-                                    .size(44.dp)
+                                    .size(38.dp)
                                     .clip(CircleShape)
                                     .background(Color(0xFF030D12))
                                     .border(1.2.dp, if (localLikedState) Color(0xFFFF2277) else MikuNeonPink, CircleShape),
@@ -924,7 +935,7 @@ fun MikuKawaiiLockscreenScreen(
                                     model = nowPlaying.artwork ?: R.drawable.miku_cover,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(40.dp).clip(CircleShape)
+                                    modifier = Modifier.size(34.dp).clip(CircleShape)
                                 )
                             }
 
@@ -935,7 +946,7 @@ fun MikuKawaiiLockscreenScreen(
                                 Text(
                                     text = nowPlaying.title ?: "Now Playing",
                                     color = Color.White,
-                                    fontSize = 16.sp,
+                                    fontSize = 12.5.dampedSp(),
                                     fontWeight = FontWeight.Black,
                                     fontFamily = AudiowideFont,
                                     maxLines = 1,
@@ -944,7 +955,7 @@ fun MikuKawaiiLockscreenScreen(
                                 Text(
                                     text = nowPlaying.artist ?: "Hatsune Miku",
                                     color = palette.primary,
-                                    fontSize = 13.5.sp,
+                                    fontSize = 10.5.dampedSp(),
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -955,7 +966,7 @@ fun MikuKawaiiLockscreenScreen(
                             Box(
                                 Modifier
                                     .scale(heartAnimScale.value)
-                                    .size(36.dp)
+                                    .size(30.dp)
                                     .clip(CircleShape)
                                     .background(
                                         if (localLikedState) {
@@ -969,7 +980,7 @@ fun MikuKawaiiLockscreenScreen(
                                         }
                                     )
                                     .border(
-                                        if (localLikedState) 1.4.dp else 1.dp,
+                                        if (localLikedState) 1.2.dp else 0.8.dp,
                                         if (localLikedState) {
                                             Brush.linearGradient(
                                                 listOf(Color(0xFFFF1774), Color(0xFFFF5288), Color(0xFFFF0055))
@@ -1008,11 +1019,11 @@ fun MikuKawaiiLockscreenScreen(
                                     imageVector = if (localLikedState) Icons.Filled.Favorite else Icons.Default.FavoriteBorder,
                                     contentDescription = "Like Song",
                                     tint = if (localLikedState) Color(0xFFFF1774) else Color(0xFF00E5FF),
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(16.dp)
                                 )
                             }
 
-                            Spacer(Modifier.width(6.dp))
+                            Spacer(Modifier.width(5.dp))
 
                             // History Drawer Pill Toggle
                             Box(
@@ -1025,7 +1036,7 @@ fun MikuKawaiiLockscreenScreen(
                                         MikuTactileHaptics.playRatchetTick(context)
                                         showHistoryDrawer = !showHistoryDrawer
                                     }
-                                    .padding(horizontal = 7.dp, vertical = 5.dp),
+                                    .padding(horizontal = 5.dp, vertical = 3.5.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1033,13 +1044,13 @@ fun MikuKawaiiLockscreenScreen(
                                         Icons.Default.History,
                                         contentDescription = "History",
                                         tint = palette.primary,
-                                        modifier = Modifier.size(13.dp)
+                                        modifier = Modifier.size(11.dp)
                                     )
-                                    Spacer(Modifier.width(3.dp))
+                                    Spacer(Modifier.width(2.5.dp))
                                     Text(
                                         if (showHistoryDrawer) "HIDE" else "RECENTS",
                                         color = Color.White,
-                                        fontSize = 12.sp,
+                                        fontSize = 9.5.dampedSp(),
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = AudiowideFont
                                     )
@@ -1048,208 +1059,221 @@ fun MikuKawaiiLockscreenScreen(
                         }
 
                         // 2. TRACK METRICS TELEMETRY ROW
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(4.dp))
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            // Quality Badge
+                            Box(
+                                Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0x3300FF7F))
+                                    .border(0.6.dp, Color(0xFF00FF7F).copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 1.5.dp)
                             ) {
-                                // Quality Badge
-                                Box(
-                                    Modifier
-                                        .clip(RoundedCornerShape(4.dp))
-                                        .background(Color(0x3300FF7F))
-                                        .border(0.6.dp, Color(0xFF00FF7F).copy(alpha = 0.7f), RoundedCornerShape(4.dp))
-                                        .padding(horizontal = 5.dp, vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        nowPlaying.format,
-                                        color = Color(0xFF00FF7F),
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = AudiowideFont,
-                                        maxLines = 1
-                                    )
-                                }
-                                // Gamified Mini Project DIVA Rhythm Widget with Approach Rings & Haptics
-                                var miniTapCount by remember { mutableIntStateOf(0) }
-                                var miniTappedBpm by remember { mutableStateOf<Float?>(null) }
-                                var miniJudgment by remember { mutableStateOf("TAP") }
-                                val miniTapTimestamps = remember { mutableStateListOf<Long>() }
-                                val miniTapAnimScale = remember { Animatable(1f) }
-                                val miniApproachAnim = remember { Animatable(1.5f) }
+                                Text(
+                                    nowPlaying.format,
+                                    color = Color(0xFF00FF7F),
+                                    fontSize = 8.5.dampedSp(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = AudiowideFont,
+                                    maxLines = 1
+                                )
+                            }
 
-                                val bpmDb = remember { com.miku.launcher.bpm.MikuBpmDatabase.getInstance(context) }
-                                val beatPeriodMs = (60_000f / nowPlaying.bpm.coerceIn(40f, 300f)).toLong()
+                            // Gamified Mini Project DIVA Rhythm Widget with Approach Rings & Haptics
+                            var miniTapCount by remember { mutableIntStateOf(0) }
+                            var miniTappedBpm by remember { mutableStateOf<Float?>(null) }
+                            var miniJudgment by remember { mutableStateOf("TAP") }
+                            val miniTapTimestamps = remember { mutableStateListOf<Long>() }
+                            val miniTapAnimScale = remember { Animatable(1f) }
+                            val miniApproachAnim = remember { Animatable(1.5f) }
 
-                                // Continuous approach ring animation synced to BPM
-                                LaunchedEffect(nowPlaying.isPlaying, nowPlaying.bpm) {
-                                    if (nowPlaying.isPlaying) {
-                                        while (true) {
-                                            miniApproachAnim.snapTo(1.7f)
-                                            miniApproachAnim.animateTo(
-                                                targetValue = 1.0f,
-                                                animationSpec = tween(
-                                                    durationMillis = beatPeriodMs.toInt().coerceIn(100, 2000),
-                                                    easing = LinearEasing
-                                                )
+                            val bpmDb = remember { com.miku.launcher.bpm.MikuBpmDatabase.getInstance(context) }
+                            val beatPeriodMs = (60_000f / nowPlaying.bpm.coerceIn(40f, 300f)).toLong()
+
+                            // Continuous approach ring animation synced to BPM
+                            LaunchedEffect(nowPlaying.isPlaying, nowPlaying.bpm) {
+                                if (nowPlaying.isPlaying) {
+                                    while (true) {
+                                        miniApproachAnim.snapTo(1.7f)
+                                        miniApproachAnim.animateTo(
+                                            targetValue = 1.0f,
+                                            animationSpec = tween(
+                                                durationMillis = beatPeriodMs.toInt().coerceIn(100, 2000),
+                                                easing = LinearEasing
                                             )
-                                        }
-                                    }
-                                }
-
-                                Box(
-                                    Modifier
-                                        .scale(miniTapAnimScale.value)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(
-                                            Brush.horizontalGradient(
-                                                listOf(Color(0x66FF1177), Color(0x449D4EDD))
-                                            )
-                                        )
-                                        .border(1.dp, if (miniTapCount >= 10) Color(0xFFFFD700) else MikuNeonPink, RoundedCornerShape(8.dp))
-                                        .clickable {
-                                            lastInteractionMs = System.currentTimeMillis()
-                                            val now = SystemClock.elapsedRealtime()
-                                            if (miniTapTimestamps.isNotEmpty() && now - miniTapTimestamps.last() > 2200L) {
-                                                miniTapTimestamps.clear()
-                                                miniTapCount = 0
-                                            }
-                                            miniTapTimestamps.add(now)
-                                            miniTapCount++
-                                            if (miniTapTimestamps.size > 8) miniTapTimestamps.removeAt(0)
-
-                                            if (miniTapTimestamps.size >= 2) {
-                                                val intervals = (1 until miniTapTimestamps.size).map { (miniTapTimestamps[it] - miniTapTimestamps[it - 1]).toDouble() }
-                                                val avg = intervals.average()
-                                                if (avg > 0) {
-                                                    val rawTapped = (60_000.0 / avg).toFloat().coerceIn(30f, 999f)
-                                                    miniTappedBpm = rawTapped
-                                                }
-                                            }
-
-                                            // Rhythm Timing Offset & Accuracy Calculation
-                                            val offsetMs = if (beatPeriodMs > 0) ((now % beatPeriodMs) - (beatPeriodMs / 2)).toInt() else 0
-                                            val absOffset = Math.abs(offsetMs)
-                                            val accuracy = when {
-                                                absOffset <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
-                                                absOffset <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
-                                                else -> com.miku.launcher.bpm.HitAccuracy.MISS
-                                            }
-                                            miniJudgment = when (accuracy) {
-                                                com.miku.launcher.bpm.HitAccuracy.PERFECT -> "💖 PERFECT"
-                                                com.miku.launcher.bpm.HitAccuracy.GOOD -> "✨ GOOD"
-                                                com.miku.launcher.bpm.HitAccuracy.MISS -> "🎵 TAP"
-                                            }
-
-                                            coroutineScope.launch {
-                                                miniTapAnimScale.snapTo(0.78f)
-                                                miniTapAnimScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                                            }
-                                            MikuTactileHaptics.playRatchetTick(context)
-                                            val liveTapped = miniTappedBpm ?: nowPlaying.bpm
-
-                                            // Play ascending pentatonic chime melody synchronized with combo
-                                            com.miku.launcher.audio.MikuSeasonalAudioEngine.playComboMelody(miniTapCount, miniTapCount >= 20)
-
-                                            // Record Beat Clicker & Seasons Economy
-                                            com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
-                                            com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
-                                                accuracy = accuracy,
-                                                currentCombo = miniTapCount,
-                                                scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
-                                                currentBpm = liveTapped
-                                            )
-
-                                            // Log Calibration Telemetry to SQLite Database
-                                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                                val trackArt = nowPlaying.artist ?: "Unknown Artist"
-                                                val trackTit = nowPlaying.title ?: "Unknown Track"
-                                                bpmDb.logTapTelemetry(
-                                                    com.miku.launcher.bpm.MikuBpmDatabase.TapTelemetryRecord(
-                                                        artist = trackArt,
-                                                        title = trackTit,
-                                                        tapEpochMs = System.currentTimeMillis(),
-                                                        targetBeatMs = beatPeriodMs,
-                                                        deviationMs = offsetMs,
-                                                        accuracy = accuracy.name,
-                                                        instantaneousBpm = liveTapped,
-                                                        comboAtTap = miniTapCount,
-                                                        isFever = miniTapCount >= 20
-                                                    )
-                                                )
-                                                if (miniTapCount >= 6 && miniTappedBpm != null) {
-                                                    bpmDb.saveTrackBpm(
-                                                        com.miku.launcher.bpm.MikuBpmDatabase.TrackBpmRecord(
-                                                            artist = trackArt,
-                                                            title = trackTit,
-                                                            canonicalBpm = miniTappedBpm!!,
-                                                            rawDetectedBpm = nowPlaying.bpm,
-                                                            userTappedBpm = miniTappedBpm!!,
-                                                            tempoMultiplier = if (miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
-                                                            confidence = 0.98f,
-                                                            source = "USER_LOCKSCREEN_TAP",
-                                                            tapCount = miniTapCount
-                                                        )
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                                ) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Text(
-                                            if (miniTapCount > 1) "🔥 x$miniTapCount $miniJudgment" else "⚡ ${nowPlaying.bpm.toInt()} BPM",
-                                            color = if (miniTapCount > 5) Color(0xFFFFD700) else MikuNeonPink,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Black,
-                                            fontFamily = AudiowideFont
                                         )
                                     }
                                 }
                             }
 
-                            // Time Elapsed / Total duration
-                            val posStr = formatTimeMs(nowPlaying.positionMs)
-                            val durStr = formatTimeMs(nowPlaying.durationMs)
-                            Text(
-                                "$posStr / $durStr",
-                                color = Color(0xFFB0D0D8),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = AudiowideFont
-                            )
+                            Box(
+                                Modifier
+                                    .scale(miniTapAnimScale.value)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(
+                                        Brush.horizontalGradient(
+                                            listOf(Color(0x66FF1177), Color(0x449D4EDD))
+                                        )
+                                    )
+                                    .border(0.8.dp, if (miniTapCount >= 10) Color(0xFFFFD700) else MikuNeonPink, RoundedCornerShape(6.dp))
+                                    .clickable {
+                                        lastInteractionMs = System.currentTimeMillis()
+                                        val now = SystemClock.elapsedRealtime()
+                                        if (miniTapTimestamps.isNotEmpty() && now - miniTapTimestamps.last() > 2200L) {
+                                            miniTapTimestamps.clear()
+                                            miniTapCount = 0
+                                        }
+                                        miniTapTimestamps.add(now)
+                                        miniTapCount++
+                                        if (miniTapTimestamps.size > 8) miniTapTimestamps.removeAt(0)
+
+                                        if (miniTapTimestamps.size >= 2) {
+                                            val intervals = (1 until miniTapTimestamps.size).map { (miniTapTimestamps[it] - miniTapTimestamps[it - 1]).toDouble() }
+                                            val avg = intervals.average()
+                                            if (avg > 0) {
+                                                val rawTapped = (60_000.0 / avg).toFloat().coerceIn(30f, 999f)
+                                                miniTappedBpm = rawTapped
+                                            }
+                                        }
+
+                                        // Rhythm Timing Offset & Accuracy Calculation
+                                        val offsetMs = if (beatPeriodMs > 0) ((now % beatPeriodMs) - (beatPeriodMs / 2)).toInt() else 0
+                                        val absOffset = Math.abs(offsetMs)
+                                        val accuracy = when {
+                                            absOffset <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
+                                            absOffset <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
+                                            else -> com.miku.launcher.bpm.HitAccuracy.MISS
+                                        }
+                                        miniJudgment = when (accuracy) {
+                                            com.miku.launcher.bpm.HitAccuracy.PERFECT -> "💖 PERFECT"
+                                            com.miku.launcher.bpm.HitAccuracy.GOOD -> "✨ GOOD"
+                                            com.miku.launcher.bpm.HitAccuracy.MISS -> "🎵 TAP"
+                                        }
+
+                                        coroutineScope.launch {
+                                            miniTapAnimScale.snapTo(0.78f)
+                                            miniTapAnimScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                                        }
+                                        MikuTactileHaptics.playRatchetTick(context)
+                                        val liveTapped = miniTappedBpm ?: nowPlaying.bpm
+
+                                        // Play ascending pentatonic chime melody synchronized with combo
+                                        com.miku.launcher.audio.MikuSeasonalAudioEngine.playComboMelody(miniTapCount, miniTapCount >= 20)
+
+                                        // Record Beat Clicker & Seasons Economy
+                                        com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
+                                        com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
+                                            accuracy = accuracy,
+                                            currentCombo = miniTapCount,
+                                            scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
+                                            currentBpm = liveTapped
+                                        )
+
+                                        // Log Calibration Telemetry to SQLite Database
+                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                            val trackArt = nowPlaying.artist ?: "Unknown Artist"
+                                            val trackTit = nowPlaying.title ?: "Unknown Track"
+                                            bpmDb.logTapTelemetry(
+                                                com.miku.launcher.bpm.MikuBpmDatabase.TapTelemetryRecord(
+                                                    artist = trackArt,
+                                                    title = trackTit,
+                                                    tapEpochMs = System.currentTimeMillis(),
+                                                    targetBeatMs = beatPeriodMs,
+                                                    deviationMs = offsetMs,
+                                                    accuracy = accuracy.name,
+                                                    instantaneousBpm = liveTapped,
+                                                    comboAtTap = miniTapCount,
+                                                    isFever = miniTapCount >= 20
+                                                )
+                                            )
+                                            if (miniTapCount >= 6 && miniTappedBpm != null) {
+                                                bpmDb.saveTrackBpm(
+                                                    com.miku.launcher.bpm.MikuBpmDatabase.TrackBpmRecord(
+                                                        artist = trackArt,
+                                                        title = trackTit,
+                                                        canonicalBpm = miniTappedBpm!!,
+                                                        rawDetectedBpm = nowPlaying.bpm,
+                                                        userTappedBpm = miniTappedBpm!!,
+                                                        tempoMultiplier = if (miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
+                                                        confidence = 0.98f,
+                                                        source = "USER_LOCKSCREEN_TAP",
+                                                        tapCount = miniTapCount
+                                                    )
+                                                )
+                                            }
+                                        }
+                                    }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        if (miniTapCount > 1) "🔥 x$miniTapCount $miniJudgment" else "⚡ ${nowPlaying.bpm.toInt()} BPM",
+                                        color = if (miniTapCount > 5) Color(0xFFFFD700) else MikuNeonPink,
+                                        fontSize = 9.dampedSp(),
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = AudiowideFont
+                                    )
+                                }
+                            }
                         }
 
-                        // 3. SLIM SEEK BAR SLIDER
+                        // 3. SLIM SEEK BAR SLIDER & TIMESTAMPS
                         if (nowPlaying.durationMs > 0L) {
                             var scrubbing by remember { mutableStateOf(false) }
                             var scrubValue by remember { mutableFloatStateOf(0f) }
                             val liveFrac = (nowPlaying.positionMs.toFloat() / nowPlaying.durationMs).coerceIn(0f, 1f)
-                            Slider(
-                                value = if (scrubbing) scrubValue else liveFrac,
-                                onValueChange = {
-                                    scrubbing = true
-                                    scrubValue = it
-                                    lastInteractionMs = System.currentTimeMillis()
-                                },
-                                onValueChangeFinished = {
-                                    controller?.seekTo((scrubValue * nowPlaying.durationMs).toLong())
-                                    scrubbing = false
-                                },
-                                colors = SliderDefaults.colors(
-                                    thumbColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
-                                    activeTrackColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
-                                    inactiveTrackColor = Color(0x33FFFFFF)
-                                ),
-                                modifier = Modifier
+                            val posStr = formatTimeMs(if (scrubbing) (scrubValue * nowPlaying.durationMs).toLong() else nowPlaying.positionMs)
+                            val durStr = formatTimeMs(nowPlaying.durationMs)
+
+                            Column(
+                                Modifier
                                     .fillMaxWidth()
-                                    .height(14.dp)
-                            )
+                                    .padding(top = 2.dp)
+                            ) {
+                                Slider(
+                                    value = if (scrubbing) scrubValue else liveFrac,
+                                    onValueChange = {
+                                        scrubbing = true
+                                        scrubValue = it
+                                        lastInteractionMs = System.currentTimeMillis()
+                                    },
+                                    onValueChangeFinished = {
+                                        controller?.seekTo((scrubValue * nowPlaying.durationMs).toLong())
+                                        scrubbing = false
+                                    },
+                                    colors = SliderDefaults.colors(
+                                        thumbColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
+                                        activeTrackColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
+                                        inactiveTrackColor = Color(0x33FFFFFF)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(10.dp)
+                                )
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        posStr,
+                                        color = Color(0xFFB0D0D8),
+                                        fontSize = 8.5.dampedSp(),
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = AudiowideFont
+                                    )
+                                    Text(
+                                        durStr,
+                                        color = Color(0xFFB0D0D8),
+                                        fontSize = 8.5.dampedSp(),
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = AudiowideFont
+                                    )
+                                }
+                            }
                         }
 
                         // 4. TRANSPORT CONTROLS ROW
@@ -1402,13 +1426,13 @@ fun MikuKawaiiLockscreenScreen(
             }
 
             // Gap above the bottom swipe zone
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(8.dp))
 
             // Swipe-up prompt
             val infiniteTransition = rememberInfiniteTransition(label = "ChevronBounce")
             val chevronOffset by infiniteTransition.animateFloat(
                 initialValue = 0f,
-                targetValue = -6f,
+                targetValue = -4f,
                 animationSpec = infiniteRepeatable(
                     animation = tween(800, easing = FastOutSlowInEasing),
                     repeatMode = RepeatMode.Reverse
@@ -1419,7 +1443,7 @@ fun MikuKawaiiLockscreenScreen(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 6.dp),
+                    .padding(bottom = 4.dp),
                 contentAlignment = Alignment.BottomCenter
             ) {
                 Column(
@@ -1430,15 +1454,15 @@ fun MikuKawaiiLockscreenScreen(
                         Icons.Default.KeyboardArrowUp,
                         contentDescription = null,
                         tint = palette.primary,
-                        modifier = Modifier.size(26.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                     Text(
                         "SWIPE UP TO UNLOCK",
                         color = Color.White,
-                        fontSize = 13.5.sp,
+                        fontSize = 10.5.dampedSp(),
                         fontWeight = FontWeight.Black,
                         fontFamily = AudiowideFont,
-                        letterSpacing = 1.5.sp
+                        letterSpacing = 1.sp
                     )
                 }
             }
@@ -1754,9 +1778,14 @@ fun Miku5HourLockscreenTrendCapsule(
         }
     }
 
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val fontScale = density.fontScale
+    val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.15f
+    fun Number.dampedSp(): androidx.compose.ui.unit.TextUnit = (this.toFloat() / fontScale * effectiveScale).sp
+
     Box(
         modifier = modifier
-            .clip(CutCornerShape(12.dp))
+            .clip(CutCornerShape(10.dp))
             .background(
                 Brush.verticalGradient(
                     listOf(
@@ -1765,8 +1794,8 @@ fun Miku5HourLockscreenTrendCapsule(
                     )
                 )
             )
-            .border(1.dp, palette.primary.copy(alpha = 0.8f), CutCornerShape(12.dp))
-            .padding(8.dp)
+            .border(0.8.dp, palette.primary.copy(alpha = 0.8f), CutCornerShape(10.dp))
+            .padding(6.dp)
     ) {
         Column(Modifier.fillMaxWidth()) {
             Row(
@@ -1777,21 +1806,21 @@ fun Miku5HourLockscreenTrendCapsule(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         weather.icon.ifEmpty { "🌸" },
-                        fontSize = 17.sp
+                        fontSize = 14.sp
                     )
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(3.dp))
                     Text(
                         "${weather.tempF.roundToInt()}°F",
                         color = Color.White,
-                        fontSize = 16.5.sp,
+                        fontSize = 12.5.dampedSp(),
                         fontWeight = FontWeight.Black,
                         fontFamily = AudiowideFont
                     )
-                    Spacer(Modifier.width(6.dp))
+                    Spacer(Modifier.width(5.dp))
                     Text(
                         weather.summary,
                         color = palette.primary,
-                        fontSize = 13.sp,
+                        fontSize = 10.5.dampedSp(),
                         fontWeight = FontWeight.Bold,
                         maxLines = 1
                     )
@@ -1803,12 +1832,12 @@ fun Miku5HourLockscreenTrendCapsule(
                             .clip(CutCornerShape(4.dp))
                             .background(Color(0x33FFD600))
                             .border(0.6.dp, Color(0xFFFFD600), CutCornerShape(4.dp))
-                            .padding(horizontal = 5.dp, vertical = 2.dp)
+                            .padding(horizontal = 4.dp, vertical = 1.5.dp)
                     ) {
                         Text(
                             weather.nextPrecipLabel,
                             color = Color(0xFFFFD600),
-                            fontSize = 11.5.sp,
+                            fontSize = 9.dampedSp(),
                             fontWeight = FontWeight.Black,
                             fontFamily = AudiowideFont
                         )
@@ -1816,7 +1845,7 @@ fun Miku5HourLockscreenTrendCapsule(
                 }
             }
 
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(3.dp))
 
             Row(
                 Modifier.fillMaxWidth(),
@@ -1831,20 +1860,20 @@ fun Miku5HourLockscreenTrendCapsule(
                         Text(
                             text = pt.timeLabel,
                             color = Color.White.copy(alpha = 0.7f),
-                            fontSize = 12.sp,
+                            fontSize = 9.dampedSp(),
                             fontWeight = FontWeight.Bold,
                             fontFamily = AudiowideFont
                         )
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height(1.dp))
                         Text(
                             text = pt.icon,
-                            fontSize = 15.sp
+                            fontSize = 12.sp
                         )
-                        Spacer(Modifier.height(2.dp))
+                        Spacer(Modifier.height(1.dp))
                         Text(
                             text = "${pt.tempF.roundToInt()}°",
                             color = Color.White,
-                            fontSize = 13.5.sp,
+                            fontSize = 10.dampedSp(),
                             fontWeight = FontWeight.Black,
                             fontFamily = AudiowideFont
                         )
@@ -1852,7 +1881,7 @@ fun Miku5HourLockscreenTrendCapsule(
                             Text(
                                 text = "${pt.precipProbPct}%",
                                 color = Color(0xFF00E5FF),
-                                fontSize = 11.sp,
+                                fontSize = 8.5.dampedSp(),
                                 fontWeight = FontWeight.Bold
                             )
                         }
@@ -1860,13 +1889,13 @@ fun Miku5HourLockscreenTrendCapsule(
                 }
             }
 
-            Spacer(Modifier.height(5.dp))
+            Spacer(Modifier.height(3.dp))
 
             // Color-coded trending sparkline
             Canvas(
                 Modifier
                     .fillMaxWidth()
-                    .height(22.dp)
+                    .height(16.dp)
             ) {
                 val w = size.width
                 val h = size.height
@@ -1877,7 +1906,7 @@ fun Miku5HourLockscreenTrendCapsule(
 
                 val pointsOffset = next5Hours.mapIndexed { idx, pt ->
                     val x = (idx.toFloat() / (next5Hours.size - 1).coerceAtLeast(1)) * w
-                    val y = h - ((pt.tempF - minT) / range * (h - 6.dp.toPx())) - 3.dp.toPx()
+                    val y = h - ((pt.tempF - minT) / range * (h - 4.dp.toPx())) - 2.dp.toPx()
                     Offset(x, y)
                 }
 
@@ -1913,14 +1942,14 @@ fun Miku5HourLockscreenTrendCapsule(
                         )
                     ),
                     style = androidx.compose.ui.graphics.drawscope.Stroke(
-                        width = 2.dp.toPx(),
+                        width = 1.6.dp.toPx(),
                         cap = androidx.compose.ui.graphics.StrokeCap.Round
                     )
                 )
 
                 pointsOffset.forEach { p ->
-                    drawCircle(Color(0xFF04121A), radius = 2.5.dp.toPx(), center = p)
-                    drawCircle(MikuCyan, radius = 1.5.dp.toPx(), center = p)
+                    drawCircle(Color(0xFF04121A), radius = 2.dp.toPx(), center = p)
+                    drawCircle(MikuCyan, radius = 1.2.dp.toPx(), center = p)
                 }
             }
         }

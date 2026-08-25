@@ -121,11 +121,28 @@ object MikuSyncTransceiver {
         val lastSyncedTracksCount: Int = 0,
         val daemon: DaemonStatus = DaemonStatus(),
         val speedTest: SpeedTestResult? = null,
-        val activeHost: String = "127.0.0.1"
+        val activeHost: String = "127.0.0.1",
+        val eventLogs: List<String> = emptyList(),
+        val throughputHistory: List<Float> = emptyList(),
+        val beaconAck: String = "UDP 8788 ENGAGED"
     )
 
     private val _state = MutableStateFlow(SyncState())
     val state: StateFlow<SyncState> = _state
+
+    private val logBuffer = mutableListOf<String>()
+    private val throughputBuffer = mutableListOf<Float>().apply { repeat(30) { add(0f) } }
+
+    fun log(msg: String) {
+        val sdf = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
+        val timestamp = sdf.format(java.util.Date())
+        val entry = "[$timestamp] $msg"
+        synchronized(logBuffer) {
+            logBuffer.add(0, entry)
+            while (logBuffer.size > 200) logBuffer.removeAt(logBuffer.size - 1)
+            _state.value = _state.value.copy(eventLogs = logBuffer.toList())
+        }
+    }
 
     private val scope = CoroutineScope(MikuBrain.NetworkDispatcher + SupervisorJob())
     private var monitorJob: Job? = null
@@ -133,7 +150,7 @@ object MikuSyncTransceiver {
 
     // Thread-safe candidate list dynamically populated with loopback and local subnet gateway
     private val candidateHosts = CopyOnWriteArraySet(listOf("127.0.0.1"))
-    @Volatile private var activeHost = "127.0.0.1"
+    @Volatile var activeHost = "127.0.0.1"
 
     fun wake() {
         wakeSignal.trySend(Unit)
@@ -257,6 +274,17 @@ object MikuSyncTransceiver {
                     val rateMBs = (daemon.transferRateBps / (1024.0 * 1024.0)).toFloat()
                     val isTransfer = daemon.isTransferring || rateMBs > 0.01f || (daemon.stage.isNotEmpty() && daemon.stage != "idle")
 
+                    synchronized(throughputBuffer) {
+                        if (throughputBuffer.isNotEmpty()) throughputBuffer.removeAt(0)
+                        throughputBuffer.add(rateMBs)
+                    }
+
+                    if (daemon.online && (_state.value.daemon.stage != daemon.stage || _state.value.daemon.currentAlbum != daemon.currentAlbum)) {
+                        if (daemon.currentArtist.isNotEmpty() || daemon.currentAlbum.isNotEmpty()) {
+                            log("STAGE: ${daemon.stage.uppercase()} // PIPELINE CACHING: [${daemon.currentArtist} / ${daemon.currentAlbum}]")
+                        }
+                    }
+
                     val transport = if (daemon.online) TransportType.USB_HIGH_SPEED else detectTransport(ctx)
                     val ip = if (daemon.online) activeHost else getDeviceIpAddress(ctx)
 
@@ -269,7 +297,9 @@ object MikuSyncTransceiver {
                         activeModule = if (isTransfer) "music" else "idle",
                         lastSyncTimestamp = if (isTransfer) System.currentTimeMillis() else _state.value.lastSyncTimestamp,
                         daemon = daemon,
-                        activeHost = activeHost
+                        activeHost = activeHost,
+                        throughputHistory = synchronized(throughputBuffer) { throughputBuffer.toList() },
+                        eventLogs = synchronized(logBuffer) { logBuffer.toList() }
                     )
 
                     // Adaptive polling rate: fast when active, slow when idle, deepest sleep when complete
@@ -328,10 +358,11 @@ object MikuSyncTransceiver {
                 socket.receive(recvPacket)
                 val respStr = String(recvPacket.data, 0, recvPacket.length)
                 val json = JSONObject(respStr)
-                if (json.optString("daemon") == "m500d") {
+                if (json.optString("daemon") == "m500d" || respStr.contains("MIKU_CYBERDECK_BROADCAST_BEACON")) {
                     val fromIp = recvPacket.address.hostAddress ?: ""
                     if (fromIp.isNotEmpty() && fromIp != "0.0.0.0") {
                         candidateHosts.add(fromIp)
+                        log("📡 BESPOKE BEACON ACK: $fromIp:$M500D_BEACON_PORT // DAEMON_SYNC")
                     }
                     val ipsArr = json.optJSONArray("ips")
                     if (ipsArr != null) {
@@ -532,6 +563,39 @@ object MikuSyncTransceiver {
             if (mediaFiles.isNotEmpty()) {
                 val pathsArray = mediaFiles.toTypedArray()
                 android.media.MediaScannerConnection.scanFile(ctx, pathsArray, null) { _, _ -> }
+            }
+
+            withContext(Dispatchers.Main) {
+                onDone(mediaFiles.size)
+            }
+        }
+    }
+
+    /** Force deep rescan: rescans entire SD library comprehensively (no depth limit, all subdirs) */
+    fun deepScanDirectory(ctx: Context, path: String, onDone: (Int) -> Unit) {
+        MikuBrain.launchScanner {
+
+            val root = File(path)
+            if (!root.exists() || !root.isDirectory) {
+                withContext(Dispatchers.Main) { onDone(0) }
+                return@launchScanner
+            }
+
+            val mediaFiles = mutableListOf<String>()
+            val supportedExts = setOf("flac", "dsf", "dff", "mp3", "wav", "m4a", "ogg", "opus", "ape", "wv")
+
+            // Deep scan: recursive, no depth limit
+            root.walkTopDown().forEach { file ->
+                if (file.isFile && file.extension.lowercase() in supportedExts) {
+                    mediaFiles.add(file.absolutePath)
+                }
+                MikuBrain.cooperativeYield()
+            }
+
+            if (mediaFiles.isNotEmpty()) {
+                val pathsArray = mediaFiles.toTypedArray()
+                android.media.MediaScannerConnection.scanFile(ctx, pathsArray, null) { _, _ -> }
+                android.util.Log.i("MikuSyncTransceiver", "Deep scan: ${mediaFiles.size} files queued")
             }
 
             withContext(Dispatchers.Main) {

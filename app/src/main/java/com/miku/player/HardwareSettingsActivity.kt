@@ -683,6 +683,101 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                 }
 
                 // ============================================================
+                // SECTION 1.6: AUDIO PLAYBACK ENGINE ("SWAPPABLE BONE")
+                // ============================================================
+                item {
+                    var audioEngine by remember { mutableStateOf(PlayerPreferences.loadAudioEngine(ctx)) }
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xDD0A1E26))
+                            .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                    ) {
+                        Text(
+                            "AUDIO PLAYBACK CORE (SWAPPABLE BONE)",
+                            color = MikuCyan,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Select the active audio decoding pipeline. DirectPCM routes straight to the dual CS43198 DACs, while LibVLC provides the alternate OpenSL ES engine.",
+                            color = MikuTextSecondary,
+                            fontSize = 10.sp,
+                            lineHeight = 13.5.sp
+                        )
+                        Spacer(Modifier.height(8.dp))
+
+                        // Option 1: DirectPCM (ExoPlayer)
+                        val isExo = audioEngine == "exoplayer"
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isExo) Color(0x3300E5FF) else Color.Transparent)
+                                .clickable {
+                                    audioEngine = "exoplayer"
+                                    PlayerPreferences.saveAudioEngine(ctx, "exoplayer")
+                                    android.widget.Toast.makeText(ctx, "⚡ DirectPCM Engine Active", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isExo,
+                                onClick = {
+                                    audioEngine = "exoplayer"
+                                    PlayerPreferences.saveAudioEngine(ctx, "exoplayer")
+                                    android.widget.Toast.makeText(ctx, "⚡ DirectPCM Engine Active", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                colors = RadioButtonDefaults.colors(selectedColor = MikuCyan, unselectedColor = Color.Gray)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Column {
+                                Text("DirectPCM Bit-Perfect DTA (ExoPlayer)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Direct hardware sink to dual CS43198 DACs (Bit-perfect, lowest latency)", color = MikuTextSecondary, fontSize = 10.sp, lineHeight = 13.sp)
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+
+                        // Option 2: LibVLC Engine
+                        val isVlc = audioEngine == "vlc"
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isVlc) Color(0x3300E5FF) else Color.Transparent)
+                                .clickable {
+                                    audioEngine = "vlc"
+                                    PlayerPreferences.saveAudioEngine(ctx, "vlc")
+                                    android.widget.Toast.makeText(ctx, "⚡ LibVLC Engine Active", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                .padding(horizontal = 8.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = isVlc,
+                                onClick = {
+                                    audioEngine = "vlc"
+                                    PlayerPreferences.saveAudioEngine(ctx, "vlc")
+                                    android.widget.Toast.makeText(ctx, "⚡ LibVLC Engine Active", android.widget.Toast.LENGTH_SHORT).show()
+                                },
+                                colors = RadioButtonDefaults.colors(selectedColor = MikuCyan, unselectedColor = Color.Gray)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Column {
+                                Text("LibVLC Engine (OpenSL ES + SoX)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Modular OpenSL ES backend with high-precision soxr resampler", color = MikuTextSecondary, fontSize = 10.sp, lineHeight = 13.sp)
+                            }
+                        }
+                    }
+                }
+
+                // ============================================================
                 // SECTION 2: BIT-PERFECT UAC2 ASYNCHRONOUS USB DAC
                 // ============================================================
                 item {

@@ -178,8 +178,16 @@ fun MikuFsIngestObservatoryModal(
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text(
-                                        if (ingestState.isScanning) "ACTIVE MEDIA SCAN" else "INDEXED & BIT-PERFECT",
-                                        color = if (ingestState.isScanning) Color(0xFFFFD54F) else Color(0xFF00FF88),
+                                        when {
+                                            ingestState.isScanning -> "ACTIVE MEDIA SCAN"
+                                            !ingestState.engineEnabled -> "ENGINE OFF · LOCAL SD ONLY"
+                                            else -> "INDEXED & BIT-PERFECT"
+                                        },
+                                        color = when {
+                                            ingestState.isScanning -> Color(0xFFFFD54F)
+                                            !ingestState.engineEnabled -> MikuMuted
+                                            else -> Color(0xFF00FF88)
+                                        },
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Black,
                                         fontFamily = AudiowideFont,
@@ -217,6 +225,43 @@ fun MikuFsIngestObservatoryModal(
                                 )
                             }
 
+                            Spacer(Modifier.height(10.dp))
+
+                            // Ingest engine master switch — mirrors the INGRESS ENGINE shade tile.
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        "INGRESS ENGINE (RSYNC)",
+                                        color = if (ingestState.engineEnabled) Color(0xFF00FF88) else MikuMuted,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Black,
+                                        fontFamily = AudiowideFont
+                                    )
+                                    Text(
+                                        if (ingestState.engineEnabled) "Network ingest armed · auto-resumes when the server is reachable"
+                                        else "Off · only local SD card scan updates run",
+                                        color = MikuMuted,
+                                        fontSize = 11.sp,
+                                        lineHeight = 14.sp
+                                    )
+                                }
+                                Spacer(Modifier.width(8.dp))
+                                Switch(
+                                    checked = ingestState.engineEnabled,
+                                    onCheckedChange = { MikuIngestEngine.setEngineEnabled(ctx, it) },
+                                    colors = SwitchDefaults.colors(
+                                        checkedThumbColor = Color(0xFF031410),
+                                        checkedTrackColor = Color(0xFF00FF88),
+                                        uncheckedThumbColor = MikuMuted,
+                                        uncheckedTrackColor = Color(0xFF0B2228)
+                                    )
+                                )
+                            }
+
                             Spacer(Modifier.height(12.dp))
 
                             // Action Buttons (Scaled for Easy Tapping)
@@ -225,7 +270,7 @@ fun MikuFsIngestObservatoryModal(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Button(
-                                    onClick = { MikuIngestEngine.triggerRescan(ctx) },
+                                    onClick = { MikuIngestEngine.triggerForceScan(ctx) },
                                     enabled = !ingestState.isScanning,
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
                                     shape = RoundedCornerShape(12.dp),
@@ -237,13 +282,13 @@ fun MikuFsIngestObservatoryModal(
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(Icons.Default.Refresh, contentDescription = null, tint = Color(0xFF030D10), modifier = Modifier.size(18.dp))
                                         Spacer(Modifier.width(6.dp))
-                                        Text("Force Rescan", color = Color(0xFF030D10), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                        Text("FORCE SCAN", color = Color(0xFF030D10), fontSize = 13.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
 
                                 Button(
                                     onClick = { MikuIngestEngine.triggerRsyncSync(ctx) },
-                                    enabled = !ingestState.isScanning,
+                                    enabled = !ingestState.isScanning && ingestState.engineEnabled,
                                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C4DFF)),
                                     shape = RoundedCornerShape(12.dp),
                                     modifier = Modifier

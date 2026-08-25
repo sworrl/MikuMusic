@@ -1,6 +1,8 @@
 package com.miku.launcher.ingest
 
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import android.database.ContentObserver
 import android.media.MediaScannerConnection
 import android.net.ConnectivityManager
@@ -57,7 +59,9 @@ data class MikuIngestState(
     val statusMessage: String = "Idle · Ingested",
     val lastScanTime: String = "Never",
     val logMessages: List<String> = emptyList(),
-    val isInitialized: Boolean = false
+    val isInitialized: Boolean = false,
+    /** Network (rsync) ingest engine switch — OFF by default; local SD scans always work. */
+    val engineEnabled: Boolean = false
 )
 
 object MikuIngestEngine {
@@ -70,12 +74,65 @@ object MikuIngestEngine {
     private val recentLogs = ConcurrentLinkedQueue<String>()
     private var observerRegistered = false
     private var networkCallbackRegistered = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var watchdogJob: Job? = null
+
+    /** Settings.Global switch for the network/rsync ingest engine. 0 (default) = OFF: only local SD scans. */
+    const val GLOBAL_ENABLED_KEY = "miku_ingest_enabled"
+    private const val OFF_MESSAGE = "Ingest engine OFF · local SD scan updates only"
+
+    fun isEngineEnabled(context: Context): Boolean = try {
+        Settings.Global.getInt(context.contentResolver, GLOBAL_ENABLED_KEY, 0) == 1
+    } catch (_: Throwable) { false }
+
+    /** Flip the engine live: persists the Global, then arms or tears down the network watchdog. */
+    fun setEngineEnabled(context: Context, enabled: Boolean) {
+        val appContext = context.applicationContext
+        scope.launch {
+            val v = if (enabled) 1 else 0
+            val ok = runCatching { Settings.Global.putInt(appContext.contentResolver, GLOBAL_ENABLED_KEY, v) }.getOrDefault(false)
+            if (!ok) runCatching { RootShell.execFast("settings put global $GLOBAL_ENABLED_KEY $v") }
+            _state.value = _state.value.copy(
+                engineEnabled = enabled,
+                isServerReachable = false,
+                statusMessage = if (enabled) "Ingest engine ON · probing rsync server..." else OFF_MESSAGE
+            )
+            if (enabled) {
+                log("Ingest engine ENABLED · network rsync ingest armed")
+                setupNetworkWatchdog(appContext)
+                probeAndAutoResume(appContext)
+            } else {
+                log("Ingest engine DISABLED · local SD scan updates only")
+                teardownNetworkWatchdog(appContext)
+            }
+        }
+    }
+
+    private fun teardownNetworkWatchdog(context: Context) {
+        watchdogJob?.cancel(); watchdogJob = null
+        val cb = networkCallback
+        if (cb != null) {
+            try {
+                (context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(cb)
+            } catch (_: Throwable) {}
+        }
+        networkCallback = null
+        networkCallbackRegistered = false
+    }
 
     fun init(context: Context) {
         val appContext = context.applicationContext
+        val enabled = isEngineEnabled(appContext)
+        if (!_state.value.isInitialized) {
+            _state.value = _state.value.copy(
+                engineEnabled = enabled,
+                statusMessage = if (enabled) _state.value.statusMessage else OFF_MESSAGE
+            )
+        } else if (_state.value.engineEnabled != enabled) {
+            _state.value = _state.value.copy(engineEnabled = enabled)
+        }
         refresh(appContext)
-        setupNetworkWatchdog(appContext)
+        if (enabled) setupNetworkWatchdog(appContext)
 
         if (!observerRegistered) {
             observerRegistered = true
@@ -104,7 +161,7 @@ object MikuIngestEngine {
             .build()
 
         try {
-            cm.registerNetworkCallback(request, object : ConnectivityManager.NetworkCallback() {
+            val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
                     log("Network connection restored · Probing Ingest Server...")
                     _state.value = _state.value.copy(isNetworkOnline = true)
@@ -119,7 +176,9 @@ object MikuIngestEngine {
                         statusMessage = "Network Offline · Waiting for Wi-Fi reconnect..."
                     )
                 }
-            })
+            }
+            networkCallback = cb
+            cm.registerNetworkCallback(request, cb)
         } catch (_: Throwable) {}
 
         // Periodic background reachability watchdog (every 45 seconds)
@@ -133,6 +192,7 @@ object MikuIngestEngine {
     }
 
     private fun probeAndAutoResume(context: Context) {
+        if (!isEngineEnabled(context)) return
         scope.launch {
             val syncHost = MikuIngestConfig.syncHost(context)
             val rsyncPort = MikuIngestConfig.rsyncPort(context)
@@ -169,10 +229,15 @@ object MikuIngestEngine {
         _state.value = _state.value.copy(logMessages = recentLogs.toList())
     }
 
+    private var refreshDebounceJob: Job? = null
+
     fun refresh(context: Context) {
-        scope.launch {
+        val appContext = context.applicationContext
+        refreshDebounceJob?.cancel()
+        refreshDebounceJob = scope.launch {
+            delay(350)
             try {
-                val cr = context.contentResolver
+                val cr = appContext.contentResolver
 
                 // 1. Audio Library Taxonomy Breakdown
                 var total = 0
@@ -191,44 +256,84 @@ object MikuIngestEngine {
                     MediaStore.Audio.Media.DATA,
                     MediaStore.Audio.Media.MIME_TYPE,
                     MediaStore.Audio.Media.ARTIST,
-                    MediaStore.Audio.Media.ALBUM,
-                    MediaStore.Audio.Media.IS_MUSIC
+                    MediaStore.Audio.Media.ALBUM
                 )
-                val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
 
-                cr.query(
-                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                    projection,
-                    selection,
-                    null,
-                    null
-                )?.use { cursor ->
-                    val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
-                    val mimeCol = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
-                    val artistCol = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
-                    val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
+                try {
+                    cr.query(
+                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+                        projection,
+                        null,
+                        null,
+                        null
+                    )?.use { cursor ->
+                        val dataCol = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                        val mimeCol = cursor.getColumnIndex(MediaStore.Audio.Media.MIME_TYPE)
+                        val artistCol = cursor.getColumnIndex(MediaStore.Audio.Media.ARTIST)
+                        val albumCol = cursor.getColumnIndex(MediaStore.Audio.Media.ALBUM)
 
-                    while (cursor.moveToNext()) {
-                        total++
-                        val path = if (dataCol >= 0) cursor.getString(dataCol) ?: "" else ""
-                        val mime = if (mimeCol >= 0) cursor.getString(mimeCol) ?: "" else ""
-                        val artist = if (artistCol >= 0) cursor.getString(artistCol) ?: "" else ""
-                        val album = if (albumCol >= 0) cursor.getString(albumCol) ?: "" else ""
+                        while (cursor.moveToNext()) {
+                            total++
+                            val path = if (dataCol >= 0) cursor.getString(dataCol) ?: "" else ""
+                            val mime = if (mimeCol >= 0) cursor.getString(mimeCol) ?: "" else ""
+                            val artist = if (artistCol >= 0) cursor.getString(artistCol) ?: "" else ""
+                            val album = if (albumCol >= 0) cursor.getString(albumCol) ?: "" else ""
 
-                        if (artist.isNotBlank() && artist != "<unknown>") artistSet.add(artist)
-                        if (album.isNotBlank() && album != "<unknown>") albumSet.add(album)
+                            if (artist.isNotBlank() && artist != "<unknown>") artistSet.add(artist)
+                            if (album.isNotBlank() && album != "<unknown>") albumSet.add(album)
 
-                        val lowerPath = path.lowercase(Locale.ROOT)
-                        val lowerMime = mime.lowercase(Locale.ROOT)
+                            val lowerPath = path.lowercase(Locale.ROOT)
+                            val lowerMime = mime.lowercase(Locale.ROOT)
 
-                        when {
-                            lowerMime.contains("flac") || lowerPath.endsWith(".flac") -> flac++
-                            lowerPath.endsWith(".dsf") || lowerPath.endsWith(".dff") || lowerPath.endsWith(".iso") -> dsd++
-                            lowerMime.contains("wav") || lowerPath.endsWith(".wav") -> wav++
-                            lowerPath.endsWith(".alac") || lowerPath.endsWith(".m4a") -> alac++
-                            lowerMime.contains("mpeg") || lowerMime.contains("mp3") || lowerPath.endsWith(".mp3") -> mp3++
-                            lowerMime.contains("aac") || lowerPath.endsWith(".aac") -> aac++
-                            else -> other++
+                            when {
+                                lowerMime.contains("flac") || lowerPath.endsWith(".flac") -> flac++
+                                lowerPath.endsWith(".dsf") || lowerPath.endsWith(".dff") || lowerPath.endsWith(".iso") -> dsd++
+                                lowerMime.contains("wav") || lowerPath.endsWith(".wav") -> wav++
+                                lowerPath.endsWith(".alac") || lowerPath.endsWith(".m4a") -> alac++
+                                lowerMime.contains("mpeg") || lowerMime.contains("mp3") || lowerPath.endsWith(".mp3") -> mp3++
+                                lowerMime.contains("aac") || lowerPath.endsWith(".aac") -> aac++
+                                else -> other++
+                            }
+                        }
+                    }
+                } catch (_: Throwable) {}
+
+                // Fallback direct scan if MediaStore is empty or still indexing
+                if (total == 0) {
+                    val searchDirs = mutableListOf(
+                        File("/storage/emulated/0/Music"),
+                        File("/storage/emulated/0/Download"),
+                        File("/sdcard/Music")
+                    )
+                    val extStorage = File("/storage")
+                    if (extStorage.exists() && extStorage.isDirectory) {
+                        extStorage.listFiles()?.forEach { f ->
+                            if (f.isDirectory && f.name != "emulated" && f.name != "self") {
+                                searchDirs.add(File(f, "Music"))
+                                searchDirs.add(f)
+                            }
+                        }
+                    }
+                    val exts = setOf("flac", "dsf", "dff", "iso", "wav", "m4a", "alac", "mp3", "aac", "ogg", "opus", "ape")
+                    searchDirs.forEach { dir ->
+                        if (dir.exists() && dir.canRead()) {
+                            try {
+                                dir.walkTopDown().maxDepth(6).forEach { f ->
+                                    if (f.isFile && exts.contains(f.extension.lowercase(Locale.ROOT))) {
+                                        total++
+                                        val lower = f.extension.lowercase(Locale.ROOT)
+                                        when {
+                                            lower == "flac" -> flac++
+                                            lower == "dsf" || lower == "dff" || lower == "iso" -> dsd++
+                                            lower == "wav" -> wav++
+                                            lower == "alac" || lower == "m4a" -> alac++
+                                            lower == "mp3" -> mp3++
+                                            lower == "aac" -> aac++
+                                            else -> other++
+                                        }
+                                    }
+                                }
+                            } catch (_: Throwable) {}
                         }
                     }
                 }
@@ -378,6 +483,7 @@ object MikuIngestEngine {
 
             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             log("Completed ingestion scan: ${audioFiles.size} files indexed")
+            nudgeMikuMusicLibrary(appContext)
 
             _state.value = _state.value.copy(
                 isScanning = false,
@@ -391,8 +497,35 @@ object MikuIngestEngine {
         }
     }
 
+    /**
+     * FORCE SCAN — purely local: MediaScanner over every mounted volume (SD card + internal),
+     * plus an explicit nudge to Miku Music's library engine so its own index catches up.
+     * Never touches the network; works with the ingest engine OFF.
+     */
+    fun triggerForceScan(context: Context) {
+        val appContext = context.applicationContext
+        log("FORCE SCAN · local SD + internal MediaScanner, then Miku Music library rescan")
+        nudgeMikuMusicLibrary(appContext)
+        triggerRescan(appContext)
+    }
+
+    private fun nudgeMikuMusicLibrary(appContext: Context) {
+        try {
+            appContext.sendBroadcast(
+                Intent("com.miku.player.action.FORCE_LIBRARY_SCAN")
+                    .setClassName("com.miku.player", "com.miku.player.MikuPrefsReceiver")
+                    .putExtra("source", "launcher_force_scan")
+            )
+        } catch (_: Throwable) {}
+    }
+
     fun triggerRsyncSync(context: Context) {
         val appContext = context.applicationContext
+        if (!isEngineEnabled(appContext)) {
+            log("Rsync ingest requested but the ingest engine is OFF · enable it from the shade tile first")
+            _state.value = _state.value.copy(statusMessage = OFF_MESSAGE)
+            return
+        }
         scope.launch {
             val syncHost = MikuIngestConfig.syncHost(appContext)
             val rsyncPort = MikuIngestConfig.rsyncPort(appContext)

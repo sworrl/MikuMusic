@@ -255,12 +255,8 @@ class MikuLauncherActivity : ComponentActivity() {
                 android.util.Log.e("MikuLauncher", "Weather service start failed", t)
             }
 
-            // Initialize OS-Wide Gesture Navigation Overlay (Protected)
-            try {
-                com.miku.launcher.gesture.MikuSystemGestureService.start(applicationContext)
-            } catch (t: Throwable) {
-                android.util.Log.e("MikuLauncher", "Gesture service start failed", t)
-            }
+            // OS-wide gesture navigation now lives in com.miku.systemui (MikuNotificationShadeService,
+            // an accessibility service auto-enabled at first boot above) — no in-launcher overlay.
 
             // Initialize OS-Level Real-Time BPM Engine & Pulsar Light Link
             try {
@@ -1193,19 +1189,19 @@ fun MikuLauncherScreen() {
                             val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            if (intent != null) ctx.startActivity(intent)
+                            if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                         },
                         onOpenPulsarSettings = {
                             val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            if (intent != null) ctx.startActivity(intent)
+                            if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                         },
                         onOpenFnSettings = {
                             val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            if (intent != null) ctx.startActivity(intent)
+                            if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                         },
                         onOpenMonitor = { }
                     )
@@ -1361,18 +1357,18 @@ fun MikuLauncherScreen() {
                                         component = ComponentName("com.miku.player", "com.miku.player.radio.MikuFMRadioActivity")
                                         addCategory(Intent.CATEGORY_LAUNCHER)
                                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    })
+                                    }, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
                                     launched = true
                                 } catch (_: Throwable) {}
                                 if (!launched) {
                                     val caf = ctx.packageManager.getLaunchIntentForPackage("com.caf.fmradio")
                                         ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                                    if (caf != null) try { ctx.startActivity(caf); launched = true } catch (_: Throwable) {}
+                                    if (caf != null) try { ctx.startActivity(caf, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN)); launched = true } catch (_: Throwable) {}
                                 }
                                 if (!launched) {
                                     try {
                                         ctx.startActivity(Intent("com.caf.fmradio.FMRADIO_ACTIVITY")
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
                                     } catch (_: Throwable) {}
                                 }
                             }
@@ -1389,7 +1385,7 @@ fun MikuLauncherScreen() {
                                 val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
-                                if (intent != null) ctx.startActivity(intent)
+                                if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                             }
                         )
 
@@ -1512,14 +1508,14 @@ fun MikuLauncherScreen() {
                     val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    if (intent != null) ctx.startActivity(intent)
+                    if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                 },
                 onOpenAudioSettings = {
                     isCyberQuickSettingsOpen = false
                     val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    if (intent != null) ctx.startActivity(intent)
+                    if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                 },
                 batteryPct = batteryPct,
                 isCharging = isCharging,
@@ -1722,7 +1718,7 @@ fun MikuLauncherScreen() {
                             data = Uri.parse("package:${app.packageName}")
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        ctx.startActivity(intent)
+                        ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.MODAL))
                     } catch (_: Throwable) {}
                 },
                 onUninstall = {
@@ -1731,7 +1727,7 @@ fun MikuLauncherScreen() {
                             data = Uri.parse("package:${app.packageName}")
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         }
-                        ctx.startActivity(intent)
+                        ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.MODAL))
                     } catch (_: Throwable) {}
                 },
                 onTogglePinDesktop = {
@@ -1754,7 +1750,7 @@ fun MikuLauncherScreen() {
                             val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            if (intent != null) ctx.startActivity(intent)
+                            if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                         }
                     }
                 },
@@ -1762,7 +1758,7 @@ fun MikuLauncherScreen() {
                     val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    if (intent != null) ctx.startActivity(intent)
+                    if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                 },
                 onDismiss = { isDesktopContextMenuOpen = false }
             )
@@ -2916,7 +2912,7 @@ fun launchClockApp(ctx: Context) {
         }
         if (intent != null) {
             try {
-                ctx.startActivity(intent)
+                ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
                 return
             } catch (_: Throwable) {}
         }
@@ -2926,7 +2922,7 @@ fun launchClockApp(ctx: Context) {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         if (alarmIntent.resolveActivity(pm) != null) {
-            ctx.startActivity(alarmIntent)
+            ctx.startActivity(alarmIntent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
             return
         }
     } catch (_: Throwable) {}
@@ -2941,7 +2937,7 @@ fun launchApp(ctx: Context, app: InstalledApp) {
                     setPackage("com.android.settings")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
                 }
-            ctx.startActivity(legacyIntent)
+            ctx.startActivity(legacyIntent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
             return
         }
         if (app.activityName.contains("Settings", ignoreCase = true) || app.label.contains("Miku Settings", ignoreCase = true) || app.packageName == "com.miku.settings") {
@@ -2949,7 +2945,7 @@ fun launchApp(ctx: Context, app: InstalledApp) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             }
             if (intent != null) {
-                ctx.startActivity(intent)
+                ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                 return
             }
         }
@@ -2959,7 +2955,7 @@ fun launchApp(ctx: Context, app: InstalledApp) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             }
             if (intent != null) {
-                ctx.startActivity(intent)
+                ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
                 return
             }
         }
@@ -2975,8 +2971,8 @@ fun launchApp(ctx: Context, app: InstalledApp) {
             }
         }
         if (intent != null) {
-            val opts = android.app.ActivityOptions.makeCustomAnimation(ctx, android.R.anim.fade_in, android.R.anim.fade_out)
-            ctx.startActivity(intent, opts.toBundle())
+            val opts = MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN)
+            ctx.startActivity(intent, opts)
         }
     } catch (_: Throwable) {}
 }
@@ -3149,12 +3145,12 @@ fun bringTaskToFront(ctx: Context, task: RecentTaskItem) {
     // 3. Fallback launch via Intent
     if (task.baseIntent != null) {
         task.baseIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-        try { ctx.startActivity(task.baseIntent) } catch (_: Throwable) {}
+        try { ctx.startActivity(task.baseIntent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN)) } catch (_: Throwable) {}
     } else {
         val launchIntent = ctx.packageManager.getLaunchIntentForPackage(task.packageName)
         if (launchIntent != null) {
             launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            try { ctx.startActivity(launchIntent) } catch (_: Throwable) {}
+            try { ctx.startActivity(launchIntent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN)) } catch (_: Throwable) {}
         }
     }
 }
@@ -3182,7 +3178,7 @@ fun expandNotificationShade(ctx: Context) {
         val intent = Intent().setClassName("com.miku.systemui", "com.miku.systemui.MikuShadeActivity").apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        ctx.startActivity(intent)
+        ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.MODAL))
     } catch (_: Throwable) {
         try {
             val sbservice = ctx.getSystemService("statusbar")
@@ -4217,14 +4213,16 @@ fun MikuQuantumBatteryBadge(
 @Composable
 fun CyberBespokeBadge(
     onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
     accentColor: Color,
     shape: Shape = CutCornerShape(5.dp),
     gradient: List<Color> = listOf(Color(0xEE0A222C), Color(0xFF041218)),
+    borderAlphaBase: Float = 0.95f,
     content: @Composable RowScope.() -> Unit
 ) {
     val interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
     Box(
-        modifier = Modifier
+        modifier = modifier
             .height(24.dp)
             .mikuPressScale(
                 pressedScale = 0.90f,
@@ -4259,9 +4257,9 @@ fun CyberBespokeBadge(
                         1.dp,
                         Brush.linearGradient(
                             listOf(
-                                accentColor.copy(alpha = 0.95f),
+                                accentColor.copy(alpha = borderAlphaBase),
                                 CyberGlassBorder.copy(alpha = 0.35f),
-                                accentColor.copy(alpha = 0.7f)
+                                accentColor.copy(alpha = (borderAlphaBase * 0.75f).coerceIn(0f, 1f))
                             )
                         )
                     ),
@@ -5084,7 +5082,7 @@ fun CyberNotificationShadeModal(
                             .background(if (isWifiConnected) MikuCyan.copy(alpha = 0.2f) else Color(0xFF081820))
                             .border(1.dp, if (isWifiConnected) MikuCyan else Color(0xFF1E3A45), RoundedCornerShape(14.dp))
                             .clickable {
-                                try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS)) } catch (_: Throwable) {}
+                                try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
                             }
                             .padding(10.dp)
                     ) {
@@ -5116,9 +5114,9 @@ fun CyberNotificationShadeModal(
                                         putExtra("extra_section", "bluetooth")
                                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
                                     }
-                                    ctx.startActivity(intent)
+                                    ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                                 } catch (_: Throwable) {
-                                    try { ctx.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }) } catch (_: Throwable) {}
+                                    try { ctx.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
                                 }
                             }
                             .padding(10.dp)
@@ -5367,7 +5365,7 @@ fun CyberNotificationShadeModal(
                                 val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 }
-                                if (intent != null) ctx.startActivity(intent)
+                                if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                             }
                         )
                     }
@@ -5410,7 +5408,25 @@ fun CyberNotificationShadeModal(
                                 )
                             }
                         )
-                        Spacer(Modifier.weight(1f))
+                        // Ingress engine (network rsync ingest) — OFF by default; while off only local
+                        // SD-card scan updates run. State = Settings.Global "miku_ingest_enabled";
+                        // the FS & Ingestion modal shows the same switch and reflects this live.
+                        var ingestOn by remember {
+                            mutableStateOf(com.miku.launcher.ingest.MikuIngestEngine.isEngineEnabled(ctx))
+                        }
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "INGRESS ENGINE",
+                            subtitle = if (ingestOn) "RSYNC INGEST ON" else "LOCAL SD ONLY",
+                            icon = Icons.Default.Sync,
+                            accentColor = if (ingestOn) Color(0xFF00E676) else MikuNeonPink,
+                            isActive = ingestOn,
+                            onClick = {
+                                val next = !ingestOn
+                                ingestOn = next
+                                com.miku.launcher.ingest.MikuIngestEngine.setEngineEnabled(ctx, next)
+                            }
+                        )
                     }
                 }
 

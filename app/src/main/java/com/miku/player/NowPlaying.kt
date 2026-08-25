@@ -945,6 +945,7 @@ fun NowPlayingScreen(
 
 @Composable
 fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
+    androidx.activity.compose.BackHandler(onBack = onClose)
     val ip = remember {
         try {
             val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager

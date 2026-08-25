@@ -341,6 +341,26 @@ fun applyDateTimeSettings(ctx: Context, timeZone: String, is24Hour: Boolean) {
     } catch (_: Throwable) {}
 }
 
+/** Applies high-sensitivity Screen Protector Mode for tempered glass screen protectors. */
+fun applyScreenProtectorMode(ctx: Context, enabled: Boolean) {
+    val cr = ctx.contentResolver
+    val v = if (enabled) 1 else 0
+    try {
+        Settings.Secure.putInt(cr, "touch_sensitivity_enabled", v)
+        Settings.System.putInt(cr, "touch_sensitivity_enabled", v)
+        Settings.System.putInt(cr, "screen_protector_mode", v)
+    } catch (_: Throwable) {}
+    if (RootShell.isAvailable()) {
+        RootShell.exec(
+            "settings put secure touch_sensitivity_enabled $v; " +
+            "settings put system touch_sensitivity_enabled $v; " +
+            "settings put system screen_protector_mode $v; " +
+            "setprop persist.sys.screen_protector $v; " +
+            "setprop persist.sys.touch_sensitivity $v"
+        )
+    }
+}
+
 @Composable
 fun MikuOnboardingWizardModal(
     prefs: SharedPreferences,
@@ -380,6 +400,7 @@ fun MikuOnboardingWizardModal(
     val autoDetectedZone = remember { detectSystemTimeZone(ctx) }
     var selectedTimeZone by remember { mutableStateOf(autoDetectedZone) }
     var is24Hour by remember { mutableStateOf(true) } // Default to 24h as requested
+    var isScreenProtectorMode by remember { mutableStateOf(false) } // Default OFF for OS, asked during onboarding
     
     val initialSelected = remember { AllProvisionableApps.filter { it.isDefaultSelected }.map { it.id }.toSet() }
     var selectedApps by remember { mutableStateOf(initialSelected) }
@@ -466,10 +487,12 @@ fun MikuOnboardingWizardModal(
                             Button(
                                 onClick = {
                                     applyDateTimeSettings(ctx, selectedTimeZone, is24Hour)
+                                    applyScreenProtectorMode(ctx, isScreenProtectorMode)
                                     prefs.edit()
                                         .putString("language", selectedLanguage)
                                         .putString("timezone", selectedTimeZone)
                                         .putBoolean("is_24_hour", is24Hour)
+                                        .putBoolean("screen_protector_mode", isScreenProtectorMode)
                                         .putBoolean("onboarding_completed", true)
                                         .apply()
                                     onFinish()
@@ -507,6 +530,8 @@ fun MikuOnboardingWizardModal(
                     onSelectTimeZone = { selectedTimeZone = it },
                     is24Hour = is24Hour,
                     on24HourChange = { is24Hour = it },
+                    isScreenProtectorMode = isScreenProtectorMode,
+                    onScreenProtectorModeChange = { isScreenProtectorMode = it },
                     autoDetectedZone = autoDetectedZone,
                     onAutoDetectClick = { selectedTimeZone = autoDetectedZone }
                 )
@@ -523,6 +548,7 @@ fun MikuOnboardingWizardModal(
                     lang = selectedLanguage,
                     timeZone = selectedTimeZone,
                     is24Hour = is24Hour,
+                    isScreenProtectorMode = isScreenProtectorMode,
                     appsCount = selectedApps.size
                 )
             }
@@ -704,7 +730,7 @@ fun LanguageSelectionScreen(
 }
 
 // ==========================================
-// 2. DEDICATED DATE, TIME & 24H REGIONAL SCREEN
+// 2. DEDICATED DATE, TIME & REGIONAL SCREEN
 // ==========================================
 @Composable
 fun DateTimeSelectionScreen(
@@ -712,6 +738,8 @@ fun DateTimeSelectionScreen(
     onSelectTimeZone: (String) -> Unit,
     is24Hour: Boolean,
     on24HourChange: (Boolean) -> Unit,
+    isScreenProtectorMode: Boolean,
+    onScreenProtectorModeChange: (Boolean) -> Unit,
     autoDetectedZone: String,
     onAutoDetectClick: () -> Unit
 ) {
@@ -750,19 +778,19 @@ fun DateTimeSelectionScreen(
 
     Column(Modifier.fillMaxSize()) {
         Text(
-            "REGIONAL DATE & TIME",
+            "REGIONAL DATE & HARDWARE",
             color = MikuOnboardingTeal,
             fontSize = 20.sp,
             fontWeight = FontWeight.Black,
             letterSpacing = 1.sp
         )
         Text(
-            "Configure 24-hour military clock & auto-detect location time zone.",
+            "Configure 24-hour military clock & screen protector touch boost.",
             color = Color.White.copy(alpha = 0.75f),
             fontSize = 13.sp
         )
 
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
 
         // Digital Clock Preview Banner
         Row(
@@ -771,11 +799,11 @@ fun DateTimeSelectionScreen(
                 .clip(RoundedCornerShape(12.dp))
                 .background(MikuOnboardingCard)
                 .border(1.dp, MikuOnboardingBorder.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                .padding(14.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(Icons.Default.AccessTime, contentDescription = "Clock", tint = MikuOnboardingTeal, modifier = Modifier.size(26.dp))
-            Spacer(Modifier.width(12.dp))
+            Icon(Icons.Default.AccessTime, contentDescription = "Clock", tint = MikuOnboardingTeal, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("LIVE CLOCK PREVIEW", color = MikuOnboardingTeal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
@@ -790,11 +818,11 @@ fun DateTimeSelectionScreen(
                     }
                 }
                 Spacer(Modifier.height(2.dp))
-                Text(liveTime, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Black)
+                Text(liveTime, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Black)
             }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
 
         // 24-Hour Time Format Selector (Default: ON)
         Row(
@@ -803,7 +831,7 @@ fun DateTimeSelectionScreen(
                 .clip(RoundedCornerShape(12.dp))
                 .background(Color.White.copy(alpha = 0.04f))
                 .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
-                .padding(4.dp),
+                .padding(3.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             // 24-Hour Button
@@ -813,18 +841,18 @@ fun DateTimeSelectionScreen(
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (is24Hour) MikuOnboardingTeal else Color.Transparent)
                     .clickable { on24HourChange(true) }
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = 7.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (is24Hour) {
-                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = Color.Black, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = Color.Black, modifier = Modifier.size(13.dp))
+                        Spacer(Modifier.width(4.dp))
                     }
                     Text(
                         "24-HOUR (18:50)",
                         color = if (is24Hour) Color.Black else Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
+                        fontSize = 11.5.sp,
                         fontWeight = if (is24Hour) FontWeight.Black else FontWeight.Normal
                     )
                 }
@@ -837,22 +865,94 @@ fun DateTimeSelectionScreen(
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (!is24Hour) MikuOnboardingTeal else Color.Transparent)
                     .clickable { on24HourChange(false) }
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = 7.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (!is24Hour) {
-                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = Color.Black, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.width(6.dp))
+                        Icon(Icons.Default.Check, contentDescription = "Selected", tint = Color.Black, modifier = Modifier.size(13.dp))
+                        Spacer(Modifier.width(4.dp))
                     }
                     Text(
                         "12-HOUR (6:50 PM)",
                         color = if (!is24Hour) Color.Black else Color.White.copy(alpha = 0.7f),
-                        fontSize = 12.sp,
+                        fontSize = 11.5.sp,
                         fontWeight = if (!is24Hour) FontWeight.Black else FontWeight.Normal
                     )
                 }
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        // Glass Screen Protector Mode Card
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(if (isScreenProtectorMode) MikuOnboardingCardSelected else MikuOnboardingCard)
+                .border(
+                    1.2.dp,
+                    if (isScreenProtectorMode) MikuOnboardingTeal else MikuOnboardingBorder.copy(alpha = 0.35f),
+                    RoundedCornerShape(12.dp)
+                )
+                .clickable { onScreenProtectorModeChange(!isScreenProtectorMode) }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isScreenProtectorMode) MikuOnboardingTeal.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.06f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.TouchApp,
+                    contentDescription = "Screen Protector",
+                    tint = if (isScreenProtectorMode) MikuOnboardingTeal else Color.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "SCREEN PROTECTOR MODE",
+                        color = if (isScreenProtectorMode) MikuOnboardingTeal else Color.White,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (isScreenProtectorMode) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(MikuOnboardingTeal.copy(alpha = 0.2f))
+                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                        ) {
+                            Text("TOUCH BOOST", color = MikuOnboardingTeal, fontSize = 8.5.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(1.dp))
+                Text(
+                    "Increase touch sensitivity for tempered glass protectors",
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 9.5.sp
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+            Switch(
+                checked = isScreenProtectorMode,
+                onCheckedChange = { onScreenProtectorModeChange(it) },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.Black,
+                    checkedTrackColor = MikuOnboardingTeal,
+                    uncheckedThumbColor = Color.White.copy(alpha = 0.6f),
+                    uncheckedTrackColor = Color.White.copy(alpha = 0.1f)
+                )
+            )
         }
 
         Spacer(Modifier.height(10.dp))
@@ -1318,6 +1418,7 @@ fun CompletionScreen(
     lang: String,
     timeZone: String,
     is24Hour: Boolean,
+    isScreenProtectorMode: Boolean,
     appsCount: Int
 ) {
     Column(
@@ -1381,6 +1482,7 @@ fun CompletionScreen(
             SummaryItem(Icons.Default.Language, "Language", SystemLanguages.firstOrNull { it.code == lang }?.nativeName ?: "English")
             SummaryItem(Icons.Default.AccessTime, "Time Zone", SupportedTimeZones.firstOrNull { it.id == timeZone }?.name ?: timeZone)
             SummaryItem(Icons.Default.Schedule, "Time Format", if (is24Hour) "24-Hour (Military)" else "12-Hour (AM/PM)")
+            SummaryItem(Icons.Default.TouchApp, "Screen Protector", if (isScreenProtectorMode) "High Sensitivity Enabled" else "Standard")
             SummaryItem(Icons.Default.Apps, "Installed Apps", "$appsCount Apps Selected")
             SummaryItem(Icons.Default.Keyboard, "Keyboard (IME)", "AOSP LatinIME (Cyber Themed)")
             SummaryItem(Icons.Default.GraphicEq, "Audio Engine", "Dual CS43198 Direct ALSA")

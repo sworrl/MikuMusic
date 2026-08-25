@@ -53,79 +53,46 @@ fun MikuIngestionBadge(
     val isScanning = ingestState.isScanning
     val accentColor = if (isScanning) Color(0xFFFFD54F) else Color(0xFF00FF88) // Cyber Emerald / Gold
 
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
+    val badgeFontSize = (7.8f / fontScale * effectiveScale).sp
+
     val badgeShape = remember { CutCornerShape(4.dp) }
 
-    Box(
-        modifier = modifier
-            .height(24.dp)
-            .clip(badgeShape)
-            .background(
-                Brush.verticalGradient(
-                    listOf(
-                        Color.White.copy(alpha = if (isScanning) 0.22f else 0.12f),
-                        Color.Transparent,
-                        Color.Black.copy(alpha = 0.6f)
-                    )
-                )
-            )
-            .clickable { onClick() }
+    CyberBespokeBadge(
+        onClick = onClick,
+        modifier = modifier,
+        accentColor = accentColor,
+        shape = badgeShape,
+        gradient = listOf(
+            if (isScanning) Color(0x33FFD54F) else Color(0x2800FF88),
+            Color(0xFF031410)
+        ),
+        borderAlphaBase = if (isScanning) pulseAlpha else 0.85f
     ) {
+        // Live LED indicator dot
         Box(
-            modifier = Modifier
-                .fillMaxHeight()
-                .padding(0.8.dp)
-                .clip(badgeShape)
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            if (isScanning) Color(0x33FFD54F) else Color(0x2800FF88),
-                            Color(0xFF031410)
-                        )
-                    )
-                )
-                .border(
-                    1.dp,
-                    Brush.linearGradient(
-                        listOf(
-                            accentColor.copy(alpha = if (isScanning) pulseAlpha else 0.85f),
-                            CyberGlassBorder.copy(alpha = 0.35f),
-                            accentColor.copy(alpha = 0.7f)
-                        )
-                    ),
-                    badgeShape
-                )
-                .padding(horizontal = 7.dp, vertical = 2.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                // Live LED indicator dot
-                Box(
-                    Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(accentColor.copy(alpha = if (isScanning) pulseAlpha else 1f))
-                )
-                Spacer(Modifier.width(4.dp))
+            Modifier
+                .size(4.dp)
+                .clip(CircleShape)
+                .background(accentColor.copy(alpha = if (isScanning) pulseAlpha else 1f))
+        )
+        Spacer(Modifier.width(2.5.dp))
 
-                // Ingestion Text
-                val labelText = if (isScanning) {
-                    "INGEST ${(ingestState.scanProgress * 100).toInt()}%"
-                } else {
-                    "FS ${ingestState.abbreviatedTracks}"
-                }
-
-                Text(
-                    text = labelText,
-                    color = if (isScanning) Color(0xFFFFD54F) else Color(0xFF00FF88),
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.Black,
-                    fontFamily = AudiowideFont,
-                    letterSpacing = 0.3.sp
-                )
-            }
+        // Ingestion Text
+        val labelText = if (isScanning) {
+            "ING ${(ingestState.scanProgress * 100).toInt()}%"
+        } else {
+            "FS ${ingestState.abbreviatedTracks}"
         }
+
+        Text(
+            text = labelText,
+            color = if (isScanning) Color(0xFFFFD54F) else Color(0xFF00FF88),
+            fontSize = badgeFontSize,
+            fontWeight = FontWeight.Black,
+            fontFamily = AudiowideFont,
+            maxLines = 1
+        )
     }
 }

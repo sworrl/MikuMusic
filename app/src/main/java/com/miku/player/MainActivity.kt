@@ -337,6 +337,23 @@ class MainActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
     private var sustainedPerfListener: androidx.media3.common.Player.Listener? = null
     // Dev workflow today, future in-app OTA installer tomorrow: whoever is about to trigger an
+    companion object {
+        var globalBackHandler: (() -> Unit)? = null
+    }
+
+    private val gestureBackReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
+            runOnUiThread {
+                val handler = globalBackHandler
+                if (handler != null) {
+                    handler()
+                } else {
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        }
+    }
+
     // actual package install broadcasts ACTION_UPDATE_STARTING first, so the overlay + full-queue
     // save happen BEFORE the process dies, not after — see UpdateHandler.kt's doc comment.
     private val updateStartingReceiver = object : android.content.BroadcastReceiver() {
@@ -385,7 +402,20 @@ class MainActivity : ComponentActivity() {
             @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(updateStartingReceiver, updateFilter)
         }
         registerReceiver(screenOffReceiver, android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF))
+        val backFilter = android.content.IntentFilter().apply {
+            addAction("com.miku.player.action.TRIGGER_BACK")
+            addAction("com.miku.systemui.action.TRIGGER_BACK")
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(gestureBackReceiver, backFilter, android.content.Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(gestureBackReceiver, backFilter)
+        }
         AlarmScheduler.rescheduleAll(this)                                 // re-arm exact alarms every launch (idempotent; also covers "somehow got cleared")
+
+        // Automated SD card ingress: trigger periodic deep scans
+        schedulePeriodicLibraryScan(this)
+
         // Tell the platform to hold a stable, un-throttled CPU/GPU clock state (no governor
         // hunting/lag) exactly while we're actually busy — playing audio, which is also when the
         // projectM visualizer is doing its heaviest continuous GL work. This is a hint, not a
@@ -491,6 +521,7 @@ class MainActivity : ComponentActivity() {
         sustainedPerfListener?.let { player.removeListener(it) }
         runCatching { unregisterReceiver(updateStartingReceiver) }
         runCatching { unregisterReceiver(screenOffReceiver) }
+        runCatching { unregisterReceiver(gestureBackReceiver) }
         try { com.miku.player.screentime.MikuSmartScreenTimeEngine.stop() } catch (_: Throwable) {}
         kotlinx.coroutines.MainScope().launch { CpuPerformance.onBackground(this@MainActivity) }
         super.onDestroy()
@@ -982,6 +1013,26 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     // Screen orientation is locked strictly to PORTRAIT mode across the entire app lifecycle.
     // Tape Mode renders rotated 90° CW in portrait mode so the user holds the DAP sideways while Android OS stays in portrait.
 
+    /** Automated SD card library rescans: triggers periodic deep scans (default: weekly, opt-in to daily) */
+    fun schedulePeriodicLibraryScan(ctx: android.content.Context) {
+        val prefs = ctx.getSharedPreferences("miku_auto_scan", android.content.Context.MODE_PRIVATE)
+        val lastScanTime = prefs.getLong("last_auto_scan_ms", 0L)
+        val now = System.currentTimeMillis()
+        val ONE_DAY = 24 * 60 * 60 * 1000L
+        val ONE_WEEK = 7 * ONE_DAY
+
+        // Trigger if last scan was > 1 week ago (or first time)
+        if (now - lastScanTime > ONE_WEEK) {
+            android.util.Log.i("MainActivity", "Triggering automated deep library scan...")
+            MikuSyncTransceiver.deepScanDirectory(ctx, MikuSyncTransceiver.getSdMusicPath(ctx)) { count ->
+                prefs.edit().putLong("last_auto_scan_ms", System.currentTimeMillis()).apply()
+                if (count > 0) {
+                    android.util.Log.i("MainActivity", "Auto-scan completed: $count tracks")
+                }
+            }
+        }
+    }
+
     fun startPlay(list: List<Track>, i: Int) {
         currentTrack = list[i]
         PlayerPreferences.saveLastPlayback(ctx, list[i].id, 0L)
@@ -1025,24 +1076,46 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     // Pop the same priority chain the `when` below already renders in (deepest overlay first),
     // one level at a time — shared by the system-back handler and the bottom-bar back glyph so
     // there's exactly one definition of "what does back mean right now".
-    val canGoBack = showSettings || showTape || showFullNowPlaying || videoSel != null || albumSel != null || artistSel != null || libSel != null || tab == Tab.SONGS
+    val canGoBack = showScanDialog || showMikuMonitorDialog || showSettings || showTape || showFullNowPlaying || videoSel != null || showVideoLibrary || albumSel != null || artistSel != null || libSel != null || tab == Tab.SONGS || tab != Tab.HOME
     val performBack: () -> Unit = {
         when {
+            showScanDialog -> showScanDialog = false
+            showMikuMonitorDialog -> showMikuMonitorDialog = false
             showSettings -> showSettings = false
             showTape -> showTape = false
             showFullNowPlaying -> showFullNowPlaying = false
             videoSel != null -> videoSel = null
+            showVideoLibrary -> showVideoLibrary = false
             albumSel != null -> albumSel = null
             artistSel != null -> artistSel = null
             libSel != null -> libSel = null
             // All Songs isn't its own bar tab anymore — it's reached from Library, so back from it
             // returns to Library rather than falling through to app-exit.
             tab == Tab.SONGS -> tab = Tab.GENRES
+            tab != Tab.HOME -> tab = Tab.HOME
+            else -> {
+                val act = ctx as? android.app.Activity
+                act?.moveTaskToBack(true)
+                try {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    }
+                    ctx.startActivity(homeIntent)
+                } catch (_: Throwable) {}
+            }
         }
     }
     // System back — hardware key AND the Pixel-style edge-swipe gesture — smoothly pops nested screens
     // and falls back to system gesture navigation / minimize to launcher when at root.
-    androidx.activity.compose.BackHandler(enabled = canGoBack, onBack = performBack)
+    androidx.activity.compose.BackHandler(enabled = true, onBack = performBack)
+
+    DisposableEffect(Unit) {
+        MainActivity.globalBackHandler = performBack
+        onDispose {
+            MainActivity.globalBackHandler = null
+        }
+    }
 
     // Header + tab bar now float over the scrolling content as a real frosted-glass panel
     // (genuine Haze backdrop blur of whatever's currently scrolled underneath them) instead of
@@ -1054,7 +1127,40 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     var headerHeightPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
 
-    Box(Modifier.fillMaxSize()) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                var startX = 0f
+                var startY = 0f
+                var isFromEdge = false
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        startX = offset.x
+                        startY = offset.y
+                        val width = size.width.toFloat()
+                        // Left edge or right edge (< 32dp or > width - 32dp)
+                        isFromEdge = startX < 32.dp.toPx() || startX > (width - 32.dp.toPx())
+                    },
+                    onDragEnd = {},
+                    onDragCancel = {},
+                    onDrag = { change, _ ->
+                        if (isFromEdge) {
+                            val dx = change.position.x - startX
+                            val dy = Math.abs(change.position.y - startY)
+                            val isLeftInward = startX < 32.dp.toPx() && dx > 24.dp.toPx()
+                            val isRightInward = startX > (size.width.toFloat() - 32.dp.toPx()) && dx < -24.dp.toPx()
+                            if ((isLeftInward || isRightInward) && dy < Math.abs(dx) * 1.5f) {
+                                isFromEdge = false
+                                change.consume()
+                                Haptics.tick(ctx)
+                                performBack()
+                            }
+                        }
+                    }
+                )
+            }
+    ) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).haze(hazeState).padding(top = with(density) { headerHeightPx.toDp() })) {
                 // Same priority chain the old hard-cut `when` rendered in, snapshotted into an
@@ -1163,14 +1269,6 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                     showTape = true
                 },
                 onSettings = { showSettings = true },
-                onHome = {
-                    val act = ctx as? android.app.Activity
-                    if (act != null) {
-                        if (!act.moveTaskToBack(false)) {
-                            act.finish()
-                        }
-                    }
-                },
                 canGoBack = canGoBack,
                 onBack = performBack
             )
@@ -1677,8 +1775,10 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
 
     val syncState by MikuSyncTransceiver.state.collectAsState()
 
-    // Compact by default ("N Tracks"); while a scan is running AND its modal has been dismissed,
-    // show a live abbreviated status here. Also displays live rsync ingress speeds when actively syncing.
+    val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+    val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
+    val pillFontSize = (9.5f / fontScale * effectiveScale).sp
+
     fun abbrev(n: Int): String = when {
         n >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", n / 1_000_000f).removeSuffix(".0M") + "M"
         n >= 10_000 -> "${n / 1000}k"
@@ -1686,18 +1786,18 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
         else -> n.toString()
     }
     val statusText = when {
-        syncState.isTransferring -> "⚡ ${String.format(java.util.Locale.US, "%.1f", syncState.transferRateMBs)} MB/s"
-        !isScanning -> "${abbrev(count)} Tracks"
-        phase == "Reading tags…" && tagsTotal > 0 -> "${abbrev(tagsScanned)}/${abbrev(tagsTotal)} tagged"
-        else -> "${abbrev(visited)} chk · $newFound new"
+        syncState.isTransferring -> "⚡ ${String.format(java.util.Locale.US, "%.1f", syncState.transferRateMBs)}M/s"
+        !isScanning -> abbrev(count)
+        phase == "Reading tags…" && tagsTotal > 0 -> "${abbrev(tagsScanned)}/${abbrev(tagsTotal)}"
+        else -> abbrev(visited)
     }
 
     Box(
         modifier = Modifier
             .graphicsLayer { scaleX = pressScale; scaleY = pressScale }
-            .clip(RoundedCornerShape(20.dp))
+            .clip(RoundedCornerShape(16.dp))
             .drawBehind {
-                val rr = CornerRadius(20.dp.toPx(), 20.dp.toPx())
+                val rr = CornerRadius(16.dp.toPx(), 16.dp.toPx())
                 val topC = if (isScanning) Color(0xFF1C5A57) else Color(0xFF123634)
                 val botC = if (isScanning) Color(0xFF4A1638) else Color(0xFF1C0D18)
                 if (!pressed) {
@@ -1726,7 +1826,7 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 Haptics.tick(hapticCtx)
                 onScan()
             }
-            .padding(horizontal = 10.dp, vertical = 5.dp),
+            .padding(horizontal = 7.dp, vertical = 3.5.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1735,30 +1835,32 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 contentDescription = "Scan library",
                 tint = if (isScanning) MikuTealBright else MikuTeal,
                 modifier = Modifier
-                    .size(16.dp)
+                    .size(13.dp)
                     .rotate(if (isScanning) spinAngle else 0f)
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
             Text(
                 statusText,
                 color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
+                fontSize = pillFontSize,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
             )
             if (deltaBadge != null && deltaBadge != 0) {
                 val d = deltaBadge!!
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(if (d > 0) Color(0xFF0E4035) else Color(0xFF4A1024))
-                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                        .padding(horizontal = 4.dp, vertical = 1.dp)
                 ) {
                     Text(
                         text = if (d > 0) "+$d" else "$d",
                         color = if (d > 0) MikuTealBright else MikuPink,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        maxLines = 1
                     )
                 }
             }
@@ -2050,24 +2152,8 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            Button(
-                onClick = {
-                    isScanningIngress = true
-                    MikuSyncTransceiver.scanAndIntegrateDirectory(ctx, MikuSyncTransceiver.getSdMusicPath(ctx)) { count ->
-                        android.os.Handler(android.os.Looper.getMainLooper()).post {
-                            isScanningIngress = false
-                            android.widget.Toast.makeText(ctx, "✓ Ingested $count tracks into library", android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.08f)),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text(if (isScanningIngress) "Ingesting…" else "🔄 Quick Scan SD Card", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-            }
+            // Note: Ingress screen with Force Scan + automation is in the launcher, not here
+            // This app button will open the launcher's system ingress screen
         }
     }
 }
@@ -2302,7 +2388,6 @@ fun expandNotificationShade(ctx: Context) {
     onScan: () -> Unit,
     onTape: () -> Unit,
     onSettings: () -> Unit = {},
-    onHome: () -> Unit = {},
     canGoBack: Boolean = false,
     onBack: () -> Unit = {}
 ) {
@@ -2342,14 +2427,18 @@ fun expandNotificationShade(ctx: Context) {
             alpha = 0.14f,
             modifier = Modifier.matchParentSize()
         )
+        val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+        val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
+        val brandFontSize = (15f / fontScale * effectiveScale).sp
+
         Row(
-            Modifier.fillMaxWidth().statusBarsPadding().padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
+            Modifier.fillMaxWidth().statusBarsPadding().padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Show Back button ONLY when there is a sub-page to go back from
             if (canGoBack) {
                 com.miku.player.ui.MikuBackButton(onClick = onBack)
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(6.dp))
             }
 
             // Standalone Miku Music brand header
@@ -2359,15 +2448,16 @@ fun expandNotificationShade(ctx: Context) {
                 androidx.compose.foundation.Image(
                     painter = androidx.compose.ui.res.painterResource(MikuArt.chibiHearts),
                     contentDescription = null,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(24.dp)
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(5.dp))
                 Text(
                     "Miku Music",
                     color = MikuTealBright,
-                    fontSize = 17.sp,
+                    fontSize = brandFontSize,
                     fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont
+                    fontFamily = AudiowideFont,
+                    maxLines = 1
                 )
             }
             Spacer(Modifier.weight(1f))
@@ -2376,11 +2466,11 @@ fun expandNotificationShade(ctx: Context) {
                 count = count,
                 onScan = onScan
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(4.dp))
             HapticIconButton(
                 onClick = onTape,
                 modifier = Modifier.semantics { contentDescription = "Tape mode" }
-            ) { TapeIcon(tint = MikuPink, modifier = Modifier.size(24.dp)) }
+            ) { TapeIcon(tint = MikuPink, modifier = Modifier.size(22.dp)) }
         }
     }
 }
@@ -2436,11 +2526,14 @@ private fun tabColor(t: Tab): Color = when (t) {
             val base = tabColor(t)
             // Label color/weight ease over instead of snapping, matching the gliding indicator.
             val labelColor by animateColorAsState(if (t == sel) base else base.copy(alpha = 0.55f), tween(250), label = "tabLabel")
+            val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+            val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
+            val dampedTabFontSize = (15.5f / fontScale * effectiveScale).sp
             androidx.compose.material3.Tab(
                 selected = t == sel,
                 onClick = { if (t != sel) Haptics.tick(ctx); onSel(t) },
                 modifier = Modifier.height(42.dp).mikuTactile(hapticTick = false, pressedScale = 0.90f),
-                text = { Text(t.label, color = labelColor, fontWeight = if (t == sel) FontWeight.Bold else FontWeight.Normal, fontFamily = RighteousFont, fontSize = 18.sp, letterSpacing = 0.5.sp) })
+                text = { Text(t.label, color = labelColor, fontWeight = if (t == sel) FontWeight.Bold else FontWeight.Normal, fontFamily = RighteousFont, fontSize = dampedTabFontSize, letterSpacing = 0.4.sp) })
         }
     }
 }
@@ -4204,10 +4297,13 @@ private fun ArtistSortSettingsModal(
             .padding(horizontal = 6.dp, vertical = 2.5.dp),
         contentAlignment = Alignment.Center
     ) {
+        val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
+        val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
+        val dampedFontSize = (fontSize.value / fontScale * effectiveScale).sp
         Text(
             text,
             color = Color.White,
-            fontSize = fontSize,
+            fontSize = dampedFontSize,
             fontWeight = FontWeight.Black,
             fontFamily = OrbitronFont,
             letterSpacing = 0.3.sp
@@ -4452,11 +4548,12 @@ fun AudioQualitySpecLine(
         } else if (tier >= 2) {
             Spacer(Modifier.width(6.dp))
             Box(
-                Modifier
+                modifier = Modifier
                     .clip(RoundedCornerShape(5.dp))
                     .background(accentColor.copy(alpha = 0.2f))
                     .border(0.8.dp, accentColor.copy(alpha = 0.5f), RoundedCornerShape(5.dp))
-                    .padding(horizontal = 5.dp, vertical = 1.dp)
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                contentAlignment = Alignment.Center
             ) {
                 Text(
                     text = when (tier) {
@@ -4467,7 +4564,8 @@ fun AudioQualitySpecLine(
                     color = accentColor,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Black,
-                    fontFamily = AudiowideFont
+                    fontFamily = AudiowideFont,
+                    maxLines = 1
                 )
             }
         }
@@ -6669,7 +6767,7 @@ object TransportShapes {
                             )
                         }
 
-                        // Middle Track Information Column (Tightened Touch Zone)
+                        // Middle Track Information Column (Expanded Touch Zone & Responsive Typography)
                         Column(
                             Modifier
                                 .weight(1f)
@@ -6685,17 +6783,25 @@ object TransportShapes {
                             Text(
                                 track.title,
                                 color = Color(0xFFEAF6F4),
-                                fontSize = 17.sp,
+                                fontSize = 13.5.sp,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
                             )
-                            Spacer(Modifier.height(1.dp))
+                            Spacer(Modifier.height(1.5.dp))
+                            val artistAlbumText = remember(track.artist, track.album, displayYear) {
+                                val alb = if (track.album.isNotBlank()) {
+                                    if (displayYear != null) "${track.album} · $displayYear" else track.album
+                                } else ""
+                                if (alb.isNotBlank()) "${track.artist}  ·  $alb" else track.artist
+                            }
                             Text(
-                                track.artist,
+                                artistAlbumText,
                                 color = palette.color1,
-                                fontSize = 14.5.sp,
+                                fontSize = 11.sp,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                                 fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier
                                     .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
@@ -6707,33 +6813,13 @@ object TransportShapes {
                                         onArtistClick(track.artist)
                                     }
                             )
-                            if (track.album.isNotBlank()) {
-                                Text(
-                                    if (displayYear != null) "${track.album}  ·  $displayYear" else track.album,
-                                    color = Muted,
-                                    fontSize = 13.sp,
-                                    maxLines = 1,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier
-                                        .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) {
-                                            Haptics.tick(ctx)
-                                            onAlbumClick(albumArtist, track.album)
-                                        }
-                                )
-                            }
-                            Spacer(Modifier.height(2.dp))
-                            Row(Modifier.height(22.dp).clipToBounds(), verticalAlignment = Alignment.CenterVertically) {
-                                TechBadgeRow(ctx, track, fontSize = 9.sp, spacing = 3.dp)
+                            Spacer(Modifier.height(3.dp))
+                            Row(Modifier.height(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                                TechBadgeRow(ctx, track, fontSize = 8.5.sp, spacing = 3.dp)
                             }
                         }
 
-                        // Heart Button & Transport Controls with Tightened, Isolated Touch Hitboxes
-                        RainbowHeart(LikeStore.isLiked(track.id), size = 38.dp) { LikeStore.toggle(ctx, track) }
-                        Spacer(Modifier.width(2.dp))
+                        // Transport Controls with Tightened, Isolated Touch Hitboxes
                         ControlAssembly {
                             HapticIconButton(
                                 onClick = {
