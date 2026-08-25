@@ -506,7 +506,8 @@ private fun CompactTile(t: QsTile, modifier: Modifier) {
         val short = when (t.id) { "wifi" -> "WI-FI"; "bluetooth" -> "BLUETOOTH"; "ingest" -> "INGRESS"; "wireless_adb" -> "ADB"; else -> t.label.uppercase().take(10) }
         Text(
             short, color = if (t.isActive) MikuDarkBg else MikuTextSecondary,
-            fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, letterSpacing = 0.5.sp
+            fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, letterSpacing = 0.sp,
+            modifier = Modifier.padding(horizontal = 2.dp)
         )
     }
 }

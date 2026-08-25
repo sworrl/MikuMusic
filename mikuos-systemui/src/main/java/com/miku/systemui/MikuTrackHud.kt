@@ -117,7 +117,7 @@ class MikuTrackHud(
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                         WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                     PixelFormat.TRANSLUCENT
-                ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = dp(TOP_STRIP_DP + 16f).toInt()   // below the launcher's ~32dp status bar }
+                ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = dp(TOP_STRIP_DP + 16f).toInt() }
                 try { windowManager.addView(hv, params) } catch (t: Throwable) { Log.w(TAG, "addView: $t"); return@post }
                 view = hv
                 hv.slideIn()
