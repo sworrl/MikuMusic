@@ -103,9 +103,9 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
     val isPaired = ArcoClient.isPaired || ArcoClient.isDirectKeyConfigured
     val isConnected = connectionState == ArcoConnectionState.CONNECTED
     val statusColor = when (connectionState) {
-        ArcoConnectionState.CONNECTED -> Color(0xFF00E676)
+        ArcoConnectionState.CONNECTED -> com.miku.launcher.ui.MikuIdentity.Leek
         ArcoConnectionState.CONNECTING -> MikuGold
-        ArcoConnectionState.ERROR -> Color(0xFFFF1744)
+        ArcoConnectionState.ERROR -> com.miku.launcher.ui.MikuIdentity.Coral
         ArcoConnectionState.DISCONNECTED -> Color(0xFFFF9100)
         ArcoConnectionState.UNPAIRED -> Color(0xFF8BA6A9)
     }
@@ -198,7 +198,7 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
                     // Power / blackout row
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect != "off") Color(0xFF00E676) else Color(0xFF8BA6A9), modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect != "off") com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFF8BA6A9), modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Power", color = MikuTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
@@ -213,7 +213,7 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
                                 }
                             },
                             colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color(0xFF00E676),
+                                checkedThumbColor = com.miku.launcher.ui.MikuIdentity.Leek,
                                 checkedTrackColor = Color(0x3300E676),
                                 uncheckedThumbColor = Color.Gray,
                                 uncheckedTrackColor = Color(0x22FFFFFF)
@@ -272,7 +272,7 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
 
                     lastError?.let {
                         Spacer(Modifier.height(6.dp))
-                        Text("⚠ $it", color = Color(0xFFFF1744), fontSize = 7.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text("⚠ $it", color = com.miku.launcher.ui.MikuIdentity.Coral, fontSize = 7.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

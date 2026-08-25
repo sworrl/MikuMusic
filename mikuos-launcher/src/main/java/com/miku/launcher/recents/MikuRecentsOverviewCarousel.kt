@@ -260,9 +260,9 @@ fun LiveAppSnapshotCard(task: RecentTaskItem) {
             p.contains("player") || p.contains("music") -> Color(0xFF00E5FF)
             p.contains("settings") -> Color(0xFF7C4DFF)
             p.contains("camera") -> Color(0xFFFF4081)
-            p.contains("gallery") || p.contains("photo") -> Color(0xFFFFD600)
+            p.contains("gallery") || p.contains("photo") -> com.miku.launcher.ui.MikuIdentity.Gold
             p.contains("firefox") || p.contains("chrome") || p.contains("browser") -> Color(0xFFFF6D00)
-            p.contains("radio") -> Color(0xFF00E676)
+            p.contains("radio") -> com.miku.launcher.ui.MikuIdentity.Leek
             else -> Color(0xFF00E5FF)
         }
     }

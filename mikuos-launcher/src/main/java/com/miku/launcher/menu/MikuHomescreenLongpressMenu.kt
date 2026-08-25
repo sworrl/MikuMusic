@@ -146,7 +146,7 @@ fun MikuHomescreenLongpressMenu(
                         title = "Widgets & Panels",
                         subtitle = "Audio visualizers & meters",
                         icon = Icons.Default.Widgets,
-                        iconTint = Color(0xFFFFD600),
+                        iconTint = com.miku.launcher.ui.MikuIdentity.Gold,
                         onClick = {
                             onDismiss()
                             onWidgets()

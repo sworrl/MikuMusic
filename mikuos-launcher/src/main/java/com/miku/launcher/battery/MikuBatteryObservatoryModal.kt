@@ -54,7 +54,7 @@ import kotlin.math.roundToInt
  * Maps battery percentage (0..100) to its precise per-percentage-point spectral hue.
  */
 fun getBatteryColorForPercent(pct: Int, isCharging: Boolean): Color {
-    if (isCharging) return Color(0xFF00E676)
+    if (isCharging) return com.miku.launcher.ui.MikuIdentity.Leek
     val p = pct.coerceIn(0, 100)
     val hue = when {
         p <= 15 -> (p / 15f) * 20f // 0 (Crimson Red) to 20 (Orange-Red)
@@ -477,7 +477,7 @@ fun MikuBatteryObservatoryModal(
                                             telemetry.isCharging -> "⚡ ${telemetry.status} · ${telemetry.estTimeToFullMin}m to full"
                                             else -> "🔋 Estimated runtime: ${telemetry.estTimeToEmptyMin / 60}h ${telemetry.estTimeToEmptyMin % 60}m remaining (${telemetry.powerMw} mW)"
                                         },
-                                        color = if (isNetDischargingOnUsb) Color(0xFFFF9100) else if (telemetry.isCharging) Color(0xFF00E676) else Color.White,
+                                        color = if (isNetDischargingOnUsb) Color(0xFFFF9100) else if (telemetry.isCharging) com.miku.launcher.ui.MikuIdentity.Leek else Color.White,
                                         fontSize = 10.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = AudiowideFont,
@@ -490,11 +490,11 @@ fun MikuBatteryObservatoryModal(
                                     listOf(
                                         Color(0xFFFF4081),
                                         Color(0xFF00E5FF),
-                                        Color(0xFF00E676),
+                                        com.miku.launcher.ui.MikuIdentity.Leek,
                                         Color(0xFFAEEA00),
-                                        Color(0xFFFFD600),
+                                        com.miku.launcher.ui.MikuIdentity.Gold,
                                         Color(0xFFFF6D00),
-                                        Color(0xFFFF1744)
+                                        com.miku.launcher.ui.MikuIdentity.Coral
                                     )
                                 }
                                 val filledCount = ((telemetry.level.coerceIn(0, 100) * 7 + 50) / 100).coerceIn(if (telemetry.level > 0) 1 else 0, 7)
@@ -545,7 +545,7 @@ fun MikuBatteryObservatoryModal(
                                     )
                                     Text(
                                         text = "${if (telemetry.currentMa > 0) "+" else ""}${telemetry.currentMa} mA · ${telemetry.powerMw} mW",
-                                        color = if (telemetry.currentMa > 0) Color(0xFF00E676) else if (isNetDischargingOnUsb) Color(0xFFFF9100) else Color(0xFFFFD600),
+                                        color = if (telemetry.currentMa > 0) com.miku.launcher.ui.MikuIdentity.Leek else if (isNetDischargingOnUsb) Color(0xFFFF9100) else com.miku.launcher.ui.MikuIdentity.Gold,
                                         fontSize = 10.5.sp,
                                         fontWeight = FontWeight.Black,
                                         fontFamily = AudiowideFont
@@ -572,7 +572,7 @@ fun MikuBatteryObservatoryModal(
                                         val barHeight = ((curVal.toFloat() / maxVal) * (h * 0.82f)).coerceIn(3f, h)
                                         val x = idx * (barWidth + barGap)
                                         val y = h - barHeight
-                                        val barColor = if (telemetry.currentMa > 0) Color(0xFF00E676)
+                                        val barColor = if (telemetry.currentMa > 0) com.miku.launcher.ui.MikuIdentity.Leek
                                                        else if (isNetDischargingOnUsb) Color(0xFFFF9100)
                                                        else Color(0xFF00E5FF).copy(alpha = 0.75f)
 
@@ -622,7 +622,7 @@ fun MikuBatteryObservatoryModal(
                                     value = "${telemetry.powerMw} mW",
                                     sub = "${String.format(Locale.US, "%.2f", telemetry.powerMw / 1000.0)} W Total",
                                     icon = Icons.Default.ElectricBolt,
-                                    color = Color(0xFFFFD600)
+                                    color = com.miku.launcher.ui.MikuIdentity.Gold
                                 )
                             }
 
@@ -634,7 +634,7 @@ fun MikuBatteryObservatoryModal(
                                     value = "${String.format(Locale.US, "%.1f", telemetry.tempC)}°C",
                                     sub = "${String.format(Locale.US, "%.1f", tempF)}°F · CellWise",
                                     icon = Icons.Default.DeviceThermostat,
-                                    color = if (telemetry.tempC > 40f) Color(0xFFFF1744) else Color(0xFF00E676)
+                                    color = if (telemetry.tempC > 40f) com.miku.launcher.ui.MikuIdentity.Coral else com.miku.launcher.ui.MikuIdentity.Leek
                                 )
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
@@ -642,7 +642,7 @@ fun MikuBatteryObservatoryModal(
                                     value = "${String.format(Locale.US, "%.1f", telemetry.chargerTempC)}°C",
                                     sub = "Snapdragon: ${String.format(Locale.US, "%.1f", telemetry.cpuTempC)}°C",
                                     icon = Icons.Default.Memory,
-                                    color = if (telemetry.cpuTempC > 65f) Color(0xFFFF1744) else MikuNeonPink
+                                    color = if (telemetry.cpuTempC > 65f) com.miku.launcher.ui.MikuIdentity.Coral else MikuNeonPink
                                 )
                             }
 
@@ -662,7 +662,7 @@ fun MikuBatteryObservatoryModal(
                                     value = telemetry.health,
                                     sub = "${telemetry.tech} Polymer",
                                     icon = Icons.Default.CheckCircle,
-                                    color = Color(0xFF00E676)
+                                    color = com.miku.launcher.ui.MikuIdentity.Leek
                                 )
                             }
                         }
@@ -691,7 +691,7 @@ fun MikuBatteryObservatoryModal(
                             ) {
                                 SubsystemDrainItem("CS43131 DUAL DAC", "22%", Color(0xFF7C4DFF))
                                 SubsystemDrainItem("IPS DISPLAY PANEL", "38%", MikuCyan)
-                                SubsystemDrainItem("SNAPDRAGON SOC", "26%", Color(0xFFFFD600))
+                                SubsystemDrainItem("SNAPDRAGON SOC", "26%", com.miku.launcher.ui.MikuIdentity.Gold)
                                 SubsystemDrainItem("WLAN / MODEM RF", "14%", MikuNeonPink)
                             }
                         }

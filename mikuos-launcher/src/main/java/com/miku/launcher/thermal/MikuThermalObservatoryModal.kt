@@ -153,11 +153,11 @@ fun MikuThermalObservatoryModal(
     val liveBatTemp = chronologicalHistory.lastOrNull()?.batteryTempC ?: batteryTempC.coerceAtLeast(32f)
 
     val thermoclineColor = when {
-        livePeakTemp >= 58f -> Color(0xFFFF1744) // Hot / Throttle Red
+        livePeakTemp >= 58f -> com.miku.launcher.ui.MikuIdentity.Coral // Hot / Throttle Red
         livePeakTemp >= 48f -> Color(0xFFFF9100) // Warm Amber Orange
-        livePeakTemp >= 38f -> Color(0xFFFFD600) // Nominal Gold
+        livePeakTemp >= 38f -> com.miku.launcher.ui.MikuIdentity.Gold // Nominal Gold
         livePeakTemp >= 30f -> Color(0xFF00E5FF) // Cool Cyan
-        else -> Color(0xFF00E676)                // Low Ambient Mint Green
+        else -> com.miku.launcher.ui.MikuIdentity.Leek                // Low Ambient Mint Green
     }
 
     BackHandler(enabled = true) { onClose() }
@@ -451,9 +451,9 @@ fun MikuThermalObservatoryModal(
                             displayZones.forEach { zone ->
                                 val normHeight = ((zone.tempC - 25f) / 50f).coerceIn(0.15f, 1.0f)
                                 val barColor = when {
-                                    zone.tempC >= 55f -> Color(0xFFFF1744)
+                                    zone.tempC >= 55f -> com.miku.launcher.ui.MikuIdentity.Coral
                                     zone.tempC >= 48f -> Color(0xFFFF9100)
-                                    zone.tempC >= 38f -> Color(0xFFFFD600)
+                                    zone.tempC >= 38f -> com.miku.launcher.ui.MikuIdentity.Gold
                                     else -> Color(0xFF00E5FF)
                                 }
                                 Box(
@@ -540,8 +540,8 @@ fun MikuThermalObservatoryModal(
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(
                         Triple("Cryo Low", "❄️ Cryo Low", Color(0xFF00E5FF)),
-                        Triple("Balanced", "⚡ Balanced", Color(0xFFFFD600)),
-                        Triple("Turbo", "🔥 Turbo", Color(0xFFFF1744))
+                        Triple("Balanced", "⚡ Balanced", com.miku.launcher.ui.MikuIdentity.Gold),
+                        Triple("Turbo", "🔥 Turbo", com.miku.launcher.ui.MikuIdentity.Coral)
                     ).forEach { (profile, label, color) ->
                         val isSelected = selectedProfile == profile
                         Box(

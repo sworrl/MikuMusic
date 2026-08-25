@@ -54,7 +54,7 @@ fun MikuTopBarTheme.next(): MikuTopBarTheme =
 /** The gradient stops for the gradient-based themes (PHOTO/MINIMAL handled separately). */
 private fun MikuTopBarTheme.gradientColors(): List<Color> = when (this) {
     MikuTopBarTheme.MIKU     -> listOf(Color(0xFF0EE7DD), Color(0xFF1B8FB0), Color(0xFFFF4FA3))
-    MikuTopBarTheme.AURORA   -> listOf(Color(0xFF00E676), Color(0xFF00E5FF), Color(0xFFB388FF))
+    MikuTopBarTheme.AURORA   -> listOf(com.miku.launcher.ui.MikuIdentity.Leek, Color(0xFF00E5FF), Color(0xFFB388FF))
     MikuTopBarTheme.SUNSET   -> listOf(Color(0xFFFFB74D), Color(0xFFFF5C8A), Color(0xFF7C4DFF))
     MikuTopBarTheme.OCEAN    -> listOf(Color(0xFF0277BD), Color(0xFF00B8D4), Color(0xFF1DE9B6))
     MikuTopBarTheme.MIDNIGHT -> listOf(Color(0xFF0A1024), Color(0xFF1A2350), Color(0xFF3B2E63))

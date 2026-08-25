@@ -18,7 +18,14 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import android.app.ActivityOptions
 import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -143,8 +150,9 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
         }
     }
 
-    val enterScale by animateFloatAsState(if (entered) 1f else 0.92f, tween(MikuPowerProfile.ms(140), easing = FastOutSlowInEasing), label = "s")
-    val enterAlpha by animateFloatAsState(if (entered) 1f else 0f, tween(MikuPowerProfile.ms(120)), label = "a")
+    val enterScale by animateFloatAsState(if (entered) 1f else 0.9f, tween(MikuMotion.ms(140), easing = FastOutSlowInEasing), label = "s")
+    val enterAlpha by animateFloatAsState(if (entered) 1f else 0f, tween(MikuMotion.ms(120)), label = "a")
+    val rootView = view
 
     BackHandler { onClose() }
 
@@ -160,7 +168,7 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
             .background(MikuDarkBg.copy(alpha = 0.90f))
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onClose() }
     ) {
-        Column(Modifier.fillMaxSize().graphicsLayer { scaleX = enterScale; scaleY = enterScale }) {
+        Column(Modifier.fillMaxSize().graphicsLayer { scaleX = enterScale; scaleY = enterScale; transformOrigin = TransformOrigin(0.5f, 1f) }) {
             // Header (8dp grid, 40dp tall)
             Row(
                 Modifier.fillMaxWidth().padding(start = 24.dp, end = 24.dp, top = 32.dp).height(40.dp),
@@ -193,18 +201,34 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().height(cardH + 48.dp)
                 ) {
                     itemsIndexed(tasks, key = { _, e -> e.taskId }) { _, entry ->
+                        // 0.92 → 1.0 as the card approaches the viewport centre (Pixel carousel focus)
+                        val centerScale by remember(entry.taskId) {
+                            derivedStateOf {
+                                val li = listState.layoutInfo
+                                val info = li.visibleItemsInfo.firstOrNull { it.key == entry.taskId } ?: return@derivedStateOf 0.92f
+                                val center = (li.viewportStartOffset + li.viewportEndOffset) / 2f
+                                val d = kotlin.math.abs(info.offset + info.size / 2f - center) / info.size.coerceAtLeast(1)
+                                1f - 0.08f * d.coerceIn(0f, 1f)
+                            }
+                        }
                         RecentTaskCard(
                             entry = entry,
                             snapshot = snapshots[entry.taskId],
                             width = cardW,
                             height = cardH,
-                            onOpen = {
-                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                                scope.launch(Dispatchers.IO) { MikuTaskStack.switchTo(ctx, entry.taskId) }
+                            centerScale = { centerScale },
+                            onOpen = { bounds ->
+                                MikuHaptics.confirm(view)
+                                val opts = runCatching {
+                                    if (bounds != null && !MikuMotion.quiet) ActivityOptions.makeClipRevealAnimation(
+                                        rootView, bounds.left.toInt(), bounds.top.toInt(), bounds.width.toInt(), bounds.height.toInt()
+                                    ).toBundle() else null
+                                }.getOrNull()
+                                scope.launch(Dispatchers.IO) { MikuTaskStack.switchTo(ctx, entry.taskId, opts) }
                                 onClose()
                             },
                             onDismiss = {
-                                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                                MikuHaptics.confirm(view)
                                 sparkleAt = Offset(config.screenWidthDp / 2f, config.screenHeightDp * 0.3f); sparkleKey++
                                 tasks.remove(entry)
                                 scope.launch(Dispatchers.IO) { MikuTaskStack.remove(entry.taskId) }
@@ -221,7 +245,7 @@ private fun MikuRecentsScreen(onClose: () -> Unit) {
                                     .background(MikuSurface2.copy(alpha = 0.95f))
                                     .border(1.dp, MikuTealBright.copy(alpha = 0.7f), RoundedCornerShape(20.dp))
                                     .clickable {
-                                        view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                        MikuHaptics.pop(view)
                                         sparkleAt = Offset(config.screenWidthDp / 2f, config.screenHeightDp * 0.3f); sparkleKey++
                                         val ids = tasks.map { it.taskId }
                                         tasks.clear()
@@ -262,13 +286,17 @@ private fun RecentTaskCard(
     snapshot: Bitmap?,
     width: androidx.compose.ui.unit.Dp,
     height: androidx.compose.ui.unit.Dp,
-    onOpen: () -> Unit,
+    centerScale: () -> Float = { 1f },
+    onOpen: (androidx.compose.ui.geometry.Rect?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val offsetY = remember { Animatable(0f) }
+    val zoom = remember { Animatable(1f) }
+    var bounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     val density = LocalDensity.current
     val dismissPx = with(density) { 120.dp.toPx() }
+    val cardHpx = with(density) { height.toPx() }
     val iconBitmap = remember(entry.pkg) {
         runCatching { entry.icon?.toBitmap(96, 96)?.asImageBitmap() }.getOrNull()
     }
@@ -282,32 +310,31 @@ private fun RecentTaskCard(
     Column(
         Modifier
             .width(width)
+            .onGloballyPositioned { bounds = it.boundsInWindow() }
             .graphicsLayer {
                 translationY = offsetY.value
                 val p = (-offsetY.value / (dismissPx * 2.2f)).coerceIn(0f, 1f)
                 alpha = 1f - p * 0.85f
-                scaleX = 1f - p * 0.08f; scaleY = 1f - p * 0.08f
+                val sc = (1f - p * 0.08f) * centerScale() * zoom.value
+                scaleX = sc; scaleY = sc
             }
-            .pointerInput(entry.taskId) {
-                detectVerticalDragGestures(
-                    onDragEnd = {
-                        if (offsetY.value < -dismissPx) {
-                            scope.launch {
-                                offsetY.animateTo(-size.height * 1.4f, spring(dampingRatio = 0.9f, stiffness = Spring.StiffnessMedium))
-                                onDismiss()
-                            }
-                        } else {
-                            scope.launch { offsetY.animateTo(0f, spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow)) }
+            .draggable(
+                orientation = Orientation.Vertical,
+                state = rememberDraggableState { drag ->
+                    scope.launch { offsetY.snapTo((offsetY.value + drag).coerceAtMost(40f)) }
+                },
+                onDragStopped = { velocity ->
+                    // distance OR a fast upward fling dismisses; otherwise a bouncy return
+                    if (offsetY.value < -dismissPx || (velocity < -1500f && offsetY.value < -dismissPx * 0.3f)) {
+                        scope.launch {
+                            offsetY.animateTo(-cardHpx * 1.4f, MikuMotion.snappy(), initialVelocity = velocity.coerceAtMost(0f))
+                            onDismiss()
                         }
-                    },
-                    onDragCancel = { scope.launch { offsetY.animateTo(0f, tween(180)) } },
-                    onVerticalDrag = { change, drag ->
-                        change.consume()
-                        val next = (offsetY.value + drag).coerceAtMost(40f)
-                        scope.launch { offsetY.snapTo(next) }
+                    } else {
+                        scope.launch { offsetY.animateTo(0f, MikuMotion.bouncy(), initialVelocity = velocity) }
                     }
-                )
-            }
+                }
+            )
     ) {
         // App identity chip — 40dp row, pill chip with icon + label (Pixel overview header)
         Row(Modifier.fillMaxWidth().height(40.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -340,7 +367,12 @@ private fun RecentTaskCard(
                     Brush.verticalGradient(listOf(haloA, MikuPurple.copy(alpha = 0.45f), haloB)),
                     RoundedCornerShape(20.dp)
                 )
-                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onOpen() }
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    scope.launch {
+                        zoom.animateTo(1.12f, tween(MikuMotion.ms(110), easing = FastOutSlowInEasing))
+                        onOpen(bounds)
+                    }
+                }
         ) {
             if (snapshot != null) {
                 Image(
@@ -398,12 +430,12 @@ private fun RecentsMediaChip(m: MikuMediaHub.Now, onOpen: () -> Unit) {
         }
         Box(
             Modifier.size(40.dp).clip(CircleShape).background(accent).clickable {
-                view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                MikuHaptics.confirm(view)
                 if (m.isPlaying) m.controller.transportControls.pause() else m.controller.transportControls.play()
             }, contentAlignment = Alignment.Center
         ) { Icon(if (m.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, null, tint = MikuDarkBg, modifier = Modifier.size(22.dp)) }
         Spacer(Modifier.width(4.dp))
-        Box(Modifier.size(40.dp).clip(CircleShape).clickable { view.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK); m.controller.transportControls.skipToNext() }, contentAlignment = Alignment.Center) {
+        Box(Modifier.size(40.dp).clip(CircleShape).clickable { MikuHaptics.confirm(view); m.controller.transportControls.skipToNext() }, contentAlignment = Alignment.Center) {
             Icon(Icons.Default.SkipNext, null, tint = MikuTextPrimary, modifier = Modifier.size(22.dp))
         }
     }

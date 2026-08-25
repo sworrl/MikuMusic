@@ -313,6 +313,12 @@ class MikuLauncherActivity : ComponentActivity() {
         super.onResume()
         hideSystemBars()
         com.miku.launcher.ui.MikuLaunchSource.onHomeReturn()
+        com.miku.launcher.ui.MikuAmbient.touch()
+    }
+    // Any touch (re)arms the ambient-animation attention window (see ui/MikuAmbient.kt).
+    override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
+        if (ev?.actionMasked == android.view.MotionEvent.ACTION_DOWN) com.miku.launcher.ui.MikuAmbient.touch()
+        return super.dispatchTouchEvent(ev)
     }
     // Power: pollers/timers park while another app is in front (Compose's frame clock already
     // pauses animations at ON_STOP); see MikuPowerProfile.awaitVisible().
@@ -750,7 +756,17 @@ fun MikuLauncherScreen() {
             }
         }
 
-        allApps = list.sortedBy { it.label.lowercase() }
+        // Disambiguate identical labels (e.g. Camera Go + Snapdragon Camera both say "Camera").
+        val dupes = list.groupBy { it.label.lowercase() }.filterValues { it.size > 1 }.keys
+        val deduped = list.map { app ->
+            if (app.label.lowercase() !in dupes) app else app.copy(label = app.label + " " + when {
+                app.packageName.contains("cameralite") -> "Go"
+                app.packageName.contains("snap", ignoreCase = true) -> "SD"
+                app.packageName.startsWith("com.google") -> "G"
+                else -> app.packageName.substringAfterLast('.').take(4).replaceFirstChar { it.uppercase() }
+            })
+        }
+        allApps = deduped.sortedBy { it.label.lowercase() }
     }
 
     LaunchedEffect(Unit) {
@@ -842,6 +858,14 @@ fun MikuLauncherScreen() {
     val npAccent = com.miku.launcher.ui.rememberNpAccent()
     // Pixel-style drawer sheet physics (finger-follow + spring settle); see ui/MikuDrawerSheet.kt.
     val drawerSheet = com.miku.launcher.ui.rememberDrawerSheetState()
+    // Open drawer covers home → ambient home animators freeze (MikuAmbient).
+    androidx.compose.runtime.LaunchedEffect(drawerSheet) {
+        var covering = false
+        androidx.compose.runtime.snapshotFlow { drawerSheet.progress.value > 0.02f }.collect { c ->
+            if (c && !covering) { covering = true; com.miku.launcher.ui.MikuAmbient.pushCovered() }
+            else if (!c && covering) { covering = false; com.miku.launcher.ui.MikuAmbient.popCovered() }
+        }
+    }
     val drawerHeightPx = with(LocalDensity.current) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
     drawerSheet.heightPx = drawerHeightPx
     LaunchedEffect(isAllAppsOpen) { if (isAllAppsOpen) drawerSheet.open() else if (!drawerSheet.dragging) drawerSheet.close() }
@@ -856,22 +880,23 @@ fun MikuLauncherScreen() {
             Image(
                 bitmap = customWallpaperBitmap,
                 contentDescription = "Custom Desktop Wallpaper",
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().graphicsLayer(),
                 contentScale = ContentScale.Crop
             )
         } else {
             Image(
                 painter = painterResource(id = currentWallpaperRes),
                 contentDescription = "Miku Desktop Wallpaper",
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().graphicsLayer(),
                 contentScale = ContentScale.Crop
             )
         }
 
-        // Cyber Vignette Overlay
+        // Cyber Vignette Overlay (own layer: static)
         Box(
             Modifier
                 .fillMaxSize()
+                .graphicsLayer()
                 .background(
                     Brush.verticalGradient(
                         listOf(
@@ -899,7 +924,9 @@ fun MikuLauncherScreen() {
             val statusBarState = com.miku.launcher.ui.rememberMikuStatusBarState(
                 clock = currentTime, isPlaying = isAudioPlaying, thermalC = cpuTempC
             )
-            com.miku.launcher.ui.MikuStatusBar(state = statusBarState, onClockClick = { launchClockApp(ctx) })
+            Box(Modifier.fillMaxWidth().graphicsLayer()) {
+                com.miku.launcher.ui.MikuStatusBar(state = statusBarState, onClockClick = { launchClockApp(ctx) })
+            }
             // ============================================================
             // THE QUILT — the badge patchwork directly under the top bar (both always visible).
             // Long-press-drag a badge to rearrange; size / density / rows / backdrop live in the
@@ -1016,7 +1043,7 @@ fun MikuLauncherScreen() {
                     }
                 }
             )
-            Box(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 3.dp)) {
+            Box(Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 3.dp).graphicsLayer()) {
                 MikuTopBarBackground(topBarTheme, Modifier.matchParentSize())
                 com.miku.launcher.ui.MikuBadgeQuilt(
                     badges = quiltBadges,
@@ -1033,7 +1060,7 @@ fun MikuLauncherScreen() {
                         .fillMaxWidth()
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                         .clip(CutCornerShape(8.dp))
-                        .background(Brush.horizontalGradient(listOf(Color(0xFFFF1744), Color(0xFFB71C1C))))
+                        .background(Brush.horizontalGradient(listOf(com.miku.launcher.ui.MikuIdentity.Coral, Color(0xFFB71C1C))))
                         .border(1.dp, Color(0xFFFF5252), CutCornerShape(8.dp))
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
@@ -1057,6 +1084,7 @@ fun MikuLauncherScreen() {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
+                    .graphicsLayer()
                     .homeVerticalSwipe(
                         onSwipeUp = { isAllAppsOpen = true },
                         onSwipeDown = { expandNotificationShade(ctx) },
@@ -1116,7 +1144,9 @@ fun MikuLauncherScreen() {
             val liveBpm = if (bpmState.bpm in 40f..260f) bpmState.bpm else 128f
             val beatIntervalMs = (60_000f / liveBpm).toInt().coerceIn(240, 1500)
 
-            val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+            // Ambient-gated: the dock aura only animates while someone is looking (MikuAmbient).
+            val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
+            androidx.compose.runtime.LaunchedEffect(isBpmAudioPlaying) { com.miku.launcher.ui.MikuAmbient.setPlaying(isBpmAudioPlaying) }
 
             val dockInfiniteTransition = rememberInfiniteTransition(label = "DivaDockAura")
             val rainbowRotation by dockInfiniteTransition.gatedFloat(lowPowerGate, 
@@ -1144,7 +1174,7 @@ fun MikuLauncherScreen() {
                 listOf(
                     Color(0xFF00E5FF), // Cyan
                     Color(0xFF00FF88), // Mint
-                    Color(0xFFFFD600), // Gold
+                    com.miku.launcher.ui.MikuIdentity.Gold, // Gold
                     Color(0xFFFF4081), // Pink
                     Color(0xFFB388FF), // Purple
                     Color(0xFF00E5FF)  // Cyan
@@ -1416,7 +1446,7 @@ fun MikuLauncherScreen() {
                                     .height(38.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = MikuNeonPink.copy(alpha = 0.2f)),
                                 border = BorderStroke(1.dp, MikuNeonPink),
-                                shape = RoundedCornerShape(10.dp)
+                                shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text("🔄 Reset to Default Miku Artwork", color = MikuNeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             }
@@ -1491,10 +1521,9 @@ fun MikuLauncherScreen() {
             // (frame-rate work only, zero recomposition of this screen); the sheet stays composed
             // even when closed (translated fully off-screen) so opening never pays a first-frame
             // composition hitch.
-            Box(Modifier.fillMaxSize().drawBehind {
-                val a = 0.6f * drawerSheet.progress.value.coerceIn(0f, 1f)
-                if (a > 0.004f) drawRect(Color.Black.copy(alpha = a))
-            })
+            Box(Modifier.fillMaxSize().graphicsLayer {
+                alpha = 0.6f * drawerSheet.progress.value.coerceIn(0f, 1f)
+            }.background(Color.Black))
             Box(Modifier.fillMaxSize().graphicsLayer {
                 val pr = drawerSheet.progress.value
                 translationY = (1f - pr) * drawerHeightPx
@@ -1700,7 +1729,7 @@ fun MikuLauncherScreen() {
                 .padding(top = 92.dp, end = 4.dp)
         )
 
-        val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+        val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
 
         val infinitePulse = rememberInfiniteTransition(label = "verPulse")
         val verColor by infinitePulse.gatedColor(lowPowerGate, 
@@ -2026,7 +2055,7 @@ fun CyberRecentsOverview(
                                 .width(230.dp)
                                 .fillMaxHeight(0.88f)
                                 .offset(y = animatedDismissOffset.dp)
-                                .clip(RoundedCornerShape(20.dp))
+                                .clip(RoundedCornerShape(24.dp))
                                 .background(
                                     Brush.verticalGradient(
                                         listOf(
@@ -2046,7 +2075,7 @@ fun CyberRecentsOverview(
                                             )
                                         )
                                     ),
-                                    RoundedCornerShape(20.dp)
+                                    RoundedCornerShape(24.dp)
                                 )
                                 .pointerInput(task.taskId) {
                                     var startY = 0f
@@ -2155,7 +2184,7 @@ fun CyberRecentsOverview(
                                         Spacer(Modifier.height(8.dp))
                                         Text(
                                             text = "RUNNING",
-                                            color = Color(0xFF00E676),
+                                            color = com.miku.launcher.ui.MikuIdentity.Leek,
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Black,
                                             fontFamily = AudiowideFont,
@@ -2185,7 +2214,7 @@ fun CyberRecentsOverview(
                     onClick = onClearAll,
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
                     border = BorderStroke(1.dp, MikuNeonPink),
-                    shape = RoundedCornerShape(14.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.height(42.dp)
                 ) {
                     Text("CLEAR ALL APPS", color = MikuNeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
@@ -2246,7 +2275,7 @@ fun CyberAppContextDialog(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
                     border = BorderStroke(1.dp, MikuCyan.copy(alpha = 0.8f)),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().height(42.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2264,7 +2293,7 @@ fun CyberAppContextDialog(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF)),
                     border = BorderStroke(1.dp, CyberGlassBorder),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().height(42.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2282,7 +2311,7 @@ fun CyberAppContextDialog(
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF1744)),
                     border = BorderStroke(1.dp, Color(0xFFFF5252)),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth().height(42.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2384,7 +2413,7 @@ fun CyberDesktopContextMenuModal(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0x2200E5FF)),
                         border = BorderStroke(1.dp, MikuCyan.copy(alpha = 0.7f)),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().height(42.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -2402,7 +2431,7 @@ fun CyberDesktopContextMenuModal(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0x227C4DFF)),
                         border = BorderStroke(1.dp, Color(0xFFB388FF).copy(alpha = 0.7f)),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().height(42.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -2420,7 +2449,7 @@ fun CyberDesktopContextMenuModal(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FF4081)),
                         border = BorderStroke(1.dp, MikuNeonPink.copy(alpha = 0.7f)),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth().height(42.dp)
                     ) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -2454,7 +2483,7 @@ fun CyberAllAppsDrawer(
     val filteredApps = remember(apps, selectedCategory, searchQuery) {
         apps.filter {
             val matchesCategory = when (selectedCategory) {
-                "All" -> !it.isSystemApp
+                "All" -> true
                 "System" -> it.isSystemApp
                 else -> !it.isSystemApp && it.category.equals(selectedCategory, ignoreCase = true)
             }
@@ -2662,6 +2691,15 @@ fun CyberAllAppsDrawer(
                         onLongClick = { onAppLongClick(app) }
                     )
                 }
+                if (filteredApps.isEmpty()) {
+                    item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                        com.miku.launcher.ui.MikuEmptyState(
+                            face = com.miku.launcher.ui.MikuIdentity.CHIBI_SEARCH,
+                            text = if (searchQuery.isNotEmpty()) "No app matches \"$searchQuery\"" else "Nothing here yet",
+                            hint = if (searchQuery.isNotEmpty()) "Try a shorter name" else null
+                        )
+                    }
+                }
             }
 
             // (Removed redundant bottom navigation pill — it duplicated the system
@@ -2704,9 +2742,9 @@ fun DesktopAppIconItem(
         Box(
             Modifier
                 .size(MikuDimens.appIconArt)
-                .clip(RoundedCornerShape(15.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(Color(0x1A00E5FF))
-                .border(0.8.dp, CyberGlassBorder, RoundedCornerShape(15.dp)),
+                .border(0.8.dp, CyberGlassBorder, RoundedCornerShape(16.dp)),
             contentAlignment = Alignment.Center
         ) {
             val customPainter = remember(app.iconResId) {
@@ -3277,7 +3315,7 @@ fun MikuCyberWeatherGpsBadge(
     onGpsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
     val infiniteTransition = rememberInfiniteTransition(label = "TelemetryGlow")
     val pulseGlow by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.7f,
@@ -3321,7 +3359,7 @@ fun MikuCyberWeatherGpsBadge(
         isSnow -> Color(0xFF80D8FF)
         isNight -> Color(0xFF7C4DFF)
         isCloudy -> Color(0xFF40C4FF)
-        else -> Color(0xFFFFD600) // Solar Gold
+        else -> com.miku.launcher.ui.MikuIdentity.Gold // Solar Gold
     }
 
     val badgeShape = remember {
@@ -3536,7 +3574,7 @@ fun MikuCyberWeatherGpsBadge(
                         Modifier
                             .size(5.dp)
                             .clip(CircleShape)
-                            .background(if (gps.isLocked) Color(0xFF00FF7F) else Color(0xFFFFD600))
+                            .background(if (gps.isLocked) Color(0xFF00FF7F) else com.miku.launcher.ui.MikuIdentity.Gold)
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
@@ -3578,7 +3616,7 @@ fun ConnectedRfNetworkCapsule(
     val wifiColor = when {
         !wifi.isConnected -> Color.White.copy(alpha = 0.5f)
         wifi.rssiDbm >= -65 -> MikuCyan
-        wifi.rssiDbm >= -80 -> Color(0xFFFFD600)
+        wifi.rssiDbm >= -80 -> com.miku.launcher.ui.MikuIdentity.Gold
         else -> Color(0xFFFF5252)
     }
     // "No data" is only a PROBLEM when cellular is meant to carry data — i.e. Wi-Fi isn't already
@@ -3588,8 +3626,8 @@ fun ConnectedRfNetworkCapsule(
     val cellColor = when {
         !cell.isConnected -> Color.White.copy(alpha = 0.5f)
         cellNoData -> Color(0xFFFF5252)                    // genuine no-data (no Wi-Fi fallback)
-        cell.signalLevel5 >= 3 -> Color(0xFF00E676)
-        cell.signalLevel5 == 2 -> Color(0xFFFFD600)
+        cell.signalLevel5 >= 3 -> com.miku.launcher.ui.MikuIdentity.Leek
+        cell.signalLevel5 == 2 -> com.miku.launcher.ui.MikuIdentity.Gold
         cell.signalLevel5 == 1 -> Color(0xFFFF9800)
         else -> Color.White.copy(alpha = 0.6f)
     }
@@ -3744,7 +3782,7 @@ fun UnifiedWeatherGpsCapsule(
     onGpsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
     val infiniteTransition = rememberInfiniteTransition(label = "UnifiedCapsuleShimmer")
     val pulseGlow by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.65f,
@@ -3800,7 +3838,7 @@ fun UnifiedWeatherGpsCapsule(
                             listOf(
                                 Color(0xFF00B0FF).copy(alpha = pulseGlow),
                                 CyberGlassBorder.copy(alpha = 0.4f),
-                                if (gps.isLocked) Color(0xFF76FF03).copy(alpha = pulseGlow) else Color(0xFFFFB300).copy(alpha = pulseGlow)
+                                if (gps.isLocked) com.miku.launcher.ui.MikuIdentity.Leek.copy(alpha = pulseGlow) else Color(0xFFFFB300).copy(alpha = pulseGlow)
                             )
                         )
                     ),
@@ -3850,7 +3888,7 @@ fun UnifiedWeatherGpsCapsule(
                         }
                         Text(
                             statusLine,
-                            color = if (weather.nextPrecipLabel.isNotEmpty()) Color(0xFFFFD600) else MikuTextSecondary,
+                            color = if (weather.nextPrecipLabel.isNotEmpty()) com.miku.launcher.ui.MikuIdentity.Gold else MikuTextSecondary,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
@@ -3869,7 +3907,7 @@ fun UnifiedWeatherGpsCapsule(
                             Brush.verticalGradient(
                                 listOf(
                                     Color(0xFF00B0FF).copy(alpha = 0.8f),
-                                    Color(0xFF76FF03).copy(alpha = 0.8f)
+                                    com.miku.launcher.ui.MikuIdentity.Leek.copy(alpha = 0.8f)
                                 )
                             )
                         )
@@ -3886,14 +3924,14 @@ fun UnifiedWeatherGpsCapsule(
                         Modifier
                             .size(6.dp)
                             .clip(CircleShape)
-                            .background(if (gps.isLocked) Color(0xFF76FF03) else Color(0xFFFFB300))
+                            .background(if (gps.isLocked) com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFFFFB300))
                     )
                     Spacer(Modifier.width(4.dp))
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 if (gps.isLocked) "GPS 🔒 FIX" else "GPS 🛰️",
-                                color = if (gps.isLocked) Color(0xFF76FF03) else Color(0xFFFFB300),
+                                color = if (gps.isLocked) com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFFFFB300),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = AudiowideFont
@@ -3946,11 +3984,11 @@ fun MikuThermalBadge(
 ) {
     val maxTemp = maxOf(cpuTempC, batteryTempC)
     val tempColor = when {
-        maxTemp >= 55f -> Color(0xFFFF1744) // Hot / Throttle Warning: Red
+        maxTemp >= 55f -> com.miku.launcher.ui.MikuIdentity.Coral // Hot / Throttle Warning: Red
         maxTemp >= 45f -> Color(0xFFFF9100) // Warm: Amber Orange
-        maxTemp >= 38f -> Color(0xFFFFD600) // Nominal Warm: Gold
+        maxTemp >= 38f -> com.miku.launcher.ui.MikuIdentity.Gold // Nominal Warm: Gold
         maxTemp >= 30f -> Color(0xFF00E5FF) // Cool Nominal: Cyan
-        else -> Color(0xFF00E676)           // Low Ambient: Mint Green
+        else -> com.miku.launcher.ui.MikuIdentity.Leek           // Low Ambient: Mint Green
     }
 
     val displayTemp = if (cpuTempC > 0f) "${cpuTempC.toInt()}°C" else "${batteryTempC.toInt()}°C"
@@ -3995,7 +4033,7 @@ fun MikuBpmEngineBadge(
     val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 128
     val bpmColor = when {
         !isPlaying -> Color(0xFF8BA6A9)
-        liveBpm >= 150 -> Color(0xFFFF1744) // Hardcore / Fast: Red
+        liveBpm >= 150 -> com.miku.launcher.ui.MikuIdentity.Coral // Hardcore / Fast: Red
         liveBpm >= 126 -> Color(0xFFFF4081) // Diva / Vocaloid Dance: Pink
         liveBpm >= 100 -> Color(0xFF00E5FF) // Pop / Groove: Cyan
         else -> Color(0xFF00FF7F)           // Lo-Fi / Chill: Mint Green
@@ -4041,13 +4079,13 @@ fun MikuQuantumBatteryBadge(
     modifier: Modifier = Modifier
 ) {
     val batteryColor = when {
-        isCharging -> Color(0xFF00E676)
+        isCharging -> com.miku.launcher.ui.MikuIdentity.Leek
         batteryPct > 50 -> Color(0xFF00E5FF)
-        batteryPct > 20 -> Color(0xFFFFD600)
-        else -> Color(0xFFFF1744)
+        batteryPct > 20 -> com.miku.launcher.ui.MikuIdentity.Gold
+        else -> com.miku.launcher.ui.MikuIdentity.Coral
     }
 
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
 
     val infiniteTransition = rememberInfiniteTransition(label = "ChargeSparkle")
     val sparkAlpha by infiniteTransition.gatedFloat(lowPowerGate, 
@@ -4224,16 +4262,16 @@ fun MikuNowPlayingBadge(
     val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 128
     val tierColor = when {
         !isPlaying -> Color(0xFF8BA6A9)
-        liveBpm >= 150 -> Color(0xFFFF1744)
+        liveBpm >= 150 -> com.miku.launcher.ui.MikuIdentity.Coral
         liveBpm >= 126 -> MikuNeonPink
         liveBpm >= 100 -> MikuCyan
         else -> Color(0xFF00FF7F)
     }
-    val bandColors = listOf(Color(0xFF00FF7F), MikuCyan, Color(0xFF7FE6DE), MikuNeonPink, Color(0xFFFF1744))
+    val bandColors = listOf(Color(0xFF00FF7F), MikuCyan, Color(0xFF7FE6DE), MikuNeonPink, com.miku.launcher.ui.MikuIdentity.Coral)
     val nBars = bandColors.size
     val interval = beatIntervalMs.coerceIn(250L, 1500L).toInt()
 
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
 
     val eq = rememberInfiniteTransition(label = "eqBadge")
     val beatPhase by eq.gatedFloat(lowPowerGate, 
@@ -4293,7 +4331,7 @@ fun Cyber3dEmbossedPill(
     glowGradient: List<Color> = listOf(Color(0xEE0E242C), Color(0xFF041015)),
     content: @Composable RowScope.() -> Unit
 ) {
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
     val infiniteTransition = rememberInfiniteTransition(label = "PillShimmer")
     val shimmerAlpha by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.7f,
@@ -4324,7 +4362,7 @@ fun Cyber3dEmbossedPill(
         Box(
             modifier = Modifier
                 .padding(1.dp)
-                .clip(RoundedCornerShape(15.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(Brush.verticalGradient(glowGradient))
                 .border(
                     BorderStroke(
@@ -4337,7 +4375,7 @@ fun Cyber3dEmbossedPill(
                             )
                         )
                     ),
-                    RoundedCornerShape(15.dp)
+                    RoundedCornerShape(16.dp)
                 )
                 .padding(horizontal = 8.dp, vertical = 5.dp)
         ) {
@@ -4460,7 +4498,7 @@ fun CyberPlasmaGlowClock(
     time: String,
     date: String
 ) {
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
     val infiniteTransition = rememberInfiniteTransition(label = "ClockPlasmaPulse")
 
     // Continuous 24-Bit Truecolor Spectrum Shift Engine (Rotates 360 degrees smoothly)
@@ -4593,22 +4631,23 @@ fun CyberPlasmaGlowClock(
     Column {
         Box(contentAlignment = Alignment.CenterStart) {
             // Layer 1: Ambient Floating Cyber Particles & Stardust Canvas
-            Canvas(
-                modifier = Modifier
-                    .size(width = 135.dp, height = 40.dp)
-            ) {
-                val particles = listOf(
+            val particles = remember {
+                listOf(
                     Triple(0.12f, 0.25f, Color(0xFF00E5FF)),
                     Triple(0.28f, 0.65f, Color(0xFFFF007F)),
                     Triple(0.45f, 0.15f, Color(0xFF00FFCC)),
                     Triple(0.58f, 0.80f, Color(0xFFFFFFFF)),
                     Triple(0.72f, 0.35f, Color(0xFF00E5FF)),
                     Triple(0.85f, 0.70f, Color(0xFFFF007F)),
-                    Triple(0.92f, 0.20f, Color(0xFF76FF03)),
+                    Triple(0.92f, 0.20f, com.miku.launcher.ui.MikuIdentity.Leek),
                     Triple(0.38f, 0.90f, Color(0xFF00E5FF)),
-                    Triple(0.65f, 0.45f, Color(0xFFFFD600))
+                    Triple(0.65f, 0.45f, com.miku.launcher.ui.MikuIdentity.Gold)
                 )
-
+            }
+            Canvas(
+                modifier = Modifier
+                    .size(width = 135.dp, height = 40.dp)
+            ) {
                 particles.forEachIndexed { i, p ->
                     val baseX = p.first * size.width
                     val baseY = p.second * size.height
@@ -4876,7 +4915,7 @@ fun CyberPlasmaGlowClock(
                 ) {
                     Box(Modifier.width(2.dp).height((11 * bar1).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuCyan, Color(0xFF00FFCC)))))
                     Box(Modifier.width(2.dp).height((11 * bar2).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuNeonPink, Color(0xFFFF4081)))))
-                    Box(Modifier.width(2.dp).height((11 * bar3).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(Color(0xFF00FF7F), Color(0xFF76FF03)))))
+                    Box(Modifier.width(2.dp).height((11 * bar3).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(Color(0xFF00FF7F), com.miku.launcher.ui.MikuIdentity.Leek))))
                     Box(Modifier.width(2.dp).height((11 * bar4).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuCyan, Color(0xFF00B0FF)))))
                     Box(Modifier.width(2.dp).height((11 * bar5).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(MikuNeonPink, Color(0xFFFF007F)))))
                     Box(Modifier.width(2.dp).height((11 * bar6).dp).clip(RoundedCornerShape(0.5.dp)).background(Brush.verticalGradient(listOf(Color(0xFF00FFCC), MikuCyan))))
@@ -4945,7 +4984,7 @@ fun CyberNotificationShadeModal(
                 .align(Alignment.TopCenter)
                 .padding(top = 16.dp, start = 8.dp, end = 8.dp, bottom = 6.dp)
                 .clickable(enabled = false) {}
-                .clip(RoundedCornerShape(22.dp))
+                .clip(RoundedCornerShape(24.dp))
                 .background(
                     Brush.verticalGradient(
                         listOf(
@@ -4966,7 +5005,7 @@ fun CyberNotificationShadeModal(
                             )
                         )
                     ),
-                    RoundedCornerShape(22.dp)
+                    RoundedCornerShape(24.dp)
                 )
                 .padding(horizontal = 14.dp, vertical = 12.dp)
         ) {
@@ -5016,16 +5055,16 @@ fun CyberNotificationShadeModal(
                         // Battery Chip
                         Box(
                             Modifier
-                                .clip(RoundedCornerShape(10.dp))
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(Color(0xFF061820))
-                                .border(0.8.dp, MikuCyan.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                                .border(0.8.dp, MikuCyan.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
                                 .padding(horizontal = 8.dp, vertical = 5.dp)
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
                                     if (isCharging) Icons.Default.BatteryChargingFull else Icons.Default.BatteryFull,
                                     contentDescription = null,
-                                    tint = if (isCharging) Color(0xFF00E676) else MikuCyan,
+                                    tint = if (isCharging) com.miku.launcher.ui.MikuIdentity.Leek else MikuCyan,
                                     modifier = Modifier.size(13.dp)
                                 )
                                 Spacer(Modifier.width(4.dp))
@@ -5061,9 +5100,9 @@ fun CyberNotificationShadeModal(
                     Box(
                         Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(if (isWifiConnected) MikuCyan.copy(alpha = 0.2f) else Color(0xFF081820))
-                            .border(1.dp, if (isWifiConnected) MikuCyan else Color(0xFF1E3A45), RoundedCornerShape(14.dp))
+                            .border(1.dp, if (isWifiConnected) MikuCyan else Color(0xFF1E3A45), RoundedCornerShape(16.dp))
                             .clickable {
                                 try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
                             }
@@ -5088,9 +5127,9 @@ fun CyberNotificationShadeModal(
                     Box(
                         Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(Color(0xFF0A1828))
-                            .border(1.dp, Color(0xFF2979FF).copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                            .border(1.dp, Color(0xFF2979FF).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
                             .clickable {
                                 try {
                                     val intent = Intent().setClassName("com.miku.settings", "com.miku.settings.MikuSettingsActivity").apply {
@@ -5126,9 +5165,9 @@ fun CyberNotificationShadeModal(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF081C24))
-                        .border(1.dp, MikuCyan.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
+                        .border(1.dp, MikuCyan.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Row(
@@ -5162,9 +5201,9 @@ fun CyberNotificationShadeModal(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0xFF0A1420))
-                        .border(1.dp, Color(0xFF7C4DFF).copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        .border(1.dp, Color(0xFF7C4DFF).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                         .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
                     Row(
@@ -5267,7 +5306,7 @@ fun CyberNotificationShadeModal(
                             title = "BIT-PERFECT ALSA",
                             subtitle = if (dreEnabled) "DRE ENHANCED" else "STANDARD HAL",
                             icon = Icons.Default.Headphones,
-                            accentColor = Color(0xFF00E676),
+                            accentColor = com.miku.launcher.ui.MikuIdentity.Leek,
                             isActive = dreEnabled,
                             onClick = {
                                 dreEnabled = !dreEnabled
@@ -5310,7 +5349,7 @@ fun CyberNotificationShadeModal(
                             title = "WIRELESS ADB",
                             subtitle = if (isAdbEnabled) "$adbIp:5555" else "PORT 5555",
                             icon = Icons.Default.DeveloperMode,
-                            accentColor = if (isAdbEnabled) Color(0xFF00E676) else MikuNeonPink,
+                            accentColor = if (isAdbEnabled) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
                             isActive = isAdbEnabled,
                             onClick = {
                                 val next = !isAdbEnabled
@@ -5370,7 +5409,7 @@ fun CyberNotificationShadeModal(
                             title = "PAUSE ON UNPLUG",
                             subtitle = if (pauseOnUnplug) "STOCK BEHAVIOR" else "KEEP PLAYING",
                             icon = Icons.Default.HeadsetOff,
-                            accentColor = if (pauseOnUnplug) Color(0xFF00E676) else MikuNeonPink,
+                            accentColor = if (pauseOnUnplug) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
                             isActive = pauseOnUnplug,
                             onClick = {
                                 val next = !pauseOnUnplug
@@ -5402,7 +5441,7 @@ fun CyberNotificationShadeModal(
                             title = "INGRESS ENGINE",
                             subtitle = if (ingestOn) "RSYNC INGEST ON" else "LOCAL SD ONLY",
                             icon = Icons.Default.Sync,
-                            accentColor = if (ingestOn) Color(0xFF00E676) else MikuNeonPink,
+                            accentColor = if (ingestOn) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
                             isActive = ingestOn,
                             onClick = {
                                 val next = !ingestOn
@@ -5425,7 +5464,7 @@ fun CyberNotificationShadeModal(
                             title = "NOW PLAYING HUD",
                             subtitle = if (trackHudOn) "TRACK POPUP ON" else "TRACK POPUP OFF",
                             icon = Icons.Default.MusicNote,
-                            accentColor = if (trackHudOn) Color(0xFF00E676) else MikuNeonPink,
+                            accentColor = if (trackHudOn) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
                             isActive = trackHudOn,
                             onClick = {
                                 val next = !trackHudOn
@@ -5437,7 +5476,28 @@ fun CyberNotificationShadeModal(
                                 }
                             }
                         )
-                        Spacer(Modifier.weight(1f))
+                        // POWER MODE: Settings.Global miku_power_mode auto → perf → save (Miku Music's
+                        // governor honours it); subtitle shows the live profile while in AUTO.
+                        val powerMode by com.miku.launcher.ui.rememberPowerMode()
+                        val liveProfile by com.miku.launcher.ui.rememberPowerProfile()
+                        CyberQuickTile(
+                            modifier = Modifier.weight(1f),
+                            title = "POWER MODE",
+                            subtitle = com.miku.launcher.ui.MikuPowerProfile.modeGlyph(powerMode, liveProfile) + " " +
+                                com.miku.launcher.ui.MikuPowerProfile.modeLabel(powerMode, liveProfile),
+                            icon = when (powerMode) { "perf" -> Icons.Default.Bolt; "save" -> Icons.Default.DarkMode; else -> Icons.Default.AutoAwesome },
+                            accentColor = when (powerMode) {
+                                "perf" -> com.miku.launcher.ui.MikuIdentity.PinkNeon
+                                "save" -> com.miku.launcher.ui.MikuIdentity.Lavender
+                                else -> com.miku.launcher.ui.MikuIdentity.Teal
+                            },
+                            isActive = powerMode != "auto",
+                            onClick = {
+                                com.miku.launcher.ui.MikuPowerProfile.cycleMode(ctx)
+                                com.miku.launcher.haptics.MikuHaptics.confirm(ctx)
+                            },
+                            onLongClick = { com.miku.launcher.ui.MikuPowerProfile.openGovernor(ctx) }
+                        )
                     }
                 }
 
@@ -5449,15 +5509,15 @@ fun CyberNotificationShadeModal(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
                         .background(Color(0x3300E676))
-                        .border(1.dp, Color(0xFF00E676), RoundedCornerShape(12.dp))
+                        .border(1.dp, com.miku.launcher.ui.MikuIdentity.Leek, RoundedCornerShape(12.dp))
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(6.dp).clip(CircleShape).background(Color(0xFF00E676)))
+                        Box(Modifier.size(6.dp).clip(CircleShape).background(com.miku.launcher.ui.MikuIdentity.Leek))
                         Spacer(Modifier.width(6.dp))
                         Text(
                             text = "🛡️ DATA-ONLY SIM SHIELD: GOOGLE FI & IMS NAGS SUPPRESSED",
-                            color = Color(0xFF00E676),
+                            color = com.miku.launcher.ui.MikuIdentity.Leek,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = AudiowideFont
@@ -5472,9 +5532,9 @@ fun CyberNotificationShadeModal(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(Color(0x3300E5FF))
-                        .border(1.dp, MikuCyan, RoundedCornerShape(14.dp))
+                        .border(1.dp, MikuCyan, RoundedCornerShape(16.dp))
                         .padding(10.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -5512,7 +5572,7 @@ fun CyberNotificationShadeModal(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
                         border = BorderStroke(1.dp, MikuCyan),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f).height(42.dp)
                     ) {
                         Text("⚡ REBOOT", color = MikuCyan, fontSize = 14.sp, fontFamily = AudiowideFont)
@@ -5526,7 +5586,7 @@ fun CyberNotificationShadeModal(
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
                         border = BorderStroke(1.dp, MikuNeonPink),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f).height(42.dp)
                     ) {
                         Text("💤 POWER OFF", color = MikuNeonPink, fontSize = 14.sp, fontFamily = AudiowideFont)
@@ -5536,7 +5596,7 @@ fun CyberNotificationShadeModal(
                         onClick = onClose,
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF)),
                         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.weight(1f).height(42.dp)
                     ) {
                         Text("✕ CLOSE", color = Color.White, fontSize = 14.sp, fontFamily = AudiowideFont)
@@ -5549,6 +5609,7 @@ fun CyberNotificationShadeModal(
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun CyberQuickTile(
     modifier: Modifier = Modifier,
@@ -5557,9 +5618,10 @@ fun CyberQuickTile(
     icon: ImageVector,
     accentColor: Color,
     isActive: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
-    val tileShape = remember { RoundedCornerShape(14.dp) }
+    val tileShape = remember { RoundedCornerShape(com.miku.launcher.ui.MikuDimens.cornerM) }
 
     // Outer 3D Embossed Container with Specular Top Bevel
     Box(
@@ -5574,7 +5636,7 @@ fun CyberQuickTile(
                     )
                 )
             )
-            .clickable { onClick() }
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
     ) {
         // Inner Elevated Holographic Card Surface
         Box(
@@ -5582,7 +5644,7 @@ fun CyberQuickTile(
                 .fillMaxSize()
                 .heightIn(min = 76.dp)
                 .padding(0.9.dp)
-                .clip(RoundedCornerShape(13.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(
                     Brush.verticalGradient(
                         if (isActive) listOf(accentColor.copy(alpha = 0.35f), Color(0xFF071922), Color(0xFF030D12))
@@ -5605,7 +5667,7 @@ fun CyberQuickTile(
                             )
                         )
                     ),
-                    RoundedCornerShape(13.dp)
+                    RoundedCornerShape(12.dp)
                 )
                 .padding(horizontal = 10.dp, vertical = 9.dp)
         ) {

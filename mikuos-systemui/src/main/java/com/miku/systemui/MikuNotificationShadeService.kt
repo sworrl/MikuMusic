@@ -280,7 +280,14 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     fun openRecents() = launchOwnActivity(MikuRecentsActivity::class.java, 2)
 
-    fun triggerHome() { performGlobalAction(GLOBAL_ACTION_HOME) }
+    fun triggerHome() {
+        // Pixel: leaving an app for home flashes the handle; going home from home does nothing.
+        workHandler.post {
+            val fromApp = runCatching { !MikuTaskStack.isHomeOnTop(this) }.getOrDefault(false)
+            if (fromApp) mainHandler.post { pillView?.flashGlow() }
+        }
+        performGlobalAction(GLOBAL_ACTION_HOME)
+    }
 
     // Quick-switch session: the MRU list is captured on the first swipe and walked for 2.5 s.
     private var qsList: List<MikuTaskStack.Entry> = emptyList()
@@ -442,6 +449,8 @@ class MikuNotificationShadeService : AccessibilityService() {
         private var pop = 1f
         private var retractAnim: ValueAnimator? = null
         private var popAnim: ValueAnimator? = null
+        private var commitFade = 0f          // chevron fade-in on commit (120ms), independent of travel
+        private var fadeAnim: ValueAnimator? = null
 
         private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0xFF39C5BB.toInt() }
         private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0x5500F5D4 }
@@ -486,7 +495,7 @@ class MikuNotificationShadeService : AccessibilityService() {
             val gx = if (isLeft) (right - dp(12f)) else (left + dp(12f))
             glyphPaint.alpha = (255 * visProgress).toInt()
             canvas.drawText("♥", gx, cy + dp(4.5f), glyphPaint)
-            val chevAlpha = ((visProgress - 0.55f) / 0.45f).coerceIn(0f, 1f)
+            val chevAlpha = maxOf(((visProgress - 0.55f) / 0.45f).coerceIn(0f, 1f), commitFade)
             if (chevAlpha > 0f) {
                 chevronPaint.alpha = (255 * chevAlpha).toInt()
                 val s = dp(4f)
@@ -501,18 +510,30 @@ class MikuNotificationShadeService : AccessibilityService() {
 
         private fun animateRetract() {
             retractAnim?.cancel()
+            fadeAnim?.cancel()
             retractAnim = ValueAnimator.ofFloat(visProgress, 0f).apply {
-                duration = 150; interpolator = DecelerateInterpolator()
-                addUpdateListener { visProgress = it.animatedValue as Float; invalidate() }
+                duration = MikuMotion.ms(160).toLong(); interpolator = MikuMotion.decel()
+                addUpdateListener { visProgress = it.animatedValue as Float; commitFade *= 0.85f; invalidate() }
                 start()
             }
         }
 
+        /** Commit: 1.2x pop with overshoot (Pixel back-arrow "click"). */
         private fun animatePop() {
             popAnim?.cancel()
-            popAnim = ValueAnimator.ofFloat(1f, 1.18f, 1f).apply {
-                duration = 140; interpolator = OvershootInterpolator(1.5f)
+            popAnim = ValueAnimator.ofFloat(1f, 1.2f, 1f).apply {
+                duration = MikuMotion.ms(160).toLong(); interpolator = MikuMotion.overshoot(1.5f)
                 addUpdateListener { pop = it.animatedValue as Float; invalidate() }
+                start()
+            }
+        }
+
+        /** Chevron fades in over 120ms at commit and out over 100ms on un-commit. */
+        private fun animateCommitFade(on: Boolean) {
+            fadeAnim?.cancel()
+            fadeAnim = ValueAnimator.ofFloat(commitFade, if (on) 1f else 0f).apply {
+                duration = MikuMotion.ms(if (on) 120 else 100).toLong(); interpolator = MikuMotion.decel()
+                addUpdateListener { commitFade = it.animatedValue as Float; invalidate() }
                 start()
             }
         }
@@ -526,7 +547,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                     down = true; committed = false; mode = Mode.UNDECIDED
                     startX = event.rawX; startY = event.rawY; curX = startX; curY = startY
                     points.clear(); points += TouchPt(event.rawX, event.rawY, now)
-                    visY = event.y; visProgress = 0f; pop = 1f
+                    visY = event.y; visProgress = 0f; pop = 1f; commitFade = 0f
                     invalidate()
                     return true
                 }
@@ -540,6 +561,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                         Mode.UNDECIDED -> {
                             if (dxIn >= dp(EDGE_CLAIM_DP)) {
                                 mode = if (dy <= dxIn * EDGE_MAX_ANGLE_TAN) Mode.BACK else Mode.FORWARD
+                                if (mode == Mode.BACK) MikuHaptics.tick(this)     // light: gesture claimed
                             } else if (dy >= EDGE_VERTICAL_INTENT_PX) {
                                 mode = Mode.FORWARD          // vertical intent first → belongs to the app
                             }
@@ -552,10 +574,11 @@ class MikuNotificationShadeService : AccessibilityService() {
                             if (!committed && dxIn >= dp(EDGE_COMMIT_DP)) committed = true
                             else if (committed && dxIn < dp(EDGE_UNCOMMIT_DP)) committed = false
                             if (committed && !wasCommitted) {
-                                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                                animatePop()
+                                MikuHaptics.confirm(this)                          // stronger: commit
+                                animatePop(); animateCommitFade(true)
                             } else if (!committed && wasCommitted) {
-                                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                                MikuHaptics.tick(this)
+                                animateCommitFade(false)
                             }
                         }
                         else -> {}
@@ -566,7 +589,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                         // rubber-band past the max: only 15% of the extra travel shows
                         val eff = if (raw <= max) raw else max + (raw - max) * 0.15f
                         visProgress = (eff / max).coerceIn(0f, 1.12f)
-                        visY = event.y - (event.y - (visY)) * 0.35f    // loose vertical follow
+                        visY += (event.y - visY) * 0.3f                 // Pixel: loose 0.3 lerp follow
                         invalidate()
                     }
                     return true
@@ -579,7 +602,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                     when (mode) {
                         Mode.BACK -> {
                             if (committed) {
-                                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                                MikuHaptics.confirm(this)
                                 performGlobalAction(GLOBAL_ACTION_BACK)
                             }
                             animateRetract()
@@ -609,6 +632,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         private var down = false
         private var opened = false
         private var startX = 0f; private var startY = 0f
+        private var velocity: VelocityTracker? = null
         private val points = ArrayList<TouchPt>(64)
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -618,20 +642,25 @@ class MikuNotificationShadeService : AccessibilityService() {
                     if (replayInFlight) return false          // our own injected touch
                     down = true; opened = false
                     startX = event.rawX; startY = event.rawY
+                    velocity?.recycle(); velocity = VelocityTracker.obtain().also { it.addMovement(event) }
                     points.clear(); points += TouchPt(startX, startY, now)
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     if (!down) return false
+                    velocity?.addMovement(event)
                     if (points.size < 400) points += TouchPt(event.rawX, event.rawY, now)
+                    val dy = event.rawY - startY
                     if (!opened) {
-                        val dy = event.rawY - startY
                         val dx = abs(event.rawX - startX)
                         if (dy >= dp(SHADE_PULL_DP) && dx < dy) {
                             opened = true
-                            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            MikuHaptics.tick(this)
+                            MikuShadeDrag.begin(dy)                  // the shade follows this finger 1:1
                             openShadeActivity(dy.toInt())
                         }
+                    } else {
+                        MikuShadeDrag.move(dy)
                     }
                     return true
                 }
@@ -639,10 +668,19 @@ class MikuNotificationShadeService : AccessibilityService() {
                     if (!down) return false
                     down = false
                     points += TouchPt(event.rawX, event.rawY, now)
-                    if (!opened) replayTouch(ArrayList(points), topStripView, topParams)
+                    velocity?.addMovement(event); velocity?.computeCurrentVelocity(1000)
+                    val vy = velocity?.yVelocity ?: 0f
+                    velocity?.recycle(); velocity = null
+                    if (opened) MikuShadeDrag.release(vy)
+                    else replayTouch(ArrayList(points), topStripView, topParams)
                     return true
                 }
-                MotionEvent.ACTION_CANCEL -> { down = false; return true }
+                MotionEvent.ACTION_CANCEL -> {
+                    down = false
+                    velocity?.recycle(); velocity = null
+                    if (opened) MikuShadeDrag.release(0f)
+                    return true
+                }
             }
             return super.onTouchEvent(event)
         }
@@ -660,6 +698,9 @@ class MikuNotificationShadeService : AccessibilityService() {
         private var shiftX = 0f        // horizontal follow
         private var armed = false      // recents hold armed (pill turns teal)
         private var pop = 1f
+        private var flash = 0f         // 90ms glow flash when leaving an app for home
+        private var flashAnim: ValueAnimator? = null
+        private var claimed = false    // first light tick once the drag is clearly upward
         private var relaxAnim: ValueAnimator? = null
         private var popAnim: ValueAnimator? = null
 
@@ -677,7 +718,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                 if (dyUp >= dp(RECENTS_DP) && speed < RECENTS_HOLD_MAX_PX_S) {
                     Log.i(TAG, "pill hold -> recents (dyUp=${dyUp.toInt()} speed=${speed.toInt()})")
                     fired = true; armed = true
-                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                    MikuHaptics.pop(this@HomePillView)                      // strong: hold → recents
                     animatePop()
                     openRecents()
                 } else {
@@ -696,7 +737,7 @@ class MikuNotificationShadeService : AccessibilityService() {
             val bottom = h - dp(8f) - lift
             canvas.save()
             canvas.scale(pop, pop, cx, bottom - ph / 2f)
-            val glowA = if (armed) 0x90 else (0x30 + (0x50 * stretch).toInt())
+            val glowA = ((if (armed) 0x90 else (0x30 + (0x50 * stretch).toInt())) + (0x60 * flash).toInt()).coerceAtMost(0xF0)
             val gb = navTealBright and 0x00FFFFFF
             glowPaint.shader = android.graphics.LinearGradient(cx - pw / 2f - dp(10f), 0f, cx + pw / 2f + dp(10f), 0f,
                 intArrayOf(gb, (glowA shl 24) or gb, gb), null, android.graphics.Shader.TileMode.CLAMP)
@@ -712,7 +753,7 @@ class MikuNotificationShadeService : AccessibilityService() {
             relaxAnim?.cancel()
             val s0 = stretch; val x0 = shiftX
             relaxAnim = ValueAnimator.ofFloat(1f, 0f).apply {
-                duration = 220; interpolator = OvershootInterpolator(1.2f)
+                duration = MikuMotion.ms(220).toLong(); interpolator = MikuMotion.overshoot(1.2f)
                 addUpdateListener { val f = it.animatedValue as Float; stretch = s0 * f; shiftX = x0 * f; invalidate() }
                 start()
             }
@@ -721,14 +762,25 @@ class MikuNotificationShadeService : AccessibilityService() {
         private fun animatePop() {
             popAnim?.cancel()
             popAnim = ValueAnimator.ofFloat(1f, 1.25f, 1f).apply {
-                duration = 160; interpolator = OvershootInterpolator(1.4f)
+                duration = MikuMotion.ms(160).toLong(); interpolator = MikuMotion.overshoot(1.4f)
                 addUpdateListener { pop = it.animatedValue as Float; invalidate() }
                 start()
             }
         }
 
+        /** Quick 90ms glow flash — played when a HOME gesture leaves a foreground app. */
+        fun flashGlow() {
+            if (MikuMotion.quiet) return
+            flashAnim?.cancel()
+            flashAnim = ValueAnimator.ofFloat(0f, 1f, 0f).apply {
+                duration = 90
+                addUpdateListener { flash = it.animatedValue as Float; invalidate() }
+                start()
+            }
+        }
+
         fun rejectBounce() {
-            performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            MikuHaptics.reject(this)
             relaxAnim?.cancel()
             relaxAnim = ValueAnimator.ofFloat(0f, 1f, -1f, 0f).apply {
                 duration = 260
@@ -741,7 +793,7 @@ class MikuNotificationShadeService : AccessibilityService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     relaxAnim?.cancel()
-                    down = true; fired = false; armed = false
+                    down = true; fired = false; armed = false; claimed = false
                     startX = event.rawX; startY = event.rawY; curX = startX; curY = startY
                     velocity?.recycle(); velocity = VelocityTracker.obtain().also { it.addMovement(event) }
                     invalidate()
@@ -756,6 +808,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                     val max = dp(RECENTS_DP)
                     stretch = if (dyUp <= max) dyUp / max else 1f + (dyUp - max) / max * 0.12f
                     shiftX = (dx * 0.5f).coerceIn(-dp(24f), dp(24f))
+                    if (!claimed && (dyUp >= dp(8f) || abs(dx) >= dp(8f))) { claimed = true; MikuHaptics.tick(this) }   // light: claimed
                     if (!fired) {
                         mainHandler.removeCallbacks(holdCheck)
                         if (dyUp >= max) mainHandler.postDelayed(holdCheck, RECENTS_HOLD_MS)
@@ -778,12 +831,12 @@ class MikuNotificationShadeService : AccessibilityService() {
                     if (event.actionMasked == MotionEvent.ACTION_UP && !fired) {
                         if (dyUp >= dp(HOME_DP) || (vy < -HOME_FLING_PX_S && dyUp >= dp(12f))) {
                             fired = true
-                            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            MikuHaptics.confirm(this)
                             animatePop()
                             triggerHome()
                         } else if (abs(dx) >= dp(QUICK_SWITCH_DP) && dy < dp(QUICK_SWITCH_MAX_DY_DP)) {
                             fired = true
-                            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            MikuHaptics.confirm(this)
                             animatePop()
                             quickSwitch(if (dx > 0) 1 else -1)
                         }

@@ -42,7 +42,7 @@ fun MikuIngestionBadge(
 
     val ingestState by MikuIngestEngine.state.collectAsState()
 
-    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+    val lowPowerGate by com.miku.launcher.ui.rememberAmbientGate()
 
     val infinitePulse = rememberInfiniteTransition(label = "IngestPulse")
     val pulseAlpha by infinitePulse.gatedFloat(lowPowerGate, 

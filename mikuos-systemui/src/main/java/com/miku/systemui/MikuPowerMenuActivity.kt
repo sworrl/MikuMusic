@@ -19,6 +19,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,12 +106,7 @@ fun MikuPowerMenuScreen(
     var pendingActionAccent by remember { mutableStateOf(MikuTealBright) }
     var countdownSeconds by remember { mutableIntStateOf(3) }
 
-    fun hapticTick() {
-        try {
-            val vib = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-            vib?.vibrate(VibrationEffect.createOneShot(25, VibrationEffect.DEFAULT_AMPLITUDE))
-        } catch (_: Throwable) {}
-    }
+    fun hapticTick() = MikuHaptics.buzz(ctx, 25L)
 
     fun executeAction(command: String) {
         hapticTick()
@@ -161,17 +160,23 @@ fun MikuPowerMenuScreen(
         } catch (_: Throwable) { 100 }
     }
 
-    // Infinite breathing glow for the power core arc
-    val infiniteTransition = rememberInfiniteTransition(label = "corePulse")
-    val coreGlow by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1400, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "coreGlow"
-    )
+    // Breathing glow for the power core arc — static in audio_only / idle (no infinite transition)
+    val coreGlow: Float = if (MikuMotion.quiet) 0.75f else {
+        val infiniteTransition = rememberInfiniteTransition(label = "corePulse")
+        val g by infiniteTransition.animateFloat(
+            initialValue = 0.5f,
+            targetValue = 1.0f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1400, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "coreGlow"
+        )
+        g
+    }
+    // Card entrance: 0.92 → 1 scale + fade, 180ms, then the pills stagger in 40ms apart
+    val cardIn = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { cardIn.animateTo(1f, MikuMotion.ease(180)) }
 
     // Backdrop with tap-to-dismiss
     Box(
@@ -196,6 +201,7 @@ fun MikuPowerMenuScreen(
             modifier = Modifier
                 .fillMaxWidth(0.88f)
                 .wrapContentHeight()
+                .graphicsLayer { alpha = cardIn.value; val sc = 0.92f + 0.08f * cardIn.value; scaleX = sc; scaleY = sc }
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null
@@ -357,15 +363,10 @@ fun MikuPowerMenuScreen(
                             ) {
                                 Text("CANCEL", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                             }
-                            Button(
-                                onClick = { executeAction(pendingActionCommand!!) },
-                                modifier = Modifier.weight(1f).height(40.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = pendingActionAccent.copy(alpha = 0.35f)),
-                                border = BorderStroke(1.2.dp, pendingActionAccent),
-                                shape = RoundedCornerShape(10.dp)
-                            ) {
-                                Text("NOW", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
+                            HoldToConfirm(
+                                accent = pendingActionAccent,
+                                modifier = Modifier.weight(1f)
+                            ) { executeAction(pendingActionCommand!!) }
                         }
                     }
                 } else {
@@ -375,20 +376,20 @@ fun MikuPowerMenuScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        PowerPill("LOCKDOWN", "Lock now · secure", Icons.Default.Shield, MikuTealBright) { executeAction("lockdown") }
-                        PowerPill("REBOOT", "Fast OS restart", Icons.Default.RestartAlt, Color(0xFF00E5FF)) {
+                        PowerPill(0, "LOCKDOWN", "Lock now · secure", Icons.Default.Shield, MikuTealBright) { executeAction("lockdown") }
+                        PowerPill(1, "REBOOT", "Fast OS restart", Icons.Default.RestartAlt, Color(0xFF00E5FF)) {
                             pendingActionName = "REBOOT"; pendingActionCommand = "reboot"; pendingActionAccent = Color(0xFF00E5FF)
                         }
-                        PowerPill("POWER OFF", "Full shutdown", Icons.Default.PowerSettingsNew, MikuPinkBright) {
+                        PowerPill(2, "POWER OFF", "Full shutdown", Icons.Default.PowerSettingsNew, MikuPinkBright) {
                             pendingActionName = "POWER OFF"; pendingActionCommand = "reboot -p"; pendingActionAccent = MikuPinkBright
                         }
-                        PowerPill("RECOVERY", "Recovery partition", Icons.Default.SettingsBackupRestore, MikuPurple) {
+                        PowerPill(3, "RECOVERY", "Recovery partition", Icons.Default.SettingsBackupRestore, MikuPurple) {
                             pendingActionName = "RECOVERY"; pendingActionCommand = "reboot recovery"; pendingActionAccent = MikuPurple
                         }
-                        PowerPill("FASTBOOT", "Bootloader mode", Icons.Default.DeveloperMode, MikuGold) {
+                        PowerPill(4, "FASTBOOT", "Bootloader mode", Icons.Default.DeveloperMode, MikuGold) {
                             pendingActionName = "FASTBOOT"; pendingActionCommand = "reboot bootloader"; pendingActionAccent = MikuGold
                         }
-                        PowerPill("RESTART SYSTEMUI", "Soft-restart the shell", Icons.Default.Refresh, Color(0xFF00E676)) { executeAction("systemui") }
+                        PowerPill(5, "RESTART SYSTEMUI", "Soft-restart the shell", Icons.Default.Refresh, Color(0xFF00E676)) { executeAction("systemui") }
                     }
                 }
 
@@ -530,25 +531,35 @@ fun PowerActionTile(
 /** Pixel-style full-width pill action: 56dp tall, icon disc left, label + hint, accent border. */
 @Composable
 fun PowerPill(
+    index: Int,
     title: String,
     hint: String,
     icon: ImageVector,
     accent: Color,
     onClick: () -> Unit
 ) {
-    val ctx = LocalContext.current
+    val view = LocalView.current
+    val interaction = remember { MutableInteractionSource() }
+    // Stagger-in: 40ms per row, 220ms ease, 24dp rise (MikuMotion)
+    val t = remember { Animatable(if (MikuMotion.quiet) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (t.value < 1f) { delay(MikuMotion.STAGGER_MS * index); t.animateTo(1f, MikuMotion.ease(220)) }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .height(56.dp)
+            .graphicsLayer {
+                alpha = t.value
+                translationY = (1f - t.value) * 24.dp.toPx()
+                val sc = 0.96f + 0.04f * t.value; scaleX = sc; scaleY = sc
+            }
+            .pressScale(interaction)
             .clip(RoundedCornerShape(28.dp))
             .background(Brush.horizontalGradient(listOf(accent.copy(alpha = 0.22f), Color(0xFF07171E))))
             .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(28.dp))
-            .clickable {
-                try {
-                    val vib = ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                    vib?.vibrate(VibrationEffect.createOneShot(20, VibrationEffect.DEFAULT_AMPLITUDE))
-                } catch (_: Throwable) {}
+            .clickable(interactionSource = interaction, indication = null) {
+                MikuHaptics.confirm(view)
                 onClick()
             }
             .padding(start = 8.dp, end = 16.dp),
@@ -564,5 +575,59 @@ fun PowerPill(
             Text(hint, color = MikuMuted, fontSize = 11.sp, maxLines = 1)
         }
         Text("›", color = accent.copy(alpha = 0.8f), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+
+/**
+ * Pixel-style hold-to-confirm: press and hold 1.2s; the fill ring grows linearly with a light
+ * haptic tick at 25 / 50 / 75 % and a strong pop at 100 %, then [onConfirmed] runs. Releasing
+ * early springs the fill back to zero.
+ */
+@Composable
+private fun HoldToConfirm(accent: Color, modifier: Modifier = Modifier, onConfirmed: () -> Unit) {
+    val view = LocalView.current
+    val scope = rememberCoroutineScope()
+    val progress = remember { Animatable(0f) }
+    var holding by remember { mutableStateOf(false) }
+    Box(
+        modifier
+            .height(40.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(accent.copy(alpha = 0.18f))
+            .border(1.2.dp, accent, RoundedCornerShape(10.dp))
+            .pointerInput(Unit) {
+                detectTapGestures(onPress = {
+                    holding = true
+                    MikuHaptics.tick(view)
+                    val job = scope.launch {
+                        var ticked = 0
+                        progress.animateTo(1f, tween(MikuMotion.ms(1200), easing = LinearEasing)) {
+                            val q = (value * 4f).toInt()
+                            if (q > ticked && q in 1..3) { ticked = q; MikuHaptics.tick(view) }
+                        }
+                        if (progress.value >= 0.999f) { MikuHaptics.pop(view); onConfirmed() }
+                    }
+                    tryAwaitRelease()
+                    holding = false
+                    if (progress.value < 0.999f) {
+                        job.cancel()
+                        scope.launch { progress.animateTo(0f, MikuMotion.bouncy()) }
+                    }
+                })
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(progress.value.coerceIn(0f, 1f))
+                .background(accent.copy(alpha = 0.45f))
+                .align(Alignment.CenterStart)
+        )
+        Text(
+            if (holding) "HOLD…  ${(progress.value * 100).toInt()}%" else "HOLD TO CONFIRM",
+            color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp, maxLines = 1
+        )
     }
 }

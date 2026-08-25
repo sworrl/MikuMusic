@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+
 package com.miku.launcher.ui
 
 import android.bluetooth.BluetoothAdapter
@@ -7,6 +9,8 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -171,9 +175,9 @@ fun rememberMikuStatusBarState(
 
 /** Thermal ladder shared with the thermal badge. */
 fun thermalColor(c: Float): Color = when {
-    c >= 55f -> Color(0xFFFF1744)
+    c >= 55f -> com.miku.launcher.ui.MikuIdentity.Coral
     c >= 48f -> Color(0xFFFF8A65)
-    c >= 40f -> Color(0xFFFFD600)
+    c >= 40f -> com.miku.launcher.ui.MikuIdentity.Gold
     else -> MikuCyan
 }
 
@@ -304,17 +308,34 @@ fun MikuStatusBar(
                 if (state.bluetoothConnected) Icon(Icons.Default.Bluetooth, contentDescription = "Bluetooth", tint = MikuCyan, modifier = Modifier.size(glyph))
                 if (showVpn) Icon(Icons.Default.VpnLock, contentDescription = "VPN", tint = MikuCyan, modifier = Modifier.size(glyph))
                 val batteryColor = when {
-                    state.isCharging -> Color(0xFF00E676)
+                    state.isCharging -> com.miku.launcher.ui.MikuIdentity.Leek
                     state.batteryPct > 50 -> MikuCyan
-                    state.batteryPct > 20 -> Color(0xFFFFD600)
-                    else -> Color(0xFFFF1744)
+                    state.batteryPct > 20 -> com.miku.launcher.ui.MikuIdentity.Gold
+                    else -> com.miku.launcher.ui.MikuIdentity.Coral
                 }
                 Text("${batteryShown}%", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, maxLines = 1, softWrap = false)
-                if (profileGlyph.isNotEmpty()) {
+                run {
                     Spacer(Modifier.width(5.dp))
-                    // Power profile: ⚡ perf / ♪ audio-only / ☾ idle — tap opens Miku Music's Power Governor.
-                    Text(profileGlyph, color = if (profile == "perf") MikuNeonPink else textColor.copy(alpha = 0.85f), fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false,
-                        modifier = Modifier.clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { MikuPowerProfile.openGovernor(ctxBar) })
+                    // Power: mode glyph (⚡ perf / ☾ save / auto = live profile ♪ ☾ ⚡ ✦).
+                    // Tap opens Miku Music's Power Governor; long-press cycles auto → perf → save.
+                    val powerMode by rememberPowerMode()
+                    val modeGlyph = MikuPowerProfile.modeGlyph(powerMode, profile)
+                    val glyphColor = when {
+                        powerMode == "perf" || profile == "perf" -> MikuIdentity.PinkNeon
+                        powerMode == "save" -> MikuIdentity.Lavender
+                        else -> textColor.copy(alpha = 0.85f)
+                    }
+                    Text(modeGlyph, color = glyphColor, fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false,
+                        modifier = Modifier.combinedClickable(
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                            indication = null,
+                            onClick = { MikuPowerProfile.openGovernor(ctxBar) },
+                            onLongClick = {
+                                val next = MikuPowerProfile.cycleMode(ctxBar)
+                                com.miku.launcher.haptics.MikuHaptics.confirm(ctxBar)
+                                android.widget.Toast.makeText(ctxBar, "Power mode: " + MikuPowerProfile.modeLabel(next, profile), android.widget.Toast.LENGTH_SHORT).show()
+                            }
+                        ))
                 }
                 Box(contentAlignment = Alignment.Center) {
                     Canvas(Modifier.width(20.dp).height(11.dp)) {

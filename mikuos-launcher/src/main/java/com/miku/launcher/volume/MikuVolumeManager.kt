@@ -268,7 +268,7 @@ fun CyberVolumeBadge(
 fun sampleVolumeGradientColor(pct: Int, isMuted: Boolean): Color {
     if (isMuted) return Color(0xFFFF5252)
     return when {
-        pct >= 85 -> Color(0xFFFF1744) // Danger Red
+        pct >= 85 -> com.miku.launcher.ui.MikuIdentity.Coral // Danger Red
         pct >= 70 -> Color(0xFFFF4081) // Neon Pink
         pct >= 50 -> Color(0xFFB388FF) // Electric Purple
         pct >= 25 -> Color(0xFF00E5FF) // Miku Cyan
@@ -389,7 +389,7 @@ fun MikuCyberVolumeHudOverlay(
                     .border(
                         (1.0f + glowBrightness * 0.8f).dp,
                         Brush.verticalGradient(
-                            if (isDanger) listOf(Color(0xFFFF1744), Color(0xFFFF007F), Color(0xFFFF5252))
+                            if (isDanger) listOf(com.miku.launcher.ui.MikuIdentity.Coral, Color(0xFFFF007F), Color(0xFFFF5252))
                             else listOf(dynamicColor, MikuCyan, Color(0xFF7C4DFF))
                         ),
                         CutCornerShape(12.dp)
@@ -413,7 +413,7 @@ fun MikuCyberVolumeHudOverlay(
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Vol Up",
-                            tint = if (isDanger) Color(0xFFFF1744) else dynamicColor,
+                            tint = if (isDanger) com.miku.launcher.ui.MikuIdentity.Coral else dynamicColor,
                             modifier = Modifier.size(15.dp)
                         )
                     }
@@ -428,7 +428,7 @@ fun MikuCyberVolumeHudOverlay(
                             .background(Color(0x5504141E))
                             .border(
                                 0.9.dp,
-                                if (isDanger) Color(0xFFFF1744).copy(alpha = hazardPulse)
+                                if (isDanger) com.miku.launcher.ui.MikuIdentity.Coral.copy(alpha = hazardPulse)
                                 else dynamicColor.copy(alpha = glowBrightness),
                                 RoundedCornerShape(11.dp)
                             )
@@ -455,7 +455,7 @@ fun MikuCyberVolumeHudOverlay(
                                 )
                             } else {
                                 Brush.verticalGradient(
-                                    0.00f to Color(0xFFFF1744),
+                                    0.00f to com.miku.launcher.ui.MikuIdentity.Coral,
                                     0.12f to Color(0xFFFF5252),
                                     0.25f to Color(0xFFFF3399),
                                     0.50f to Color(0xFF9D4EDD),
@@ -549,7 +549,7 @@ fun MikuCyberVolumeHudOverlay(
                             .clip(CutCornerShape(4.dp))
                             .background(
                                 Brush.horizontalGradient(
-                                    listOf(Color(0xFFFF1744), Color(0xFFFF007F))
+                                    listOf(com.miku.launcher.ui.MikuIdentity.Coral, Color(0xFFFF007F))
                                 )
                             )
                             .border(1.dp, Color.White.copy(alpha = 0.95f), CutCornerShape(4.dp))

@@ -695,7 +695,7 @@ fun MikuBpmObservatoryModal(
                                 .border(2.dp, Color.White, CircleShape)
                                 .clickable {
                                     MikuBeatClickerEngine.tapGoldenLeek()
-                                    MikuTactileHaptics.playBumpyLikeTexture(ctx)
+                                    com.miku.launcher.haptics.MikuHaptics.like(ctx)
                                 }
                                 .padding(8.dp)
                         ) {
@@ -785,13 +785,13 @@ fun MikuBpmObservatoryModal(
                                     judgmentTitle = "💖 PERFECT!! (0ms)"
                                     judgmentColor = KawaiiHotPink
                                     perfectShockwaveTrigger++
-                                    MikuTactileHaptics.playBumpyLikeTexture(ctx)
+                                    com.miku.launcher.haptics.MikuHaptics.like(ctx)
                                 }
                                 HitAccuracy.GOOD -> {
                                     val prefix = if (timingOffsetMs < 0) "EARLY" else "LATE"
                                     judgmentTitle = "✨ GOOD ($prefix ${abs(timingOffsetMs)}ms)"
                                     judgmentColor = KawaiiSoftTeal
-                                    MikuTactileHaptics.playRatchetTick(ctx)
+                                    com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                 }
                                 HitAccuracy.MISS -> {
                                     judgmentTitle = "MISS (${abs(timingOffsetMs)}ms)"
@@ -862,7 +862,7 @@ fun MikuBpmObservatoryModal(
                                     .border(1.dp, if (canAfford) KawaiiMikuMint else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
                                     .clickable(enabled = canAfford) {
                                         MikuBeatClickerEngine.buyBuilding(b.id)
-                                        MikuTactileHaptics.playRatchetTick(ctx)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                     }
                                     .padding(6.dp)
                             ) {
@@ -899,7 +899,7 @@ fun MikuBpmObservatoryModal(
                                     .border(1.dp, if (canAfford) KawaiiSoftTeal else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
                                     .clickable(enabled = canAfford) {
                                         MikuBeatClickerEngine.buySkill(s.id)
-                                        MikuTactileHaptics.playBumpyLikeTexture(ctx)
+                                        com.miku.launcher.haptics.MikuHaptics.like(ctx)
                                     }
                                     .padding(6.dp)
                             ) {
@@ -936,7 +936,7 @@ fun MikuBpmObservatoryModal(
                                     .border(1.5.dp, if (isCurrent) Color(skin.primaryColor) else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
                                     .clickable {
                                         MikuBeatClickerEngine.setSkin(skin)
-                                        MikuTactileHaptics.playRatchetTick(ctx)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                     }
                                     .padding(8.dp)
                             ) {
@@ -1018,7 +1018,7 @@ fun MikuBpmObservatoryModal(
                                         .background(Color(0x55FF3385))
                                         .border(1.dp, KawaiiHotPink, RoundedCornerShape(10.dp))
                                         .clickable {
-                                            MikuTactileHaptics.playBumpyLikeTexture(ctx)
+                                            com.miku.launcher.haptics.MikuHaptics.like(ctx)
                                             try {
                                                 android.provider.Settings.Global.putFloat(ctx.contentResolver, "miku_live_bpm", tapVal)
                                                 android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_beat_interval_ms", (60000f / tapVal).toInt())
@@ -1060,7 +1060,7 @@ fun MikuBpmObservatoryModal(
                                         .border(1.dp, KawaiiMikuMint, RoundedCornerShape(10.dp))
                                         .clickable {
                                             calculatedTapBpm = halfVal
-                                            MikuTactileHaptics.playRatchetTick(ctx)
+                                            com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                         }
                                         .padding(horizontal = 6.dp, vertical = 4.dp)
                                 ) {
@@ -1074,7 +1074,7 @@ fun MikuBpmObservatoryModal(
                                         .border(1.dp, KawaiiLavender, RoundedCornerShape(10.dp))
                                         .clickable {
                                             calculatedTapBpm = doubleVal
-                                            MikuTactileHaptics.playRatchetTick(ctx)
+                                            com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                         }
                                         .padding(horizontal = 6.dp, vertical = 4.dp)
                                 ) {
@@ -1087,7 +1087,7 @@ fun MikuBpmObservatoryModal(
                                         .background(Color(0x3300E5FF))
                                         .border(1.dp, Color(0xFF00E5FF), RoundedCornerShape(10.dp))
                                         .clickable {
-                                            MikuTactileHaptics.playRatchetTick(ctx)
+                                            com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                             coroutineScope.launch {
                                                 val online = bpmDb.resolveCanonicalBpm(trackArtist, trackTitle)
                                                 if (online != null && online.canonicalBpm > 0f) {

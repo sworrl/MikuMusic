@@ -389,12 +389,12 @@ fun MikuNetworkObservatoryModal(
                                                         Modifier
                                                             .size(6.dp)
                                                             .clip(CircleShape)
-                                                            .background(Color(0xFF00E676))
+                                                            .background(com.miku.launcher.ui.MikuIdentity.Leek)
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Text(
                                                         text = "CONNECTED // ${wifi.bssid}",
-                                                        color = Color(0xFF00E676),
+                                                        color = com.miku.launcher.ui.MikuIdentity.Leek,
                                                         fontSize = 11.5.sp,
                                                         fontWeight = FontWeight.Bold,
                                                         fontFamily = AudiowideFont
@@ -417,10 +417,10 @@ fun MikuNetworkObservatoryModal(
                                                 Modifier
                                                     .clip(CutCornerShape(4.dp))
                                                     .background(Color(0x3300E676))
-                                                    .border(0.5.dp, Color(0xFF00E676), CutCornerShape(4.dp))
+                                                    .border(0.5.dp, com.miku.launcher.ui.MikuIdentity.Leek, CutCornerShape(4.dp))
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
-                                                Text(wifi.standard, color = Color(0xFF00E676), fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                                Text(wifi.standard, color = com.miku.launcher.ui.MikuIdentity.Leek, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
                                             }
                                         }
                                     }
@@ -786,7 +786,7 @@ fun MikuNetworkObservatoryModal(
                                                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                                     Text(
                                                         "${ch.apCount} APs",
-                                                        color = if (ch.apCount > 3) Color(0xFFFF1744) else MikuCyan,
+                                                        color = if (ch.apCount > 3) com.miku.launcher.ui.MikuIdentity.Coral else MikuCyan,
                                                         fontSize = 15.sp,
                                                         fontWeight = FontWeight.Black,
                                                         fontFamily = AudiowideFont
@@ -798,9 +798,9 @@ fun MikuNetworkObservatoryModal(
                                                             .height(barHeight.dp)
                                                             .clip(RoundedCornerShape(2.dp))
                                                             .background(
-                                                                if (ch.apCount > 3) Color(0xFFFF1744)
-                                                                else if (ch.apCount > 1) Color(0xFFFFD600)
-                                                                else Color(0xFF00E676)
+                                                                if (ch.apCount > 3) com.miku.launcher.ui.MikuIdentity.Coral
+                                                                else if (ch.apCount > 1) com.miku.launcher.ui.MikuIdentity.Gold
+                                                                else com.miku.launcher.ui.MikuIdentity.Leek
                                                             )
                                                     )
                                                     Spacer(Modifier.height(2.dp))
@@ -919,7 +919,7 @@ fun MikuNetworkObservatoryModal(
                     // ============================================================
                     Text(
                         text = "UDR WIREGUARD SPLIT-TUNNEL (WAN BRIDGE)",
-                        color = Color(0xFF00E676),
+                        color = com.miku.launcher.ui.MikuIdentity.Leek,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = AudiowideFont,
@@ -948,7 +948,7 @@ fun MikuNetworkObservatoryModal(
                                 .padding(1.dp)
                                 .clip(CutCornerShape(9.dp))
                                 .background(Color(0xEE081F26))
-                                .border(1.dp, Color(0xFF00E676).copy(alpha = 0.5f), CutCornerShape(9.dp))
+                                .border(1.dp, com.miku.launcher.ui.MikuIdentity.Leek.copy(alpha = 0.5f), CutCornerShape(9.dp))
                                 .padding(10.dp)
                         ) {
                             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -964,12 +964,12 @@ fun MikuNetworkObservatoryModal(
                                                 Modifier
                                                     .size(7.dp)
                                                     .clip(CircleShape)
-                                                    .background(if (isHomeWifi) Color(0xFF00E5FF) else Color(0xFF00E676))
+                                                    .background(if (isHomeWifi) Color(0xFF00E5FF) else com.miku.launcher.ui.MikuIdentity.Leek)
                                             )
                                             Spacer(Modifier.width(6.dp))
                                             Text(
                                                 if (isHomeWifi) "DIRECT HOME LAN (TUNNEL BYPASSED)" else "SPLIT-TUNNEL ONLINE (4G / WAN)",
-                                                color = if (isHomeWifi) MikuCyan else Color(0xFF00E676),
+                                                color = if (isHomeWifi) MikuCyan else com.miku.launcher.ui.MikuIdentity.Leek,
                                                 fontSize = 12.5.sp,
                                                 fontWeight = FontWeight.Black,
                                                 fontFamily = AudiowideFont
@@ -991,14 +991,14 @@ fun MikuNetworkObservatoryModal(
                                     Button(
                                         onClick = { isWgQrModalOpen = true },
                                         modifier = Modifier.height(28.dp),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676).copy(alpha = 0.2f)),
-                                        border = BorderStroke(1.dp, Color(0xFF00E676)),
+                                        colors = ButtonDefaults.buttonColors(containerColor = com.miku.launcher.ui.MikuIdentity.Leek.copy(alpha = 0.2f)),
+                                        border = BorderStroke(1.dp, com.miku.launcher.ui.MikuIdentity.Leek),
                                         shape = CutCornerShape(4.dp),
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                     ) {
-                                        Icon(Icons.Default.QrCode, contentDescription = null, tint = Color(0xFF00E676), modifier = Modifier.size(14.dp))
+                                        Icon(Icons.Default.QrCode, contentDescription = null, tint = com.miku.launcher.ui.MikuIdentity.Leek, modifier = Modifier.size(14.dp))
                                         Spacer(Modifier.width(4.dp))
-                                        Text("QR / CONF", color = Color(0xFF00E676), fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                        Text("QR / CONF", color = com.miku.launcher.ui.MikuIdentity.Leek, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                                     }
                                 }
 
@@ -1120,7 +1120,7 @@ fun MikuNetworkObservatoryModal(
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             } else {
-                                Text("This is an unencrypted Open network. No password is required.", color = Color(0xFF00E676), fontSize = 12.5.sp)
+                                Text("This is an unencrypted Open network. No password is required.", color = com.miku.launcher.ui.MikuIdentity.Leek, fontSize = 12.5.sp)
                             }
 
                             Spacer(Modifier.height(14.dp))
@@ -1349,7 +1349,7 @@ fun MikuNetworkObservatoryModal(
                             .padding(1.dp)
                             .clip(CutCornerShape(13.dp))
                             .background(Color(0xFF031620))
-                            .border(1.dp, Color(0xFF00E676), CutCornerShape(13.dp))
+                            .border(1.dp, com.miku.launcher.ui.MikuIdentity.Leek, CutCornerShape(13.dp))
                             .padding(14.dp)
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1360,7 +1360,7 @@ fun MikuNetworkObservatoryModal(
                             ) {
                                 Text(
                                     text = "WIREGUARD VPN",
-                                    color = Color(0xFF00E676),
+                                    color = com.miku.launcher.ui.MikuIdentity.Leek,
                                     fontSize = 15.sp,
                                     fontWeight = FontWeight.Black,
                                     fontFamily = AudiowideFont
@@ -1414,7 +1414,7 @@ fun MikuNetworkObservatoryModal(
                                         wgStatus.lastError != null -> "○ ${wgStatus.lastError}"
                                         else -> "○ Disconnected"
                                     },
-                                    color = if (isUp) Color(0xFF00E676) else MikuTextSecondary,
+                                    color = if (isUp) com.miku.launcher.ui.MikuIdentity.Leek else MikuTextSecondary,
                                     fontSize = 14.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -1452,7 +1452,7 @@ fun MikuNetworkObservatoryModal(
                                                 cm?.setPrimaryClip(android.content.ClipData.newPlainText("wg-pubkey", myPublicKey))
                                             },
                                             modifier = Modifier.size(24.dp)
-                                        ) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = Color(0xFF00E676), modifier = Modifier.size(14.dp)) }
+                                        ) { Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = com.miku.launcher.ui.MikuIdentity.Leek, modifier = Modifier.size(14.dp)) }
                                     }
                                 }
 
@@ -1511,7 +1511,7 @@ fun MikuNetworkObservatoryModal(
                             // in Ubiquiti's WiFiman app, so we hand the link off rather than fake it.
                             run {
                                 var teleportLink by remember { mutableStateOf("") }
-                                Text("UNIFI TELEPORT", color = Color(0xFF00E676), fontSize = 14.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                Text("UNIFI TELEPORT", color = com.miku.launcher.ui.MikuIdentity.Leek, fontSize = 14.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                 Text(
                                     text = "Teleport works through CGNAT but only inside WiFiman — paste your Teleport link to hand it off. For a fully in-launcher tunnel through CGNAT, point CONNECT above at a VPS relay your UDR also dials out to.",
                                     color = MikuTextSecondary, fontSize = 12.sp

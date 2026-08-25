@@ -755,13 +755,84 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                     }
                 }
 
+                // ---------------- USB DAC OUTPUT (M500 → external USB DAC) ----------------
                 item {
+                    LaunchedEffect(Unit) { MikuUsbDacOutput.init(ctx) }
+                    val dac = MikuUsbDacOutput.device
+                    val routed = MikuUsbDacOutput.routed
+                    val accent = if (routed) MikuCyan else MikuTextSecondary
                     Column(
                         Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(Color(0xDD0A1E26))
-                            .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
+                            .border(1.dp, if (routed) MikuCyan.copy(alpha = 0.6f) else CyberGlassBorder, RoundedCornerShape(16.dp))
+                            .padding(14.dp)
+                    ) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("USB DAC OUTPUT", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (dac == null) "Plug a USB DAC / dongle into the M500 (OTG). Playback follows it bit-perfect at the DAC's native rate."
+                                    else MikuUsbDacOutput.statusLine(),
+                                    color = accent, fontSize = 10.sp
+                                )
+                            }
+                            Text(if (routed) "● LIVE" else if (dac != null) "○ IDLE" else "—", color = accent, fontSize = 11.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                        }
+                        if (dac != null) {
+                            Spacer(Modifier.height(8.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Device", color = MikuTextSecondary, fontSize = 10.5.sp)
+                                Text(dac.name, color = Color.White, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Supported", color = MikuTextSecondary, fontSize = 10.5.sp)
+                                Text("${dac.bitsLabel} · ${dac.ratesLabel}" + (if (dac.sampleRates.isNotEmpty()) " (${dac.sampleRates.sorted().joinToString("/") { if (it % 1000 == 0) "${it / 1000}" else "%.1f".format(it / 1000f) }} kHz)" else ""), color = MikuCyan, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 2)
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Mixer", color = MikuTextSecondary, fontSize = 10.5.sp)
+                                Text(MikuUsbDacOutput.mixerMode.ifBlank { "not routed" }, color = if (MikuUsbDacOutput.mixerMode == "BIT-PERFECT") MikuCyan else MikuTextSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Prefer USB DAC (exclusive, bit-perfect)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("Route playback to the USB DAC when attached; native rate / 24-32-bit, no resampling", color = MikuTextSecondary, fontSize = 9.5.sp)
+                            }
+                            Switch(checked = MikuUsbDacOutput.preferUsb, onCheckedChange = { MikuUsbDacOutput.setPreferUsb(ctx, it) },
+                                colors = SwitchDefaults.colors(checkedThumbColor = MikuCyan, checkedTrackColor = Color(0xFF00695C)))
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Volume passthrough", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text("Hold media volume at 100% and let the DAC's own control set loudness", color = MikuTextSecondary, fontSize = 9.5.sp)
+                            }
+                            Switch(checked = MikuUsbDacOutput.volumePassthrough, onCheckedChange = { MikuUsbDacOutput.setVolumePassthrough(ctx, it) },
+                                colors = SwitchDefaults.colors(checkedThumbColor = MikuCyan, checkedTrackColor = Color(0xFF00695C)))
+                        }
+                    }
+                }
+
+                // ---------------- USB DAC MODE (PC → M500, UAC2 gadget) ----------------
+                item {
+                    var usbStatus by remember { mutableStateOf(UsbDacManager.statusLine(ctx)) }
+                    LaunchedEffect(usbDacActive) {
+                        while (true) {
+                            usbStatus = UsbDacManager.statusLine(ctx)
+                            usbDacActive = UsbDacManager.isActive(ctx)
+                            usbDacRate = UsbDacManager.getSampleRate(ctx)
+                            usbDacBits = UsbDacManager.getBitDepth(ctx)
+                            kotlinx.coroutines.delay(2000)
+                        }
+                    }
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color(0xDD0A1E26))
+                            .border(1.dp, if (usbDacActive) MikuPink.copy(alpha = 0.6f) else CyberGlassBorder, RoundedCornerShape(16.dp))
                             .padding(14.dp)
                     ) {
                         Row(
@@ -770,25 +841,39 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text("USB AUDIO CLASS 2.0 (UAC2)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Connect to PC / Mac / iOS for bit-perfect 32-bit/768kHz and native DSD256 decoding.", color = MikuTextSecondary, fontSize = 10.sp)
+                                Text("USB DAC MODE (UAC2 · M500 as a DAC)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                Text("Turns the M500 into a USB sound card for a PC / Mac / phone: host → CS43198 ×2, bit-perfect up to 32-bit/768 kHz. Uses HiBy's OS work-mode switch (its DAC screen opens).", color = MikuTextSecondary, fontSize = 10.sp)
                             }
                             Switch(
                                 checked = usbDacActive,
+                                enabled = UsbDacManager.isSupported(ctx),
                                 onCheckedChange = {
                                     usbDacActive = it
-                                    scope.launch { UsbDacManager.setUsbDacMode(ctx, it) }
+                                    scope.launch {
+                                        val ok = UsbDacManager.setUsbDacMode(ctx, it)
+                                        if (!ok) usbDacActive = UsbDacManager.isActive(ctx)
+                                        usbStatus = UsbDacManager.statusLine(ctx)
+                                    }
                                 },
-                                colors = SwitchDefaults.colors(checkedThumbColor = MikuCyan, checkedTrackColor = Color(0xFF00695C))
+                                colors = SwitchDefaults.colors(checkedThumbColor = MikuPink, checkedTrackColor = Color(0xFF6A1B4D))
                             )
                         }
-
+                        Spacer(Modifier.height(8.dp))
+                        Text(usbStatus, color = if (usbDacActive) MikuPink else MikuTextSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                         if (usbDacActive) {
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(6.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Active Stream Clock", color = MikuTextSecondary, fontSize = 10.5.sp)
-                                Text("${usbDacRate / 1000} kHz / ${usbDacBits}-bit", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                                Text("Host stream", color = MikuTextSecondary, fontSize = 10.5.sp)
+                                Text(if (usbDacRate > 0) "${usbDacRate / 1000} kHz / ${usbDacBits}-bit" else "waiting for host audio…", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                             }
+                            Spacer(Modifier.height(6.dp))
+                            Text("Leaving: this switch puts the gadget back on MTP/ADB. The vendor UAC2 daemon is only fully released by \"Android mode\" on HiBy's DAC screen — open it if the host still sees a sound card.", color = MikuTextSecondary, fontSize = 9.5.sp, lineHeight = 12.sp)
+                            Spacer(Modifier.height(4.dp))
+                            Text("OPEN HIBY DAC SCREEN", color = MikuPink, fontSize = 10.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont,
+                                modifier = Modifier.clickable { UsbDacManager.openHibyDacScreen(ctx) }.padding(vertical = 6.dp))
+                        } else if (!UsbDacManager.isSupported(ctx)) {
+                            Spacer(Modifier.height(6.dp))
+                            Text("Unavailable: HiBy's Settings work-mode screen (android.settings.WORK_MODE_VIEW) is not on this build.", color = MikuPink, fontSize = 10.sp)
                         }
                     }
                 }

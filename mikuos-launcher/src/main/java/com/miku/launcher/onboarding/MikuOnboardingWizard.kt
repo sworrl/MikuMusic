@@ -47,8 +47,8 @@ import java.util.*
 // Cyberpunk Palette
 val MikuOnboardingTeal = Color(0xFF00E5FF)
 val MikuOnboardingPink = Color(0xFFFF4081)
-val MikuOnboardingGreen = Color(0xFF00E676)
-val MikuOnboardingGold = Color(0xFFFFD600)
+val MikuOnboardingGreen = com.miku.launcher.ui.MikuIdentity.Leek
+val MikuOnboardingGold = com.miku.launcher.ui.MikuIdentity.Gold
 val MikuOnboardingPurple = Color(0xFFB388FF)
 val MikuOnboardingBg = Color(0xFF040D14)
 val MikuOnboardingCard = Color(0xDD0A1926)

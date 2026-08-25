@@ -76,6 +76,11 @@ fun MikuModalHost(
     scrim: Boolean = true,
     content: @Composable () -> Unit
 ) {
+    // A visible modal covers home: ambient home animators freeze (MikuAmbient) while it's up.
+    androidx.compose.runtime.DisposableEffect(visible) {
+        if (visible) MikuAmbient.pushCovered()
+        onDispose { if (visible) MikuAmbient.popCovered() }
+    }
     AnimatedVisibility(
         visible = visible,
         enter = fadeIn(tween(MikuMotion.OPEN_MS)) +

@@ -53,7 +53,9 @@ object MikuPowerGovernor {
     const val KEY_PROFILE_TS = "miku_power_profile_ts"
     /** Manual override — a Settings.Global so the MikuOS Settings widgets / launcher tiles flip the
      *  SAME switch the in-app selector uses: "auto" | "perf" | "save". Observed live. */
-    const val KEY_OVERRIDE = "miku_power_override"
+    const val KEY_OVERRIDE = "miku_power_mode"
+    /** Pre-2.0.237 key, still read once so an old value is not lost. */
+    private const val KEY_OVERRIDE_LEGACY = "miku_power_override"
     private const val KEY_LOW_POWER = "low_power"
     private const val PREFS = "miku_power_prefs"
     private const val DEBOUNCE_MS = 3_000L
@@ -171,7 +173,19 @@ object MikuPowerGovernor {
     fun noteNowPlayingVisible(v: Boolean) { if (nowPlayingVisible != v) { nowPlayingVisible = v; scheduleEval("np=$v") } }
     private fun readOverride(a: Context): Mode = runCatching {
         Settings.Global.getString(a.contentResolver, KEY_OVERRIDE)
+            ?: Settings.Global.getString(a.contentResolver, KEY_OVERRIDE_LEGACY)
     }.getOrNull().let { v -> Mode.values().firstOrNull { it.key == v } ?: Mode.AUTO }
+
+    /** "72% · 31.4 °C · charging" for the settings summary card (sticky BATTERY_CHANGED, no receiver). */
+    fun batterySummary(ctx: Context): String = runCatching {
+        val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return "battery: n/a"
+        val level = i.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = i.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1)
+        val temp = i.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)
+        val pct = if (level >= 0) "${level * 100 / scale}%" else "?%"
+        val t = if (temp > 0) String.format("%.1f °C", temp / 10f) else "-- °C"
+        "$pct · $t · ${if (isCharging(i)) "charging" else "on battery"}"
+    }.getOrDefault("battery: n/a")
 
     fun setMode(ctx: Context, m: Mode) {
         init(ctx); mode = m

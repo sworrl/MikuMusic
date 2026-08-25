@@ -219,8 +219,8 @@ fun MikuMeteogramForecastView(
                                             text = "${pt.tempF.roundToInt()}°",
                                             color = when {
                                                 pt.tempF >= 85f -> Color(0xFFFF5252)
-                                                pt.tempF >= 70f -> Color(0xFFFFD600)
-                                                pt.tempF >= 55f -> Color(0xFF00E676)
+                                                pt.tempF >= 70f -> com.miku.launcher.ui.MikuIdentity.Gold
+                                                pt.tempF >= 55f -> com.miku.launcher.ui.MikuIdentity.Leek
                                                 else -> Color(0xFF00E5FF)
                                             },
                                             fontSize = 8.5.sp,
@@ -251,9 +251,9 @@ fun MikuMeteogramForecastView(
                                         // 5. Wind Speed Cell (Color Coded Speed)
                                         val windSpd = pt.windSpeedMph.roundToInt()
                                         val windCellColor = when {
-                                            windSpd >= 25 -> Color(0xFFFF1744) // Severe gale
+                                            windSpd >= 25 -> com.miku.launcher.ui.MikuIdentity.Coral // Severe gale
                                             windSpd >= 15 -> Color(0xFFFF9100) // Moderate
-                                            windSpd >= 8  -> Color(0xFF76FF03) // Light breeze
+                                            windSpd >= 8  -> com.miku.launcher.ui.MikuIdentity.Leek // Light breeze
                                             else          -> Color(0xFF00E5FF) // Gentle
                                         }
                                         Box(
@@ -380,7 +380,7 @@ fun MikuSolarArcTrack(
                 val gradientBrush = Brush.horizontalGradient(
                     listOf(
                         Color(0xFFFF6D00),
-                        Color(0xFFFFD600),
+                        com.miku.launcher.ui.MikuIdentity.Gold,
                         Color(0xFF00E5FF),
                         Color(0xFFFF80AB)
                     )
@@ -396,7 +396,7 @@ fun MikuSolarArcTrack(
 
                 // Sun / Moon Indicator Dot with Glow
                 val dotX = (w * solarFraction.coerceIn(0f, 1f)).coerceIn(h, w - h)
-                val dotColor = if (isDay) Color(0xFFFFD600) else Color(0xFFB388FF)
+                val dotColor = if (isDay) com.miku.launcher.ui.MikuIdentity.Gold else Color(0xFFB388FF)
 
                 drawCircle(
                     color = dotColor.copy(alpha = 0.35f),

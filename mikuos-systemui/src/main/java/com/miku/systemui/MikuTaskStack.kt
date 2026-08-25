@@ -118,13 +118,13 @@ object MikuTaskStack {
      * real Recents path — no background-activity-launch gating), then
      * ActivityManager.moveTaskToFront. Returns true if either reported success.
      */
-    fun switchTo(ctx: Context, taskId: Int): Boolean {
+    fun switchTo(ctx: Context, taskId: Int, options: Bundle? = null): Boolean {
         atmService?.let { svc ->
             try {
                 val m = svc.javaClass.getMethod(
                     "startActivityFromRecents", Int::class.javaPrimitiveType, Bundle::class.java
                 )
-                val r = m.invoke(svc, taskId, null) as? Int ?: -1
+                val r = m.invoke(svc, taskId, options) as? Int ?: -1
                 // ActivityManager.START_SUCCESS = 0, START_TASK_TO_FRONT = 2 (any >= 0 is success)
                 if (r >= 0) return true
                 Log.w(TAG, "startActivityFromRecents($taskId) -> $r")
@@ -134,7 +134,7 @@ object MikuTaskStack {
         }
         return try {
             val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            am.moveTaskToFront(taskId, ActivityManager.MOVE_TASK_NO_USER_ACTION)
+            am.moveTaskToFront(taskId, ActivityManager.MOVE_TASK_NO_USER_ACTION, options)
             true
         } catch (t: Throwable) {
             Log.w(TAG, "moveTaskToFront($taskId) failed: $t"); false

@@ -157,6 +157,8 @@ class MikuTrackHud(
         private var marquee = 0f
         private var marqueeAnim: ValueAnimator? = null
         private var slide = -1f          // -1 hidden above, 0 resting
+        private var dragY = 0f           // upward finger-follow while swiping to dismiss (≤ 0)
+        private var returnAnim: ValueAnimator? = null
         private var downX = 0f; private var downY = 0f; private var swiped = false
 
         private val glass = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
@@ -217,16 +219,18 @@ class MikuTrackHud(
 
         fun slideIn() {
             ValueAnimator.ofFloat(-1f, 0f).apply {
-                duration = MikuPowerProfile.ms(200).toLong(); interpolator = if (MikuPowerProfile.lowPower) DecelerateInterpolator() else OvershootInterpolator(1.1f)
+                duration = MikuMotion.ms(200).toLong(); interpolator = MikuMotion.overshoot(0.8f)   // ≈1.05 overshoot
                 addUpdateListener { slide = it.animatedValue as Float; invalidate() }
                 start()
             }
         }
 
         fun slideOut(end: () -> Unit) {
-            marqueeAnim?.cancel()
-            ValueAnimator.ofFloat(slide, -1.2f).apply {
-                duration = MikuPowerProfile.ms(160).toLong(); interpolator = DecelerateInterpolator()
+            marqueeAnim?.cancel(); returnAnim?.cancel()
+            val from = slide + dragY / (height + dp(40f)).coerceAtLeast(1f)
+            dragY = 0f
+            ValueAnimator.ofFloat(from, -1.2f).apply {
+                duration = MikuMotion.ms(160).toLong(); interpolator = MikuMotion.decel()
                 addUpdateListener { slide = it.animatedValue as Float; invalidate() }
                 addListener(object : android.animation.AnimatorListenerAdapter() {
                     override fun onAnimationEnd(a: android.animation.Animator) { end() }
@@ -239,7 +243,7 @@ class MikuTrackHud(
             super.onDraw(canvas)
             val pp = p ?: return
             val w = width.toFloat(); val h = height.toFloat()
-            canvas.translate(0f, slide * (h + dp(40f)))
+            canvas.translate(0f, slide * (h + dp(40f)) + dragY.coerceAtMost(0f))
             // glow halo in the art's colour
             glow.shader = RadialGradient(w * 0.18f, h * 0.5f, w * 0.7f, intArrayOf(accent and 0x55FFFFFF, 0x00000000), null, Shader.TileMode.CLAMP)
             rect.set(-dp(6f), -dp(6f), w + dp(6f), h + dp(6f)); canvas.drawRoundRect(rect, cardR + dp(6f), cardR + dp(6f), glow)
@@ -251,6 +255,8 @@ class MikuTrackHud(
             val pad = dp(8f); val artSz = dp(56f)
             artDst.set(pad.toInt(), pad.toInt(), (pad + artSz).toInt(), (pad + artSz).toInt())
             canvas.save()
+            // subtle 3° tilt that straightens as the card lands
+            canvas.rotate(-3f * (-slide).coerceIn(0f, 1f), artDst.exactCenterX(), artDst.exactCenterY())
             val artPath = android.graphics.Path().apply { addRoundRect(RectF(artDst), dp(14f), dp(14f), android.graphics.Path.Direction.CW) }
             canvas.clipPath(artPath)
             val a = art
@@ -291,19 +297,37 @@ class MikuTrackHud(
 
         override fun onTouchEvent(e: MotionEvent): Boolean {
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = e.x; downY = e.y; swiped = false; scheduleHide(AUTO_HIDE_TOUCHED_MS); return true }
+                MotionEvent.ACTION_DOWN -> { downX = e.x; downY = e.y; swiped = false; returnAnim?.cancel(); dragY = 0f; scheduleHide(AUTO_HIDE_TOUCHED_MS); return true }
                 MotionEvent.ACTION_MOVE -> {
                     val dy = e.y - downY
-                    if (!swiped && abs(dy) > dp(24f) && abs(dy) > abs(e.x - downX)) {
+                    if (dy < 0f) {
+                        // upward: the card rides the finger (rubber-banded past 48dp)
+                        val lim = dp(48f)
+                        dragY = if (-dy <= lim) dy else -(lim + (-dy - lim) * 0.25f)
+                        if (!swiped && -dy > dp(12f)) { swiped = true; MikuHaptics.tick(this) }
+                        invalidate()
+                    } else if (!swiped && dy > dp(24f) && dy > abs(e.x - downX)) {
                         swiped = true
-                        performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
-                        if (dy < 0) hide() else { hide(); openShade(dy.toInt()) }
+                        MikuHaptics.confirm(this)
+                        hide(); openShade(dy.toInt())
                     }
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
+                    if (dragY < 0f) {
+                        if (-dragY >= dp(24f)) { MikuHaptics.confirm(this); hide() }
+                        else {
+                            returnAnim?.cancel()
+                            returnAnim = ValueAnimator.ofFloat(dragY, 0f).apply {
+                                duration = MikuMotion.ms(220).toLong(); interpolator = MikuMotion.overshoot(1.3f)
+                                addUpdateListener { dragY = it.animatedValue as Float; invalidate() }
+                                start()
+                            }
+                        }
+                        return true
+                    }
                     if (!swiped) {
-                        performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                        MikuHaptics.confirm(this)
                         if (e.x > width - dp(44f)) hide()
                         else {
                             runCatching {
@@ -315,7 +339,7 @@ class MikuTrackHud(
                     }
                     return true
                 }
-                MotionEvent.ACTION_CANCEL -> return true
+                MotionEvent.ACTION_CANCEL -> { dragY = 0f; invalidate(); return true }
             }
             return super.onTouchEvent(e)
         }

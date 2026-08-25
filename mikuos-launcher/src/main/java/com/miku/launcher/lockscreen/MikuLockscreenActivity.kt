@@ -760,10 +760,10 @@ fun MikuKawaiiLockscreenScreen(
             verticalArrangement = Arrangement.SpaceBetween
         ) {
             val batteryColor = when {
-                isCharging -> Color(0xFF00E676)
+                isCharging -> com.miku.launcher.ui.MikuIdentity.Leek
                 batteryPercent > 60 -> palette.primary
-                batteryPercent > 20 -> Color(0xFFFFD600)
-                else -> Color(0xFFFF1744)
+                batteryPercent > 20 -> com.miku.launcher.ui.MikuIdentity.Gold
+                else -> com.miku.launcher.ui.MikuIdentity.Coral
             }
             val batteryGradient = when {
                 isCharging -> listOf(Color(0x5500E676), Color(0xFF04150E))
@@ -1028,9 +1028,9 @@ fun MikuKawaiiLockscreenScreen(
                                             heartAnimScale.animateTo(1.0f, spring())
                                         }
                                         if (localLikedState) {
-                                            MikuTactileHaptics.playBumpyLikeTexture(context)
+                                            com.miku.launcher.haptics.MikuHaptics.like(context)
                                         } else {
-                                            MikuTactileHaptics.playBumpyDislikeTexture(context)
+                                            com.miku.launcher.haptics.MikuHaptics.reject(context)
                                         }
                                         try {
                                             val i = Intent("com.miku.player.action.TOGGLE_LIKE").apply {
@@ -1060,7 +1060,7 @@ fun MikuKawaiiLockscreenScreen(
                                     .border(0.8.dp, palette.primary.copy(alpha = 0.6f), CutCornerShape(6.dp))
                                     .clickable {
                                         lastInteractionMs = System.currentTimeMillis()
-                                        MikuTactileHaptics.playRatchetTick(context)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
                                         showHistoryDrawer = !showHistoryDrawer
                                     }
                                     .padding(horizontal = 5.dp, vertical = 3.5.dp),
@@ -1185,7 +1185,7 @@ fun MikuKawaiiLockscreenScreen(
                                             miniTapAnimScale.snapTo(0.78f)
                                             miniTapAnimScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
                                         }
-                                        MikuTactileHaptics.playRatchetTick(context)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
                                         val liveTapped = miniTappedBpm ?: nowPlaying.bpm
 
                                         // Play ascending pentatonic chime melody synchronized with combo
@@ -1317,7 +1317,7 @@ fun MikuKawaiiLockscreenScreen(
                                     .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
                                     .clickable {
                                         lastInteractionMs = System.currentTimeMillis()
-                                        MikuTactileHaptics.playRatchetTick(context)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
                                         controller?.seekToPreviousMediaItem()
                                     },
                                 contentAlignment = Alignment.Center
@@ -1339,7 +1339,7 @@ fun MikuKawaiiLockscreenScreen(
                                     )
                                     .clickable {
                                         lastInteractionMs = System.currentTimeMillis()
-                                        MikuTactileHaptics.playRatchetTick(context)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
                                         val c = controller
                                         if (c?.isPlaying == true) c.pause() else c?.play()
                                     },
@@ -1361,7 +1361,7 @@ fun MikuKawaiiLockscreenScreen(
                                     .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
                                     .clickable {
                                         lastInteractionMs = System.currentTimeMillis()
-                                        MikuTactileHaptics.playRatchetTick(context)
+                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
                                         controller?.seekToNextMediaItem()
                                     },
                                 contentAlignment = Alignment.Center
@@ -1415,7 +1415,7 @@ fun MikuKawaiiLockscreenScreen(
                                                     .background(Color(0x33061C26))
                                                     .clickable {
                                                         lastInteractionMs = System.currentTimeMillis()
-                                                        MikuTactileHaptics.playRatchetTick(context)
+                                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
                                                         controller?.seekToNextMediaItem()
                                                     }
                                                     .padding(horizontal = 7.dp, vertical = 4.dp),
@@ -1644,7 +1644,7 @@ fun MikuLockscreenMegaClock(time: String) {
                 Triple(0.60f, 0.85f, Color(0xFFFFFFFF)),
                 Triple(0.75f, 0.25f, Color(0xFF00E5FF)),
                 Triple(0.90f, 0.65f, Color(0xFFFF007F)),
-                Triple(0.50f, 0.50f, Color(0xFFFFD600))
+                Triple(0.50f, 0.50f, com.miku.launcher.ui.MikuIdentity.Gold)
             )
 
             particles.forEachIndexed { i, p ->
@@ -1860,12 +1860,12 @@ fun Miku5HourLockscreenTrendCapsule(
                         Modifier
                             .clip(CutCornerShape(4.dp))
                             .background(Color(0x33FFD600))
-                            .border(0.6.dp, Color(0xFFFFD600), CutCornerShape(4.dp))
+                            .border(0.6.dp, com.miku.launcher.ui.MikuIdentity.Gold, CutCornerShape(4.dp))
                             .padding(horizontal = 4.dp, vertical = 1.5.dp)
                     ) {
                         Text(
                             weather.nextPrecipLabel,
-                            color = Color(0xFFFFD600),
+                            color = com.miku.launcher.ui.MikuIdentity.Gold,
                             fontSize = 9.dampedSp(),
                             fontWeight = FontWeight.Black,
                             fontFamily = AudiowideFont
@@ -1965,8 +1965,8 @@ fun Miku5HourLockscreenTrendCapsule(
                     Brush.horizontalGradient(
                         listOf(
                             MikuCyan,
-                            Color(0xFF76FF03),
-                            Color(0xFFFFD600),
+                            com.miku.launcher.ui.MikuIdentity.Leek,
+                            com.miku.launcher.ui.MikuIdentity.Gold,
                             MikuNeonPink
                         )
                     ),

@@ -224,20 +224,20 @@ private fun ArcoConnectionPane(onPaired: () -> Unit) {
     DisposableDiscoveryEffect()
 
     if (isPaired) {
-        Column(arcoCardModifier(Color(0xFF00E676))) {
-            ArcoCardTitle("PAIRED", Color(0xFF00E676))
+        Column(arcoCardModifier(com.miku.launcher.ui.MikuIdentity.Leek)) {
+            ArcoCardTitle("PAIRED", com.miku.launcher.ui.MikuIdentity.Leek)
             Text("Device: ${ArcoClient.deviceName ?: "—"}", color = MikuTextPrimary, fontSize = 11.sp)
             Text("Server: ${ArcoClient.serverUrl ?: "—"}", color = MikuTextSecondary, fontSize = 9.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(6.dp).clip(CircleShape).background(if (connectionState == ArcoConnectionState.CONNECTED) Color(0xFF00E676) else Color(0xFFFF9100)))
+                Box(Modifier.size(6.dp).clip(CircleShape).background(if (connectionState == ArcoConnectionState.CONNECTED) com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFFFF9100)))
                 Spacer(Modifier.width(4.dp))
                 Text(connectionState.name, color = MikuTextSecondary, fontSize = 9.sp)
             }
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ArcoSmallButton("Reconnect", MikuCyan) { ArcoClient.connectWebSocket() }
-                ArcoSmallButton("Unpair", Color(0xFFFF1744)) { ArcoClient.unpair() }
+                ArcoSmallButton("Unpair", com.miku.launcher.ui.MikuIdentity.Coral) { ArcoClient.unpair() }
             }
         }
     }
@@ -337,7 +337,7 @@ private fun ArcoConnectionPane(onPaired: () -> Unit) {
             }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ArcoModalActionButtonFull(label = if (isWorking) "CONFIRMING…" else "CONFIRM & PAIR", accentColor = Color(0xFF00E676), enabled = !isWorking, modifier = Modifier.weight(1f)) {
+                ArcoModalActionButtonFull(label = if (isWorking) "CONFIRMING…" else "CONFIRM & PAIR", accentColor = com.miku.launcher.ui.MikuIdentity.Leek, enabled = !isWorking, modifier = Modifier.weight(1f)) {
                     isWorking = true
                     errorText = null
                     scope.launch {
@@ -353,7 +353,7 @@ private fun ArcoConnectionPane(onPaired: () -> Unit) {
     }
 
     errorText?.let {
-        Text("⚠ $it", color = Color(0xFFFF1744), fontSize = 9.5.sp, modifier = Modifier.padding(vertical = 4.dp))
+        Text("⚠ $it", color = com.miku.launcher.ui.MikuIdentity.Coral, fontSize = 9.5.sp, modifier = Modifier.padding(vertical = 4.dp))
     }
 }
 
@@ -388,22 +388,22 @@ private fun ArcoDashboardPane() {
         Text("Link: ${connectionState.name}", color = MikuTextSecondary, fontSize = 9.5.sp)
     }
 
-    Column(arcoCardModifier(Color(0xFF00E676))) {
-        ArcoCardTitle("POWER", Color(0xFF00E676))
+    Column(arcoCardModifier(com.miku.launcher.ui.MikuIdentity.Leek)) {
+        ArcoCardTitle("POWER", com.miku.launcher.ui.MikuIdentity.Leek)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect != "off") Color(0xFF00E676) else Color(0xFF8BA6A9))
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect != "off") com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFF8BA6A9))
                 Spacer(Modifier.width(6.dp))
                 Text(if (activeEffect != "off") "Fleet is ON" else "Fleet is blacked out", color = MikuTextPrimary, fontSize = 11.sp)
             }
             Switch(
                 checked = activeEffect != "off",
                 onCheckedChange = { on -> scope.launch { if (on) ArcoClient.startEffect(lastNonOff) else ArcoClient.stop() } },
-                colors = SwitchDefaults.colors(checkedThumbColor = Color(0xFF00E676), checkedTrackColor = Color(0x3300E676))
+                colors = SwitchDefaults.colors(checkedThumbColor = com.miku.launcher.ui.MikuIdentity.Leek, checkedTrackColor = Color(0x3300E676))
             )
         }
         Spacer(Modifier.height(6.dp))
-        ArcoSmallButton("Blackout Now", Color(0xFFFF1744)) { scope.launch { ArcoClient.stop() } }
+        ArcoSmallButton("Blackout Now", com.miku.launcher.ui.MikuIdentity.Coral) { scope.launch { ArcoClient.stop() } }
     }
 
     Column(arcoCardModifier(MikuGold)) {
@@ -613,7 +613,7 @@ private fun ArcoAdvancedPane() {
             color = MikuTextSecondary, fontSize = 8.5.sp
         )
         Spacer(Modifier.height(8.dp))
-        Text(if (isDirectKeyConfigured) "Status: configured" else "Status: not configured", color = if (isDirectKeyConfigured) Color(0xFF00E676) else MikuTextSecondary, fontSize = 9.sp)
+        Text(if (isDirectKeyConfigured) "Status: configured" else "Status: not configured", color = if (isDirectKeyConfigured) com.miku.launcher.ui.MikuIdentity.Leek else MikuTextSecondary, fontSize = 9.sp)
         Spacer(Modifier.height(6.dp))
         OutlinedTextField(value = serverUrl, onValueChange = { serverUrl = it }, label = { Text("Server URL", fontSize = 9.sp) }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = arcoTextFieldColors(MikuGold))
         Spacer(Modifier.height(6.dp))
@@ -651,7 +651,7 @@ private fun ArcoAdvancedPane() {
                     Text(d.name, color = MikuTextPrimary, fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                     Text("${d.platform} · last seen ${d.last_seen}", color = MikuTextSecondary, fontSize = 8.sp)
                 }
-                ArcoSmallButton("Revoke", Color(0xFFFF1744)) { scope.launch { ArcoClient.revokeDevice(d.id); ArcoClient.listDevices() } }
+                ArcoSmallButton("Revoke", com.miku.launcher.ui.MikuIdentity.Coral) { scope.launch { ArcoClient.revokeDevice(d.id); ArcoClient.listDevices() } }
             }
         }
     }

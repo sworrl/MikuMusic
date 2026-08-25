@@ -574,7 +574,7 @@ private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
             GpsMetricCard(
                 title = "BEARING / HEADING",
                 value = "${gps.bearing.toInt()}° (${degreesToCompassText(gps.bearing.toInt())})",
-                color = Color(0xFFFFD600),
+                color = com.miku.launcher.ui.MikuIdentity.Gold,
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(

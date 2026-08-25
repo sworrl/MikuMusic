@@ -58,8 +58,8 @@ fun MikuArcoBadge(
 
     val accentColor = when (connectionState) {
         ArcoConnectionState.CONNECTED -> if (activeEffect == "off") Color(0xFF8BA6A9) else (themeAccent ?: com.miku.launcher.MikuNeonPink)
-        ArcoConnectionState.CONNECTING -> Color(0xFFFFD600)
-        ArcoConnectionState.ERROR -> Color(0xFFFF1744)
+        ArcoConnectionState.CONNECTING -> com.miku.launcher.ui.MikuIdentity.Gold
+        ArcoConnectionState.ERROR -> com.miku.launcher.ui.MikuIdentity.Coral
         ArcoConnectionState.DISCONNECTED -> Color(0xFFFF9100)
         ArcoConnectionState.UNPAIRED -> Color(0xFF8BA6A9)
     }

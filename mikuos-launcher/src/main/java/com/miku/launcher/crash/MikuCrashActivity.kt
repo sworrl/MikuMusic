@@ -114,7 +114,7 @@ fun MikuCrashScreen(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color(0xFF100407))
-                    .border(1.dp, Color(0xFFFF1744).copy(alpha = 0.7f), RoundedCornerShape(10.dp))
+                    .border(1.dp, com.miku.launcher.ui.MikuIdentity.Coral.copy(alpha = 0.7f), RoundedCornerShape(10.dp))
                     .padding(10.dp)
             ) {
                 Column {
@@ -125,7 +125,7 @@ fun MikuCrashScreen(
                     ) {
                         Text(
                             "⚡ CRITICAL OS FAULT: $errorType",
-                            color = Color(0xFFFF1744),
+                            color = com.miku.launcher.ui.MikuIdentity.Coral,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Black
                         )

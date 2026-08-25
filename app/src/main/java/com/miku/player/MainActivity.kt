@@ -2535,9 +2535,12 @@ private fun tabColor(t: Tab): Color = when (t) {
     // App() can still land `tab` on it internally (Library's "All Songs" row) — fall back to
     // highlighting Library in that case rather than an out-of-range/no selection.
     val selIdx = VISIBLE_TABS.indexOf(sel).let { if (it >= 0) it else VISIBLE_TABS.indexOf(Tab.GENRES) }
-    ScrollableTabRow(
+    // Fixed (non-scrolling) row: all four tabs always visible and evenly spaced on the 360dp-wide
+    // M500 screen — the scrollable row used to park "Library" against the right edge on Home.
+    TabRow(
         selectedTabIndex = selIdx,
-        containerColor = Color.Transparent, contentColor = MikuTeal, edgePadding = 12.dp,
+        modifier = Modifier.padding(horizontal = 8.dp),
+        containerColor = Color.Transparent, contentColor = MikuTeal,
         indicator = { positions ->
             // Springy pill that GLIDES between tabs and retints toward each tab's own accent —
             // the default indicator hard-jumps and stays one color, which reads as a repaint
@@ -2567,7 +2570,7 @@ private fun tabColor(t: Tab): Color = when (t) {
             val labelColor by animateColorAsState(if (t == sel) base else base.copy(alpha = 0.55f), tween(250), label = "tabLabel")
             val fontScale = androidx.compose.ui.platform.LocalDensity.current.fontScale
             val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.20f
-            val dampedTabFontSize = (15.5f / fontScale * effectiveScale).sp
+            val dampedTabFontSize = (14f / fontScale * effectiveScale).sp
             androidx.compose.material3.Tab(
                 selected = t == sel,
                 onClick = { if (t != sel) Haptics.tick(ctx); onSel(t) },
@@ -4440,6 +4443,21 @@ private fun ArtistSortSettingsModal(
 
     if (isVinyl) {
         VinylBadgeChip(fontSize = fontSize)
+        shown = true
+    }
+
+    // External USB DAC engaged (MikuUsbDacOutput routed the player): "USB DAC" chip, bit-perfect tier.
+    if (MikuUsbDacOutput.routed) {
+        if (shown) Spacer(Modifier.width(spacing))
+        TechBadgeChip(
+            text = if (MikuUsbDacOutput.mixerMode == "BIT-PERFECT") "USB DAC ★" else "USB DAC",
+            tier = 3,
+            brush = androidx.compose.ui.graphics.Brush.horizontalGradient(listOf(MikuTealBright, MikuPink)),
+            glowColor = MikuTealBright,
+            shape = BadgeShapes.kawaiiHexGem,
+            fontSize = fontSize,
+            isRainbow = false
+        )
         shown = true
     }
 
@@ -7286,6 +7304,11 @@ private fun fmtDurationLong(ms: Long): String {
             Text(profile.key.uppercase().replace('_', ' '), color = profileColor, fontSize = 13.sp, fontWeight = FontWeight.Black, fontFamily = OrbitronFont)
         }
         Text(MikuPowerGovernor.describe(), color = Color(0xFFC9DEDB), fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(top = 2.dp))
+        // OS-wide summary: the mode below is Settings.Global miku_power_mode (launcher POWER MODE tile
+        // cycles the same key), so this line is the single source of truth for "what is the device doing".
+        var battery by remember { mutableStateOf(MikuPowerGovernor.batterySummary(ctx)) }
+        LaunchedEffect(profile, mode) { while (true) { battery = MikuPowerGovernor.batterySummary(ctx); kotlinx.coroutines.delay(10_000) } }
+        Text("Mode ${mode.key.uppercase()} (Settings.Global miku_power_mode) · $battery", color = Muted, fontSize = 10.5.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 3.dp))
         Text(
             when (profile) {
                 MikuPowerGovernor.Profile.PERF -> "Sustained clocks + render hints: visualizer and Now Playing at full speed."

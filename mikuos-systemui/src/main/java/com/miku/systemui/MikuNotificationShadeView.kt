@@ -45,6 +45,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -131,7 +140,14 @@ fun MikuNotificationShadeView(
     onDismiss: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenPower: () -> Unit = {},
-    startExpanded: Boolean = false
+    startExpanded: Boolean = false,
+    /** True when the nav service's finger is still driving the panel (see MikuShadeDrag). */
+    followFinger: Boolean = false,
+    /** Panel translation (px, ≤ 0) supplied by the host while following the finger. */
+    panelOffsetPx: () -> Float = { 0f },
+    /** 0..1 fraction of the panel revealed — scrim alpha tracks it. */
+    revealProgress: () -> Float = { 1f },
+    onPanelHeight: (Int) -> Unit = {}
 ) {
     val ctx = LocalContext.current
     val view = LocalView.current
@@ -192,8 +208,11 @@ fun MikuNotificationShadeView(
     var dragStartValue by remember { mutableStateOf(0f) }
     val panelIn = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        if (MikuPowerProfile.lowPower) panelIn.animateTo(1f, tween(120))
-        else panelIn.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
+        when {
+            followFinger -> panelIn.snapTo(1f)                       // the finger IS the entrance
+            MikuPowerProfile.lowPower -> panelIn.animateTo(1f, tween(120))
+            else -> panelIn.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = Spring.StiffnessMediumLow))
+        }
     }
 
     fun settle() {
@@ -201,9 +220,8 @@ fun MikuNotificationShadeView(
             val v = expand.value
             when {
                 dragStartValue < 0.5f && v < -0.14f -> onDismiss()
-                MikuPowerProfile.lowPower -> expand.animateTo(if (v >= 0.5f) 1f else 0f, tween(120))
-                v >= 0.5f -> expand.animateTo(1f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow))
-                else -> expand.animateTo(0f, spring(dampingRatio = 0.74f, stiffness = Spring.StiffnessMediumLow))
+                v >= 0.5f -> expand.animateTo(1f, MikuMotion.settle())
+                else -> expand.animateTo(0f, MikuMotion.settle())
             }
         }
     }
@@ -221,8 +239,56 @@ fun MikuNotificationShadeView(
         )
     }
 
+    // Pull further than the panel's own height → QS keeps expanding continuously (no two-state jump).
+    var panelHpx by remember { mutableIntStateOf(0) }
+    if (followFinger) {
+        LaunchedEffect(Unit) {
+            val serial = MikuShadeDrag.state.value.serial
+            var drove = false
+            MikuShadeDrag.state.collect { st ->
+                if (st.serial != serial) return@collect
+                if (st.fingerDown) {
+                    val extra = st.dragPx - panelHpx
+                    if (panelHpx > 0 && extra > 0f) { drove = true; expand.snapTo((extra / expandRangePx).coerceIn(0f, 1.12f)) }
+                } else if (drove) { drove = false; dragStartValue = 1f; settle() }
+            }
+        }
+    }
+
+    // Pixel: dragging the notification list down at its top expands QS; dragging up with nothing
+    // left to scroll collapses the panel (and dismisses past the threshold) — same physics as the
+    // header drag, so the whole panel feels like one sheet.
+    val listState = rememberLazyListState()
+    var nestedDragging by remember { mutableStateOf(false) }
+    val nested = remember(expandRangePx) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.y <= 0f) return Offset.Zero
+                val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
+                if (!atTop || expand.value >= 1.12f) return Offset.Zero
+                if (!nestedDragging) { nestedDragging = true; dragStartValue = expand.value.coerceIn(0f, 1f) }
+                scope.launch { expand.snapTo((expand.value + available.y / expandRangePx).coerceIn(0f, 1.12f)) }
+                return Offset(0f, available.y)
+            }
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (source != NestedScrollSource.UserInput || available.y >= 0f) return Offset.Zero
+                if (!nestedDragging) { nestedDragging = true; dragStartValue = expand.value.coerceIn(0f, 1f) }
+                scope.launch { expand.snapTo((expand.value + available.y / expandRangePx).coerceIn(-0.4f, 1.12f)) }
+                return Offset(0f, available.y)
+            }
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (nestedDragging) { nestedDragging = false; settle() }
+                return Velocity.Zero
+            }
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                if (nestedDragging) { nestedDragging = false; settle() }
+                return Velocity.Zero
+            }
+        }
+    }
+
     BackHandler(enabled = true) {
-        if (expanded) scope.launch { expand.animateTo(0f, spring(dampingRatio = 0.74f)) } else onDismiss()
+        if (expanded) scope.launch { expand.animateTo(0f, MikuMotion.settle()) } else onDismiss()
     }
 
     val compactH = 56.dp
@@ -234,7 +300,7 @@ fun MikuNotificationShadeView(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.55f * panelIn.value))
+            .drawBehind { drawRect(Color.Black.copy(alpha = 0.55f * panelIn.value * revealProgress())) }
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { onDismiss() }
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -243,8 +309,9 @@ fun MikuNotificationShadeView(
                 Modifier
                     .fillMaxWidth()
                     .heightIn(max = maxPanelH)
+                    .onSizeChanged { panelHpx = it.height; onPanelHeight(it.height) }
                     .graphicsLayer {
-                        translationY = -(1f - panelIn.value) * size.height * 0.35f - pullUp * size.height * 0.5f
+                        translationY = panelOffsetPx() - (1f - panelIn.value) * size.height * 0.35f - pullUp * size.height * 0.5f
                         alpha = (0.6f + 0.4f * panelIn.value) * (1f - pullUp * 0.8f)
                     }
                     .clip(RoundedCornerShape(bottomStart = ShadeCorner, bottomEnd = ShadeCorner))
@@ -292,7 +359,7 @@ fun MikuNotificationShadeView(
                             .clip(CircleShape)
                             .clickable {
                                 view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK)
-                                scope.launch { expand.animateTo(if (expanded) 0f else 1f, spring(dampingRatio = 0.68f, stiffness = Spring.StiffnessMediumLow)) }
+                                scope.launch { expand.animateTo(if (expanded) 0f else 1f, MikuMotion.settle()) }
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -350,6 +417,7 @@ fun MikuNotificationShadeView(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .then(dragModifier)
                         .padding(horizontal = 16.dp)
                         .height(40.dp)
                         .clip(RoundedCornerShape(20.dp))
@@ -381,7 +449,8 @@ fun MikuNotificationShadeView(
                     notifs.filter { !(it.hasMediaSession && media != null && it.pkg == media?.pkg) }
                 }
                 LazyColumn(
-                    Modifier.fillMaxWidth().weight(1f, fill = false),
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false).nestedScroll(nested),
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
@@ -391,6 +460,11 @@ fun MikuNotificationShadeView(
                     items(visibleNotifs, key = { it.key }) { n ->
                         NotifRow(
                             n,
+                            modifier = Modifier.animateItem(
+                                fadeInSpec = tween(MikuMotion.ms(150)),
+                                fadeOutSpec = tween(MikuMotion.ms(120)),
+                                placementSpec = spring(dampingRatio = MikuMotion.SETTLE_DAMPING, stiffness = MikuMotion.SETTLE_STIFFNESS)
+                            ),
                             onOpen = { if (MikuNotificationStore.send(ctx, n.contentIntent)) { if (n.isClearable) MikuNotificationStore.dismiss(n.key); onDismiss() } },
                             onDismiss = { MikuNotificationStore.dismiss(n.key) }
                         )
@@ -405,7 +479,7 @@ fun MikuNotificationShadeView(
                                         .background(MikuSurface2)
                                         .border(1.dp, MikuTeal.copy(alpha = 0.5f), RoundedCornerShape(20.dp))
                                         .clickable {
-                                            view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                                            MikuHaptics.pop(view)
                                             MikuNotificationStore.dismissAll()
                                         }
                                         .padding(horizontal = 20.dp),
@@ -435,6 +509,7 @@ fun MikuNotificationShadeView(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .then(dragModifier)                 // swipe up anywhere on the panel collapses it
                         .padding(horizontal = 12.dp, vertical = 4.dp)
                         .height(48.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -503,16 +578,19 @@ private fun extraTiles(ctx: Context, onRefresh: () -> Unit): List<QsTile> {
 @Composable
 private fun CompactTile(t: QsTile, modifier: Modifier, accent: Color = MikuTeal, accentBright: Color = MikuTealBright) {
     val view = LocalView.current
-    val bg by animateFloatAsState(if (t.isActive) 1f else 0f, tween(160), label = "tileBg")
+    val interaction = remember { MutableInteractionSource() }
+    val bg by animateFloatAsState(if (t.isActive) 1f else 0f, tween(MikuMotion.ms(200)), label = "tileBg")
     Column(
         modifier
             .height(56.dp)
+            .pressScale(interaction)
             .clip(RoundedCornerShape(28.dp))
             .background(lerpColor(MikuSurface2, accent, bg))
             .border(1.dp, if (t.isActive) accentBright.copy(alpha = 0.9f) else accent.copy(alpha = 0.25f), RoundedCornerShape(28.dp))
             .combinedClickable(
-                onClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK); t.onClick() },
-                onLongClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); t.onLongClick?.invoke() }
+                interactionSource = interaction, indication = null,
+                onClick = { MikuHaptics.tick(view); t.onClick() },
+                onLongClick = { MikuHaptics.pop(view); t.onLongClick?.invoke() }
             ),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
     ) {
@@ -531,16 +609,19 @@ private fun CompactTile(t: QsTile, modifier: Modifier, accent: Color = MikuTeal,
 @Composable
 private fun GridTile(t: QsTile, modifier: Modifier, accent: Color = MikuTeal, accentBright: Color = MikuTealBright) {
     val view = LocalView.current
-    val bg by animateFloatAsState(if (t.isActive) 1f else 0f, tween(160), label = "gridTileBg")
+    val interaction = remember { MutableInteractionSource() }
+    val bg by animateFloatAsState(if (t.isActive) 1f else 0f, tween(MikuMotion.ms(200)), label = "gridTileBg")
     Row(
         modifier
             .height(64.dp)
+            .pressScale(interaction)
             .clip(RoundedCornerShape(TileCorner))
             .background(lerpColor(MikuSurface2, accent, bg))
             .border(1.dp, if (t.isActive) accentBright.copy(alpha = 0.9f) else accent.copy(alpha = 0.25f), RoundedCornerShape(TileCorner))
             .combinedClickable(
-                onClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.CONTEXT_CLICK); t.onClick() },
-                onLongClick = { view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS); t.onLongClick?.invoke() }
+                interactionSource = interaction, indication = null,
+                onClick = { MikuHaptics.tick(view); t.onClick() },
+                onLongClick = { MikuHaptics.pop(view); t.onLongClick?.invoke() }
             )
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -628,7 +709,7 @@ private fun MediaCard(m: MikuMediaHub.Now, onOpen: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun NotifRow(n: MikuNotif, onOpen: () -> Unit, onDismiss: () -> Unit) {
+private fun NotifRow(n: MikuNotif, onOpen: () -> Unit, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val view = LocalView.current
     var expanded by remember(n.key) { mutableStateOf(false) }
@@ -647,6 +728,7 @@ private fun NotifRow(n: MikuNotif, onOpen: () -> Unit, onDismiss: () -> Unit) {
     }
     SwipeToDismissBox(
         state = state,
+        modifier = modifier,
         enableDismissFromStartToEnd = n.isClearable,
         enableDismissFromEndToStart = n.isClearable,
         backgroundContent = {
@@ -658,6 +740,12 @@ private fun NotifRow(n: MikuNotif, onOpen: () -> Unit, onDismiss: () -> Unit) {
         Column(
             Modifier
                 .fillMaxWidth()
+                .graphicsLayer {
+                    // the row fades as it follows the finger out (Pixel swipe-dismiss)
+                    val p = runCatching { state.progress }.getOrDefault(0f)
+                    alpha = if (state.targetValue == SwipeToDismissBoxValue.Settled) 1f else 1f - 0.7f * p.coerceIn(0f, 1f)
+                }
+                .animateContentSize(MikuMotion.settle())
                 .clip(RoundedCornerShape(20.dp))
                 .background(MikuSurface1.copy(alpha = 0.96f))
                 .border(1.dp, MikuTeal.copy(alpha = if (n.isOngoing) 0.15f else 0.3f), RoundedCornerShape(20.dp))

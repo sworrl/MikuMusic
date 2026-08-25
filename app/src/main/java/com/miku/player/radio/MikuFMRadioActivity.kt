@@ -185,20 +185,20 @@ class MikuFMRadioActivity : ComponentActivity() {
         }
     }
 
-    /** The platform-signed Miku FM app (com.caf.fmradio, versionCode ≥ 1000) if it's installed. */
+    /**
+     * Whatever `com.caf.fmradio` is installed AND enabled — HiBy's stock FM2 (launcher `.FMRadio`)
+     * today, the Miku FM build once it ships bundled in the image. Both run in the vendor_fm_app
+     * SELinux domain, the only one allowed to open /dev/radio0; this package never can.
+     */
     private fun realFmComponent(): android.content.ComponentName? {
         val pm = packageManager
-        val info = runCatching { pm.getPackageInfo(REAL_FM_PACKAGE, 0) }.getOrNull() ?: return null
-        val vc = androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)
-        if (vc < REAL_FM_MIN_VERSION_CODE) return null
-        // Prefer its LAUNCHER activity; fall back to the known class name.
-        pm.getLaunchIntentForPackage(REAL_FM_PACKAGE)?.component?.let { return it }
-        return android.content.ComponentName(REAL_FM_PACKAGE, "$REAL_FM_PACKAGE.MikuFMRadioActivity")
+        val ai = runCatching { pm.getApplicationInfo(REAL_FM_PACKAGE, 0) }.getOrNull() ?: return null
+        if (!ai.enabled) return null
+        return pm.getLaunchIntentForPackage(REAL_FM_PACKAGE)?.component
     }
 
     companion object {
         const val REAL_FM_PACKAGE = "com.caf.fmradio"
-        const val REAL_FM_MIN_VERSION_CODE = 1000L
     }
 
     override fun onResume() {

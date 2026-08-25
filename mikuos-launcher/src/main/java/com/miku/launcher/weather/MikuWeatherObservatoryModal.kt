@@ -264,7 +264,7 @@ fun MikuWeatherObservatoryModal(
                                     if (weather.nextPrecipLabel.isNotEmpty()) {
                                         Text(
                                             text = "⏱️ ${weather.nextPrecipLabel}",
-                                            color = Color(0xFFFFD600),
+                                            color = com.miku.launcher.ui.MikuIdentity.Gold,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Black,
                                             fontFamily = AudiowideFont
@@ -390,14 +390,14 @@ fun MikuWeatherObservatoryModal(
                                         ) {
                                             Text(
                                                 text = "🌅 SUNRISE ${weather.sunrise}",
-                                                color = Color(0xFFFFD600),
+                                                color = com.miku.launcher.ui.MikuIdentity.Gold,
                                                 fontSize = 10.5.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 fontFamily = AudiowideFont
                                             )
                                             Text(
                                                 text = if (weather.isDay) "☀️ DAYLIGHT PHASE" else "🌙 LUNAR NIGHT PHASE",
-                                                color = if (weather.isDay) Color(0xFFFFD600) else Color(0xFF80DEEA),
+                                                color = if (weather.isDay) com.miku.launcher.ui.MikuIdentity.Gold else Color(0xFF80DEEA),
                                                 fontSize = 10.5.sp,
                                                 fontWeight = FontWeight.Black,
                                                 fontFamily = AudiowideFont
@@ -425,7 +425,7 @@ fun MikuWeatherObservatoryModal(
                                                     .clip(RoundedCornerShape(3.dp))
                                                     .background(
                                                         Brush.horizontalGradient(
-                                                            listOf(Color(0xFFFFD600), Color(0xFFFF9100), MikuCyan)
+                                                            listOf(com.miku.launcher.ui.MikuIdentity.Gold, Color(0xFFFF9100), MikuCyan)
                                                         )
                                                     )
                                             )
@@ -460,7 +460,7 @@ fun MikuWeatherObservatoryModal(
                                         value = "${String.format(Locale.US, "%.2f", weather.pressureInHg)} inHg",
                                         sub = "${weather.cloudCoverPct}% Cloud Cover",
                                         icon = Icons.Default.Speed,
-                                        color = Color(0xFFFFD600)
+                                        color = com.miku.launcher.ui.MikuIdentity.Gold
                                     )
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
@@ -729,10 +729,10 @@ fun getWeatherTempColor(tempF: Int): Color {
         tempF < 32 -> Color(0xFF7C4DFF) // Freezing (Deep Purple)
         tempF < 50 -> Color(0xFF2979FF) // Cold (Sky Blue)
         tempF < 65 -> Color(0xFF00E5FF) // Cool (Cyan)
-        tempF < 75 -> Color(0xFF00E676) // Mild (Green)
-        tempF < 85 -> Color(0xFFFFD600) // Warm (Electric Yellow)
+        tempF < 75 -> com.miku.launcher.ui.MikuIdentity.Leek // Mild (Green)
+        tempF < 85 -> com.miku.launcher.ui.MikuIdentity.Gold // Warm (Electric Yellow)
         tempF < 95 -> Color(0xFFFF6D00) // Hot (Orange)
-        else -> Color(0xFFFF1744)       // Extreme Heat (Crimson)
+        else -> com.miku.launcher.ui.MikuIdentity.Coral       // Extreme Heat (Crimson)
     }
 }
 
@@ -1123,7 +1123,7 @@ fun MikuLiveDopplerRadarTab(
                 )
 
                 // Station Center Point Marker
-                drawCircle(Color(0xFFFF1744), radius = 4.dp.toPx(), center = center)
+                drawCircle(com.miku.launcher.ui.MikuIdentity.Coral, radius = 4.dp.toPx(), center = center)
                 drawCircle(Color.White, radius = 2.dp.toPx(), center = center)
 
                 // Rotating 360-degree radar beam sweep
@@ -1246,10 +1246,10 @@ fun MikuLiveDopplerRadarTab(
                         Brush.horizontalGradient(
                             listOf(
                                 Color(0xFF00E5FF),
-                                Color(0xFF00E676),
-                                Color(0xFFFFD600),
+                                com.miku.launcher.ui.MikuIdentity.Leek,
+                                com.miku.launcher.ui.MikuIdentity.Gold,
                                 Color(0xFFFF9100),
-                                Color(0xFFFF1744),
+                                com.miku.launcher.ui.MikuIdentity.Coral,
                                 Color(0xFFFF007F)
                             )
                         )

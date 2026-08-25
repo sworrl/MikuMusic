@@ -49,12 +49,51 @@ object MikuPowerProfile {
             _lowPower.value = prof == "audio_only" || prof == "idle"
         }
         read()
+        readMode(app)
+        try {
+            app.contentResolver.registerContentObserver(
+                Settings.Global.getUriFor(MODE_KEY), false,
+                object : ContentObserver(Handler(Looper.getMainLooper())) { override fun onChange(selfChange: Boolean) = readMode(app) }
+            )
+        } catch (_: Throwable) {}
         try {
             app.contentResolver.registerContentObserver(
                 Settings.Global.getUriFor(KEY), false,
                 object : ContentObserver(Handler(Looper.getMainLooper())) { override fun onChange(selfChange: Boolean) = read() }
             )
         } catch (_: Throwable) {}
+    }
+
+    // ---- User power MODE (Settings.Global miku_power_mode: "auto" | "perf" | "save"; missing = auto).
+    // Miku Music's governor honours it; the launcher only cycles/displays it. ----
+    const val MODE_KEY = "miku_power_mode"
+    private val _mode = MutableStateFlow("auto")
+    val mode: StateFlow<String> = _mode.asStateFlow()
+    private fun readMode(app: Context) {
+        val m = try { Settings.Global.getString(app.contentResolver, MODE_KEY)?.trim()?.lowercase() } catch (_: Throwable) { null }
+        _mode.value = if (m == "perf" || m == "save") m else "auto"
+    }
+    fun nextMode(current: String): String = when (current) { "auto" -> "perf"; "perf" -> "save"; else -> "auto" }
+    /** Cycles auto → perf → save → auto and persists it (root-shell fallback if the write is refused). */
+    fun cycleMode(ctx: Context): String {
+        val next = nextMode(_mode.value)
+        _mode.value = next
+        val app = ctx.applicationContext
+        try { Settings.Global.putString(app.contentResolver, MODE_KEY, next) } catch (_: Throwable) {
+            try { com.miku.launcher.RootShell.execFast("settings put global $MODE_KEY $next") } catch (_: Throwable) {}
+        }
+        return next
+    }
+    /** Kawaii glyph for the MODE (perf ⚡ / save ☾) or, in auto, for the live profile. */
+    fun modeGlyph(mode: String, profile: String): String = when (mode) {
+        "perf" -> "⚡"
+        "save" -> "☾"
+        else -> glyph(profile).ifEmpty { "✦" }
+    }
+    fun modeLabel(mode: String, profile: String): String = when (mode) {
+        "perf" -> "PERFORMANCE"
+        "save" -> "BATTERY SAVER"
+        else -> "AUTO · " + when (profile) { "perf" -> "PERF"; "audio_only" -> "AUDIO"; "idle" -> "IDLE"; else -> "BALANCED" }
     }
 
     fun glyph(profile: String): String = when (profile) {
@@ -119,6 +158,12 @@ fun rememberLowPower(): State<Boolean> {
     return MikuPowerProfile.lowPower.collectAsState()
 }
 
+@Composable
+fun rememberPowerMode(): State<String> {
+    val ctx = LocalContext.current
+    MikuPowerProfile.attach(ctx)
+    return MikuPowerProfile.mode.collectAsState()
+}
 @Composable
 fun rememberPowerProfile(): State<String> {
     val ctx = LocalContext.current

@@ -169,7 +169,7 @@ fun MikuAnatomicalObservatoryModal(
                         Triple("ALL", "✨ Full Body", MikuCyan),
                         Triple("BRAIN", "🧠 Neural Cortex", Color(0xFF00FF7F)),
                         Triple("EARS", "🎧 Audio Dual-DAC", Color(0xFFB388FF)),
-                        Triple("EYES", "👁️ Optic Vision", Color(0xFFFFD600)),
+                        Triple("EYES", "👁️ Optic Vision", com.miku.launcher.ui.MikuIdentity.Gold),
                         Triple("HEART", "💖 Quantum Core", MikuNeonPink),
                         Triple("VOCAL", "🎤 Synthesizer", MikuCyan),
                         Triple("NERVES", "⚡ Telemetry", Color(0xFF00E5FF))
@@ -220,7 +220,7 @@ fun MikuAnatomicalObservatoryModal(
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     MetricPill("SENTINEL", "ONLINE", Color(0xFF00FF7F))
                                     MetricPill("ANR IMMUNITY", "100% ACTIVE", MikuCyan)
-                                    MetricPill("RAM HEAP", "${memoryState.first}M / ${memoryState.second}M", Color(0xFFFFD600))
+                                    MetricPill("RAM HEAP", "${memoryState.first}M / ${memoryState.second}M", com.miku.launcher.ui.MikuIdentity.Gold)
                                     val hrs = uptimeSec / 3600
                                     val mins = (uptimeSec % 3600) / 60
                                     MetricPill("UPTIME", "${hrs}h ${mins}m", Color(0xFFB388FF))
@@ -260,10 +260,10 @@ fun MikuAnatomicalObservatoryModal(
                                 title = "OPTIC EYES // VISION MATRIX",
                                 organIcon = "👁️",
                                 subtitle = "Ambient Lux Sensor, Backlight PWM & Color Calibration",
-                                accentColor = Color(0xFFFFD600)
+                                accentColor = com.miku.launcher.ui.MikuIdentity.Gold
                             ) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    MetricPill("LUX SENSOR", "OPT3001 OK", Color(0xFFFFD600))
+                                    MetricPill("LUX SENSOR", "OPT3001 OK", com.miku.launcher.ui.MikuIdentity.Gold)
                                     MetricPill("PWM REFRESH", "60 Hz Direct", MikuCyan)
                                     MetricPill("CALIBRATION", "DCI-P3 Vivid", Color(0xFF00FF7F))
                                 }
@@ -353,7 +353,7 @@ fun MikuAnatomicalObservatoryModal(
                             ) {
                                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     MetricPill("RADIO LINK", "Wi-Fi 802.11ac", Color(0xFF00E5FF))
-                                    MetricPill("PULSAR BUS", "SGM31324 PWM", Color(0xFFFFD600))
+                                    MetricPill("PULSAR BUS", "SGM31324 PWM", com.miku.launcher.ui.MikuIdentity.Gold)
                                     MetricPill("SD BUS", "UHS-I Direct I/O", Color(0xFF00FF7F))
                                 }
                             }
