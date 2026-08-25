@@ -60,4 +60,32 @@ object MikuHaptics {
 
     /** The signature "bumpy but good" like-heart texture (kept for the lockscreen heart). */
     fun like(ctx: Context) { if (enabled(ctx)) MikuTactileHaptics.playBumpyLikeTexture(ctx) }
+
+    /**
+     * Rhythm-game beat hit — ONE short, sharp pulse, nothing trailing. A rhythm game needs the
+     * haptic to land exactly on the tap and be over before the next beat, so this is a single
+     * full-amplitude one-shot whose weight encodes the judgment:
+     *  - [strength] 2 = PERFECT: 14ms @ 255 — a hard, clean snap
+     *  - [strength] 1 = GOOD:    10ms @ 200 — crisp click
+     *  - [strength] 0 = MISS:     8ms @  80 — faint dull thud (you still feel the tap register)
+     * Amplitude falls back to the predefined CLICK/TICK effects on motors without amplitude control.
+     */
+    fun beat(ctx: Context, strength: Int) {
+        if (!enabled(ctx)) return
+        val v = vib(ctx) ?: return
+        val (ms, amp) = when {
+            strength >= 2 -> 14L to 255
+            strength == 1 -> 10L to 200
+            else -> 8L to 80
+        }
+        try {
+            v.cancel()  // never queue behind a still-buzzing previous hit
+            if (v.hasAmplitudeControl()) v.vibrate(VibrationEffect.createOneShot(ms, amp))
+            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) v.vibrate(VibrationEffect.createPredefined(
+                when { strength >= 2 -> VibrationEffect.EFFECT_HEAVY_CLICK; strength == 1 -> VibrationEffect.EFFECT_CLICK; else -> VibrationEffect.EFFECT_TICK }))
+            else v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE))
+        } catch (_: Throwable) {
+            try { v.vibrate(VibrationEffect.createOneShot(ms, VibrationEffect.DEFAULT_AMPLITUDE)) } catch (_: Throwable) {}
+        }
+    }
 }

@@ -753,6 +753,13 @@ fun MikuBpmObservatoryModal(
                                 accuracy = HitAccuracy.GOOD
                             }
 
+                            // Haptic FIRST — one short sharp pulse the instant the judgment is known,
+                            // before any scoring/DB work, so it lands on the finger, not after it.
+                            com.miku.launcher.haptics.MikuHaptics.beat(
+                                ctx,
+                                when (accuracy) { HitAccuracy.PERFECT -> 2; HitAccuracy.GOOD -> 1; HitAccuracy.MISS -> 0 }
+                            )
+
                             val yield = MikuBeatClickerEngine.tap(accuracy, liveBpm)
                             val pts = when (accuracy) {
                                 HitAccuracy.PERFECT -> 100L + clickerCombo * 15L
@@ -785,13 +792,11 @@ fun MikuBpmObservatoryModal(
                                     judgmentTitle = "💖 PERFECT!! (0ms)"
                                     judgmentColor = KawaiiHotPink
                                     perfectShockwaveTrigger++
-                                    com.miku.launcher.haptics.MikuHaptics.like(ctx)
                                 }
                                 HitAccuracy.GOOD -> {
                                     val prefix = if (timingOffsetMs < 0) "EARLY" else "LATE"
                                     judgmentTitle = "✨ GOOD ($prefix ${abs(timingOffsetMs)}ms)"
                                     judgmentColor = KawaiiSoftTeal
-                                    com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                 }
                                 HitAccuracy.MISS -> {
                                     judgmentTitle = "MISS (${abs(timingOffsetMs)}ms)"
