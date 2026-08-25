@@ -2496,29 +2496,24 @@ fun CyberAllAppsDrawer(
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                TextField(
+                // Compact single-line search (BasicTextField: Material TextField wants 56dp and clips
+                // inside a 44dp status-bar-height row).
+                androidx.compose.foundation.text.BasicTextField(
                     value = searchQuery,
                     onValueChange = onSearchChange,
                     singleLine = true,
-                    maxLines = 1,
-                    keyboardOptions = KeyboardOptions(
-                        imeAction = ImeAction.Search
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onSearch = {
-                            keyboardController?.hide()
-                        }
-                    ),
-                    placeholder = { Text("Search apps…", color = MikuTextSecondary, fontSize = MikuDimens.textS, maxLines = 1) },
                     textStyle = androidx.compose.ui.text.TextStyle(fontSize = MikuDimens.textM, color = Color.White),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = Color.Transparent,
-                        unfocusedContainerColor = Color.Transparent,
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    ),
+                    cursorBrush = androidx.compose.ui.graphics.SolidColor(MikuCyan),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { keyboardController?.hide() }),
+                    decorationBox = { inner ->
+                        Box(contentAlignment = Alignment.CenterStart) {
+                            if (searchQuery.isEmpty()) {
+                                Text("Search apps…", color = MikuTextSecondary, fontSize = MikuDimens.textS, maxLines = 1)
+                            }
+                            inner()
+                        }
+                    },
                     modifier = Modifier.weight(1f)
                 )
                 if (searchQuery.isNotEmpty()) {
@@ -2648,7 +2643,7 @@ fun DesktopAppIconItem(
         Text(
             text = app.label,
             color = Color.White,
-            fontSize = MikuDimens.textS,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Medium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
