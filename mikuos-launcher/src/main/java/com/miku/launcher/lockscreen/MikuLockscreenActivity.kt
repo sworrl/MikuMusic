@@ -34,6 +34,8 @@ import com.miku.launcher.lockscreen.MikuPlayHistoryStore
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
+import com.miku.launcher.ui.mikuPressScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
@@ -642,6 +644,18 @@ fun MikuKawaiiLockscreenScreen(
     }
 
     val unlockThreshold = with(density) { -160.dp.toPx() }
+    var rawDragY by remember { mutableFloatStateOf(0f) }
+    // First-show settle: clock, then date (60 ms later), then the weather capsule (120 ms).
+    val settleClock = remember { Animatable(0f) }
+    val settleDate = remember { Animatable(0f) }
+    val settleWeather = remember { Animatable(0f) }
+    LaunchedEffect(Unit) {
+        val fast = com.miku.launcher.ui.MikuPowerProfile.isLowPower
+        launch { settleClock.animateTo(1f, if (fast) tween(120) else spring(dampingRatio = 0.8f, stiffness = 380f)) }
+        launch { delay(60); settleDate.animateTo(1f, if (fast) tween(120) else spring(dampingRatio = 0.8f, stiffness = 380f)) }
+        launch { delay(120); settleWeather.animateTo(1f, if (fast) tween(120) else spring(dampingRatio = 0.8f, stiffness = 380f)) }
+    }
+    val npAccentLock = com.miku.launcher.ui.rememberNpAccent()
 
     Box(
         modifier = Modifier
@@ -654,7 +668,7 @@ fun MikuKawaiiLockscreenScreen(
             }
             .pointerInput(Unit) {
                 detectVerticalDragGestures(
-                    onDragStart = { lastInteractionMs = System.currentTimeMillis() },
+                    onDragStart = { lastInteractionMs = System.currentTimeMillis(); rawDragY = dragOffsetY.value },
                     onDragCancel = {
                         coroutineScope.launch {
                             dragOffsetY.animateTo(
@@ -669,13 +683,16 @@ fun MikuKawaiiLockscreenScreen(
                     onDragEnd = {
                         lastInteractionMs = System.currentTimeMillis()
                         coroutineScope.launch {
-                            if (dragOffsetY.value < unlockThreshold) {
+                            if (rawDragY < unlockThreshold) {
+                                // Commit: spring the curtain up and off (no wobble), then unlock.
+                                com.miku.launcher.haptics.MikuHaptics.confirm(context)
                                 dragOffsetY.animateTo(
                                     -2500f,
-                                    tween(260, easing = FastOutLinearInEasing)
+                                    spring(dampingRatio = 1f, stiffness = 520f, visibilityThreshold = 4f)
                                 )
                                 onUnlock()
                             } else {
+                                if (rawDragY < -24f) com.miku.launcher.haptics.MikuHaptics.tick(context)
                                 dragOffsetY.animateTo(
                                     0f,
                                     spring(
@@ -689,8 +706,11 @@ fun MikuKawaiiLockscreenScreen(
                     onVerticalDrag = { _, dragAmount ->
                         lastInteractionMs = System.currentTimeMillis()
                         coroutineScope.launch {
-                            val newY = (dragOffsetY.value + dragAmount).coerceAtMost(0f)
-                            dragOffsetY.snapTo(newY)
+                            // Raw travel accumulates; past the unlock threshold the card rubber-bands
+                            // (35 % of the extra travel) so it feels held, not slid off.
+                            rawDragY = (rawDragY + dragAmount).coerceAtMost(0f)
+                            val eased = if (rawDragY < unlockThreshold) unlockThreshold + (rawDragY - unlockThreshold) * 0.35f else rawDragY
+                            dragOffsetY.snapTo(eased)
                         }
                     }
                 )
@@ -867,6 +887,7 @@ fun MikuKawaiiLockscreenScreen(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
+                    modifier = Modifier.graphicsLayer { alpha = settleClock.value.coerceIn(0f, 1f); translationY = (1f - settleClock.value) * 14.dp.toPx() },
                     text = currentTime.ifBlank { "12:00" },
                     color = Color.White,
                     fontSize = 38.dampedSp(),
@@ -875,6 +896,7 @@ fun MikuKawaiiLockscreenScreen(
                     letterSpacing = 1.5.sp
                 )
                 Text(
+                    modifier = Modifier.graphicsLayer { alpha = settleDate.value.coerceIn(0f, 1f); translationY = (1f - settleDate.value) * 10.dp.toPx() },
                     text = currentDate.ifBlank { "01/01/2026" },
                     color = palette.primary,
                     fontSize = 11.5.dampedSp(),
@@ -888,7 +910,7 @@ fun MikuKawaiiLockscreenScreen(
             Miku5HourLockscreenTrendCapsule(
                 weather = weather,
                 gps = gps,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = settleWeather.value.coerceIn(0f, 1f); translationY = (1f - settleWeather.value) * 8.dp.toPx() }
             )
 
             Spacer(Modifier.height(2.dp))
@@ -911,8 +933,8 @@ fun MikuKawaiiLockscreenScreen(
                             1.2.dp,
                             Brush.horizontalGradient(
                                 listOf(
-                                    if (localLikedState) Color(0xFFFF2277) else palette.primary.copy(alpha = 0.85f),
-                                    Color(0xFF39C5BB).copy(alpha = 0.5f),
+                                    if (localLikedState) Color(0xFFFF2277) else com.miku.launcher.ui.MikuNowPlayingAccent.blend(palette.primary, npAccentLock.full, if (npAccentLock.active) 0.3f else 0f).copy(alpha = 0.85f),
+                                    com.miku.launcher.ui.MikuNowPlayingAccent.blend(Color(0xFF39C5BB), npAccentLock.full, if (npAccentLock.active) 0.3f else 0f).copy(alpha = 0.5f),
                                     MikuNeonPink.copy(alpha = 0.7f)
                                 )
                             ),
@@ -1292,6 +1314,7 @@ fun MikuKawaiiLockscreenScreen(
                                     .size(30.dp)
                                     .clip(CutCornerShape(6.dp))
                                     .background(Color(0x3300E5FF))
+                                    .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
                                     .clickable {
                                         lastInteractionMs = System.currentTimeMillis()
                                         MikuTactileHaptics.playRatchetTick(context)
@@ -1335,6 +1358,7 @@ fun MikuKawaiiLockscreenScreen(
                                     .size(30.dp)
                                     .clip(CutCornerShape(6.dp))
                                     .background(Color(0x3300E5FF))
+                                    .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
                                     .clickable {
                                         lastInteractionMs = System.currentTimeMillis()
                                         MikuTactileHaptics.playRatchetTick(context)

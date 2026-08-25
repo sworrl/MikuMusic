@@ -31,6 +31,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.animation.core.VectorConverter
+import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -156,7 +162,12 @@ fun MikuBadgeQuilt(
     config: MikuQuiltConfig,
     modifier: Modifier = Modifier
 ) {
-    val haptic = LocalHapticFeedback.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    // Drop settle: the released patch springs from where the finger left it back into its slot.
+    var settleId by remember { mutableStateOf<String?>(null) }
+    val settleOffset = remember { androidx.compose.animation.core.Animatable(Offset.Zero, Offset.VectorConverter) }
+    val settleScale = remember { androidx.compose.animation.core.Animatable(1f) }
     val byId = remember(badges) { badges.associateBy { it.id } }
     val ordered = remember(order, byId) { order.mapNotNull { byId[it] } }
     val bounds = remember { mutableStateMapOf<String, Rect>() }
@@ -180,7 +191,7 @@ fun MikuBadgeQuilt(
                         draggedId = id
                         hoverId = null
                         pointer = pos
-                        if (id != null) haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        if (id != null) com.miku.launcher.haptics.MikuHaptics.pop(ctx)
                     },
                     onDrag = { change, _ ->
                         change.consume()
@@ -193,12 +204,27 @@ fun MikuBadgeQuilt(
                             if (from >= 0 && to >= 0) {
                                 cur.removeAt(from); cur.add(to, d)
                                 latestOnOrderChange.value(cur)
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                             }
                             hoverId = target
                         } else if (target == d) hoverId = null
                     },
-                    onDragEnd = { draggedId = null; hoverId = null },
+                    onDragEnd = {
+                        val d = draggedId
+                        val b = d?.let { bounds[it] }
+                        draggedId = null; hoverId = null
+                        if (d != null && b != null) {
+                            com.miku.launcher.haptics.MikuHaptics.confirm(ctx)
+                            settleId = d
+                            scope.launch {
+                                settleOffset.snapTo(Offset(pointer.x - b.center.x, pointer.y - b.center.y))
+                                settleScale.snapTo(1.05f)
+                                launch { settleScale.animateTo(1f, com.miku.launcher.ui.MikuMotion.settleNow) }
+                                settleOffset.animateTo(Offset.Zero, androidx.compose.animation.core.spring(dampingRatio = 0.78f, stiffness = 420f))
+                                settleId = null
+                            }
+                        }
+                    },
                     onDragCancel = { draggedId = null; hoverId = null }
                 )
             },
@@ -209,9 +235,10 @@ fun MikuBadgeQuilt(
         ordered.forEach { badge ->
             val isDragged = draggedId == badge.id
             val isHover = hoverId == badge.id
+            val isSettling = settleId == badge.id
             Box(
                 Modifier
-                    .zIndex(if (isDragged) 2f else 0f)
+                    .zIndex(if (isDragged || isSettling) 2f else 0f)
                     .onGloballyPositioned { c -> bounds[badge.id] = Rect(c.positionInParent(), c.size.toSize()) }
                     .graphicsLayer {
                         if (isDragged) {
@@ -220,9 +247,14 @@ fun MikuBadgeQuilt(
                                 translationX = pointer.x - b.center.x
                                 translationY = pointer.y - b.center.y
                             }
-                            scaleX = 1.08f; scaleY = 1.08f
+                            scaleX = 1.05f; scaleY = 1.05f
                             shadowElevation = 12.dp.toPx()
                             alpha = 0.96f
+                        } else if (isSettling) {
+                            translationX = settleOffset.value.x
+                            translationY = settleOffset.value.y
+                            scaleX = settleScale.value; scaleY = settleScale.value
+                            shadowElevation = 12.dp.toPx() * (settleScale.value - 1f) / 0.05f
                         }
                     }
                     .then(if (isHover) Modifier.border(1.2.dp, MikuNeonPink, RoundedCornerShape(10.dp)) else Modifier)

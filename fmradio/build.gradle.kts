@@ -81,6 +81,8 @@ android {
 }
 
 dependencies {
+    // Exact-signature stubs of the device qcom.fmradio.jar (compile only; runtime = uses-library).
+    compileOnly(project(":qcom-fmradio-stubs"))
     implementation(platform("androidx.compose:compose-bom:2024.09.02"))
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")

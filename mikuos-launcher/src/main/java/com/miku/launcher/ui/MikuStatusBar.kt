@@ -119,6 +119,7 @@ fun rememberMikuStatusBarState(
     var batteryTempC by remember { mutableStateOf(0f) }
     LaunchedEffect(Unit) {
         while (true) {
+            MikuPowerProfile.awaitVisible()
             btConnected = try {
                 val adapter = BluetoothAdapter.getDefaultAdapter()
                 adapter != null && adapter.isEnabled && (
@@ -141,7 +142,7 @@ fun rememberMikuStatusBarState(
             quality = try {
                 compactQuality(android.provider.Settings.Global.getString(ctx.contentResolver, "miku_now_playing_format") ?: "")
             } catch (_: Throwable) { "" }
-            delay(3000)
+            delay(MikuPowerProfile.refreshMs(3000L))
         }
     }
     @Suppress("UNUSED_VARIABLE") val wgTick = wg  // recompose on tunnel status changes
@@ -191,8 +192,20 @@ fun MikuStatusBar(
     onClockClick: (() -> Unit)? = null
 ) {
     val glyph = 13.dp
-    val seam = MikuCyan.copy(alpha = 0.55f)
+    val ctxBar = androidx.compose.ui.platform.LocalContext.current
+    // Album accent (25 % into teal) on the stitch seam + quality chip; pure teal when idle.
+    val np = rememberNpAccent()
+    val seam = np.subtle.copy(alpha = 0.55f)
+    val chipColor = np.subtle
     val textColor = Color(0xFFE0FFFC)
+    val profile by rememberPowerProfile()
+    val profileGlyph = MikuPowerProfile.glyph(profile)
+    // Value tweens (250 ms) + thermal colour crossfade instead of snapping.
+    val thermalShown = animatedFloat(state.thermalC, "sbThermal")
+    val volumeShown = animatedInt(state.volumePct, "sbVolume")
+    val batteryShown = animatedInt(state.batteryPct, "sbBattery")
+    val bpmShown = animatedInt(state.bpm, "sbBpm")
+    val thermalTint = animatedColor(thermalColor(state.thermalC), "sbThermalColor")
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
@@ -244,24 +257,24 @@ fun MikuStatusBar(
             ) {
                 Text(state.clock, color = textColor, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, letterSpacing = 0.3.sp, maxLines = 1, softWrap = false)
                 if (showBpm) {
-                    Text("${state.bpm}♥", color = MikuNeonPink, fontSize = 10.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
+                    Text("${bpmShown}♥", color = MikuNeonPink, fontSize = 10.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
                 }
                 if (showQuality) {
                     Box(
                         Modifier
                             .drawBehind {
-                                drawRoundRect(MikuCyan.copy(alpha = 0.18f), cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()))
-                                drawRoundRect(MikuCyan.copy(alpha = 0.6f), cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()), style = Stroke(1f))
+                                drawRoundRect(chipColor.copy(alpha = 0.18f), cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()))
+                                drawRoundRect(chipColor.copy(alpha = 0.6f), cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()), style = Stroke(1f))
                             }
                             .padding(horizontal = 4.dp, vertical = 1.dp)
                     ) {
-                        Text(state.quality, color = MikuCyan, fontSize = 10.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
+                        Text(state.quality, color = MikuNowPlayingAccent.tintText(MikuCyan, np.full, Color(0xFF07131A)), fontSize = 10.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
                     }
                 }
             }
             // RIGHT
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("${state.thermalC.toInt()}°", color = thermalColor(state.thermalC), fontSize = 10.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
+                Text("${thermalShown.toInt()}°", color = thermalTint, fontSize = 10.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         if (state.isMuted || state.volumePct == 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
@@ -269,7 +282,7 @@ fun MikuStatusBar(
                         tint = if (state.isMuted) MikuNeonPink else MikuCyan,
                         modifier = Modifier.size(glyph)
                     )
-                    Text("${state.volumePct}", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                    Text("${volumeShown}", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -296,7 +309,13 @@ fun MikuStatusBar(
                     state.batteryPct > 20 -> Color(0xFFFFD600)
                     else -> Color(0xFFFF1744)
                 }
-                Text("${state.batteryPct}%", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, maxLines = 1, softWrap = false)
+                Text("${batteryShown}%", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, maxLines = 1, softWrap = false)
+                if (profileGlyph.isNotEmpty()) {
+                    Spacer(Modifier.width(5.dp))
+                    // Power profile: ⚡ perf / ♪ audio-only / ☾ idle — tap opens Miku Music's Power Governor.
+                    Text(profileGlyph, color = if (profile == "perf") MikuNeonPink else textColor.copy(alpha = 0.85f), fontSize = 11.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false,
+                        modifier = Modifier.clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null) { MikuPowerProfile.openGovernor(ctxBar) })
+                }
                 Box(contentAlignment = Alignment.Center) {
                     Canvas(Modifier.width(20.dp).height(11.dp)) {
                         val bodyW = size.width - 3.dp.toPx()

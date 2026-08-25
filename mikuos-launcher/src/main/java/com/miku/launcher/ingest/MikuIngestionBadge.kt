@@ -1,5 +1,8 @@
 package com.miku.launcher.ingest
 
+import com.miku.launcher.ui.gatedFloat
+import com.miku.launcher.ui.gatedColor
+import androidx.compose.runtime.getValue
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -39,8 +42,10 @@ fun MikuIngestionBadge(
 
     val ingestState by MikuIngestEngine.state.collectAsState()
 
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+
     val infinitePulse = rememberInfiniteTransition(label = "IngestPulse")
-    val pulseAlpha by infinitePulse.animateFloat(
+    val pulseAlpha by infinitePulse.gatedFloat(lowPowerGate, 
         initialValue = 0.4f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(

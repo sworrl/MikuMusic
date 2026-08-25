@@ -124,9 +124,13 @@ private fun DrawScope.cloudBody(cx: Float, cy: Float, w: Float, color: Color) {
 /** The kawaii condition glyph: sun with soft rays, cloud with blush cheeks, rain + hearts, snow sparkles, moon. */
 @Composable
 private fun KawaiiSkyGlyph(sky: Sky, modifier: Modifier = Modifier) {
+    // Idle bob/spin run only in the perf/balanced power profiles (audio_only / idle freeze them).
+    val lowPower by rememberLowPower()
     val t = rememberInfiniteTransition(label = "kawaiiSky")
-    val bob by t.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Reverse), label = "bob")
-    val spin by t.animateFloat(0f, 360f, infiniteRepeatable(tween(24000, easing = LinearEasing), RepeatMode.Restart), label = "spin")
+    val bobAnim by t.animateFloat(0f, 1f, infiniteRepeatable(tween(2600, easing = LinearEasing), RepeatMode.Reverse), label = "bob")
+    val spinAnim by t.animateFloat(0f, 360f, infiniteRepeatable(tween(24000, easing = LinearEasing), RepeatMode.Restart), label = "spin")
+    val bob = if (lowPower) 0.5f else bobAnim
+    val spin = if (lowPower) 0f else spinAnim
     Canvas(modifier) {
         val w = size.width; val h = size.height
         val cx = w / 2f; val cy = h / 2f + (bob - 0.5f) * 4.dp.toPx()

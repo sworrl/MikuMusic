@@ -40,7 +40,11 @@ fun Modifier.homeVerticalSwipe(
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         val p = down.position
-        if (p.y < top || p.y > size.height - bottom || p.x < side || p.x > size.width - side) return@awaitEachGesture
+        if (p.y < top || p.y > size.height - bottom || p.x < side || p.x > size.width - side) {
+            android.util.Log.d("MikuHomeSwipe", "down rejected p=$p size=$size follow=${onDragUp != null}")
+            return@awaitEachGesture
+        }
+        android.util.Log.d("MikuHomeSwipe", "down p=$p size=$size follow=${onDragUp != null}")
         var fired = false
         var following = false
         var lastY = p.y
@@ -51,10 +55,12 @@ fun Modifier.homeVerticalSwipe(
             val change = event.changes.firstOrNull { it.id == down.id } ?: break
             tracker.addPosition(change.uptimeMillis, change.position)
             if (!change.pressed) {
-                if (following) onDragUpEnd?.invoke(tracker.calculateVelocity().y)
+                val vy = tracker.calculateVelocity().y
+                android.util.Log.d("MikuHomeSwipe", "up following=$following fired=$fired vy=$vy")
+                if (following) onDragUpEnd?.invoke(vy)
                 break
             }
-            if (!following && change.isConsumed) break // an inner scrollable/drag claimed it
+            if (!following && change.isConsumed) { android.util.Log.d("MikuHomeSwipe", "break: consumed by other"); break } // an inner scrollable/drag claimed it
             val dx = change.position.x - p.x
             val dy = change.position.y - p.y
             if (following) {
@@ -66,6 +72,7 @@ fun Modifier.homeVerticalSwipe(
             if (onDragUp != null && dy < -followSlop && abs(dy) > abs(dx) * 1.4f) {
                 following = true
                 change.consume()
+                android.util.Log.d("MikuHomeSwipe", "follow claimed dy=$dy")
                 onDragUp.invoke(dy)            // catch up the travel already made
                 lastY = change.position.y
                 continue

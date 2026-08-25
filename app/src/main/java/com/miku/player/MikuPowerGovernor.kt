@@ -51,6 +51,9 @@ object MikuPowerGovernor {
     private const val TAG = "MikuPowerGovernor"
     const val KEY_PROFILE = "miku_power_profile"
     const val KEY_PROFILE_TS = "miku_power_profile_ts"
+    /** Manual override — a Settings.Global so the MikuOS Settings widgets / launcher tiles flip the
+     *  SAME switch the in-app selector uses: "auto" | "perf" | "save". Observed live. */
+    const val KEY_OVERRIDE = "miku_power_override"
     private const val KEY_LOW_POWER = "low_power"
     private const val PREFS = "miku_power_prefs"
     private const val DEBOUNCE_MS = 3_000L
@@ -107,7 +110,7 @@ object MikuPowerGovernor {
         val a = ctx.applicationContext
         app = a
         val p = a.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        mode = Mode.values().firstOrNull { it.key == p.getString("mode", "auto") } ?: Mode.AUTO
+        mode = readOverride(a)
         saverInAudioOnly = p.getBoolean("saver_audio_only", true)
         userVisFpsCap30 = p.getBoolean("vis_fps_30", false)
         prevLowPower = p.getInt("prev_low_power", -1).takeIf { it >= 0 }
@@ -138,6 +141,17 @@ object MikuPowerGovernor {
                 addAction(Intent.ACTION_BATTERY_CHANGED)
             })
         }
+        // Live-observe the override Global (MikuOS Settings widgets / launcher tiles write it too).
+        runCatching {
+            a.contentResolver.registerContentObserver(
+                Settings.Global.getUriFor(KEY_OVERRIDE), false,
+                object : android.database.ContentObserver(main) {
+                    override fun onChange(selfChange: Boolean) {
+                        val m = readOverride(a)
+                        if (m != mode) { mode = m; applyNow("override-global=${m.key}") }
+                    }
+                })
+        }
         playing = runCatching { PlayerHolder.player?.isPlaying == true }.getOrDefault(false)
         // If a previous process died inside saver, put the user's value back.
         prevLowPower?.let { restoreLowPower(a, it) }
@@ -153,11 +167,19 @@ object MikuPowerGovernor {
 
     // ---- input setters ----
     fun onPlaybackState(ctx: Context, isPlaying: Boolean) { init(ctx); if (playing != isPlaying) { playing = isPlaying; scheduleEval("playback=$isPlaying") } }
-    fun setVisualizerVisible(v: Boolean) { if (visualizerVisible != v) { visualizerVisible = v; scheduleEval("vis=$v") } }
-    fun setNowPlayingVisible(v: Boolean) { if (nowPlayingVisible != v) { nowPlayingVisible = v; scheduleEval("np=$v") } }
+    fun noteVisualizerVisible(v: Boolean) { if (visualizerVisible != v) { visualizerVisible = v; scheduleEval("vis=$v") } }
+    fun noteNowPlayingVisible(v: Boolean) { if (nowPlayingVisible != v) { nowPlayingVisible = v; scheduleEval("np=$v") } }
+    private fun readOverride(a: Context): Mode = runCatching {
+        Settings.Global.getString(a.contentResolver, KEY_OVERRIDE)
+    }.getOrNull().let { v -> Mode.values().firstOrNull { it.key == v } ?: Mode.AUTO }
+
     fun setMode(ctx: Context, m: Mode) {
         init(ctx); mode = m
-        app?.getSharedPreferences(PREFS, Context.MODE_PRIVATE)?.edit()?.putString("mode", m.key)?.apply()
+        val a = app ?: return
+        io.launch {
+            val ok = runCatching { Settings.Global.putString(a.contentResolver, KEY_OVERRIDE, m.key) }.getOrDefault(false)
+            if (!ok) RootShell.execFast("settings put global $KEY_OVERRIDE ${m.key}")
+        }
         applyNow("mode=$m")
     }
     fun setSaverInAudioOnly(ctx: Context, on: Boolean) {
@@ -182,8 +204,12 @@ object MikuPowerGovernor {
         }
         return when (mode) {
             Mode.AUTO -> auto
-            Mode.PERF -> when (auto) { Profile.AUDIO_ONLY -> Profile.BALANCED; Profile.IDLE -> Profile.BALANCED; else -> auto }
-            Mode.SAVE -> when (auto) { Profile.PERF -> Profile.BALANCED; else -> auto }
+            // Contract (ROM-wide): "perf" pins PERF; "save" pins AUDIO_ONLY while playing, IDLE
+            // otherwise. Sustained-perf is inert while the window isn't visible, so a pinned PERF
+            // with the screen off costs little; a pinned SAVE with the screen on keeps the
+            // visualizer alive but fps-capped (visFpsCap) with background work starved + saver on.
+            Mode.PERF -> Profile.PERF
+            Mode.SAVE -> if (playing) Profile.AUDIO_ONLY else Profile.IDLE
         }
     }
 
@@ -273,25 +299,62 @@ object MikuPowerGovernor {
         Log.i(TAG, "battery saver (low_power) → $v (ok=$ok)")
     }
 
+    // Thermal sensing. The SoC junction sensors (cpu-1-*, cpuss-*, gpu) sit at ~48 °C on this
+    // Snapdragon 665 even idling on the charger, so a flat 42 °C gate on them would pin the
+    // governor in BALANCED forever. "≥ 42 °C" is applied to the board/skin proxy (xo-therm), with
+    // the framework's own throttling signals (thermal status ≥ MODERATE, headroom ≥ 0.95) and a
+    // 60 °C junction backstop on top. CPU temperature shown in Settings = hottest cpu-*/cpuss-* zone.
+    private const val SKIN_HOT_C = THERMAL_HOT_C
+    private const val JUNCTION_HOT_C = 60f
+    @Volatile private var zonesScanned = false
+    private var skinZone: File? = null
+    private val cpuZones = ArrayList<File>()
+    private fun scanZones() {
+        if (zonesScanned) return
+        zonesScanned = true
+        runCatching {
+            File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }?.forEach { z ->
+                val type = runCatching { File(z, "type").readText().trim().lowercase() }.getOrDefault("")
+                val temp = File(z, "temp")
+                when {
+                    type == "xo-therm" || type.contains("skin") || type == "quiet-therm" -> if (skinZone == null) skinZone = temp
+                    type.startsWith("cpu") -> cpuZones.add(temp)
+                }
+            }
+        }
+    }
+    private fun readC(f: File?): Float? {
+        val raw = runCatching { f?.takeIf { it.exists() }?.readText()?.trim()?.toFloatOrNull() }.getOrNull() ?: return null
+        return if (raw > 1000f) raw / 1000f else raw
+    }
+
     private fun pollThermal() {
         val a = app ?: return
         io.launch {
+            scanZones()
             var hot = false
-            var temp = 0f
-            runCatching {
-                // Qualcomm CPU zone (same node the Battery Observatory reads).
-                val f = File("/sys/class/thermal/thermal_zone21/temp")
-                if (f.exists()) f.readText().trim().toFloatOrNull()?.let { raw -> temp = if (raw > 1000f) raw / 1000f else raw }
-            }
-            if (temp >= THERMAL_HOT_C) hot = true
-            if (Build.VERSION.SDK_INT >= 30) runCatching {
+            val cpuMax = cpuZones.mapNotNull { readC(it) }.maxOrNull() ?: 0f
+            val skin = readC(skinZone)
+            if (skin != null && skin >= SKIN_HOT_C) hot = true
+            if (cpuMax >= JUNCTION_HOT_C) hot = true
+            var status = 0; var headroom = Float.NaN
+            if (Build.VERSION.SDK_INT >= 29) runCatching {
                 val pm = a.getSystemService(Context.POWER_SERVICE) as PowerManager
-                val headroom = pm.getThermalHeadroom(10)
-                if (!headroom.isNaN() && headroom >= 0.85f) hot = true
+                status = pm.currentThermalStatus
+                if (status >= PowerManager.THERMAL_STATUS_MODERATE) hot = true
+                // Headroom only counts once the framework itself reports SOME thermal status — this
+                // HAL exposes no skin temperature, and headroom on its own read ≥ 0.95 while the
+                // thermal status was NONE (verified live), which pinned the governor in BALANCED.
+                if (Build.VERSION.SDK_INT >= 30 && status > PowerManager.THERMAL_STATUS_NONE) {
+                    headroom = pm.getThermalHeadroom(10)
+                    if (!headroom.isNaN() && headroom >= 0.95f) hot = true
+                }
             }
+            Log.d(TAG, "thermal cpuMax=${cpuMax}°C skin=${skin ?: -1f}°C status=$status headroom=$headroom → hot=$hot")
+            val temp = cpuMax
             if (hot != thermalHot || temp != cpuTempC) main.post {
                 cpuTempC = temp
-                if (hot != thermalHot) { thermalHot = hot; scheduleEval("thermal hot=$hot ${temp}°C") }
+                if (hot != thermalHot) { thermalHot = hot; scheduleEval("thermal hot=$hot cpu=${temp}°C skin=${skin ?: -1f}°C") }
             }
         }
     }

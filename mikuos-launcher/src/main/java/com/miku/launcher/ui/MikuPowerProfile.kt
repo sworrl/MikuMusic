@@ -6,9 +6,16 @@ import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import androidx.compose.animation.animateColor
+import androidx.compose.animation.core.InfiniteRepeatableSpec
+import androidx.compose.animation.core.InfiniteTransition
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -70,7 +77,40 @@ object MikuPowerProfile {
 
     /** Badge/status refresh cadence: normal [normalMs], ≥ 5 s in the low states. */
     fun refreshMs(normalMs: Long): Long = if (isLowPower) maxOf(normalMs, 5000L) else normalMs
+
+    // ---- Launcher visibility gate: pollers park while the launcher is not on screen ----
+    private val _visible = MutableStateFlow(true)
+    val visible: StateFlow<Boolean> = _visible.asStateFlow()
+    fun setLauncherVisible(v: Boolean) { _visible.value = v }
+    /** Suspends until the launcher activity is STARTED (no polling / no work while another app is in front). */
+    suspend fun awaitVisible() { if (!_visible.value) _visible.first { it } }
 }
+
+/**
+ * Infinite-transition values that FREEZE in the low-power profiles: identical call shape to
+ * [InfiniteTransition.animateFloat] / [animateColor] plus the gate flag, so a site becomes
+ * `t.gatedFloat(lowPowerGate, ...)`. Frozen = a plain remembered state at [initialValue]
+ * (no frame-clock subscription at all, so no work per frame).
+ */
+@Composable
+fun InfiniteTransition.gatedFloat(
+    low: Boolean,
+    initialValue: Float,
+    targetValue: Float,
+    animationSpec: InfiniteRepeatableSpec<Float>,
+    label: String = "gatedFloat"
+): State<Float> = if (low) remember(initialValue) { mutableStateOf(initialValue) }
+    else animateFloat(initialValue = initialValue, targetValue = targetValue, animationSpec = animationSpec, label = label)
+
+@Composable
+fun InfiniteTransition.gatedColor(
+    low: Boolean,
+    initialValue: androidx.compose.ui.graphics.Color,
+    targetValue: androidx.compose.ui.graphics.Color,
+    animationSpec: InfiniteRepeatableSpec<androidx.compose.ui.graphics.Color>,
+    label: String = "gatedColor"
+): State<androidx.compose.ui.graphics.Color> = if (low) remember(initialValue) { mutableStateOf(initialValue) }
+    else animateColor(initialValue = initialValue, targetValue = targetValue, animationSpec = animationSpec, label = label)
 
 @Composable
 fun rememberLowPower(): State<Boolean> {

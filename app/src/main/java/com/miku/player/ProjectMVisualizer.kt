@@ -242,8 +242,8 @@ fun ProjectMVisualizerView(
 ) {
     // Power governor input: a live visualizer = PERF (full clocks, render hints) while playing.
     androidx.compose.runtime.DisposableEffect(Unit) {
-        MikuPowerGovernor.setVisualizerVisible(true)
-        onDispose { MikuPowerGovernor.setVisualizerVisible(false) }
+        MikuPowerGovernor.noteVisualizerVisible(true)
+        onDispose { MikuPowerGovernor.noteVisualizerVisible(false) }
     }
     // Idle dim/ambient means either nobody's looking or they're looking at the deliberately
     // minimal ambient screen — either way, this is the single most expensive continuous piece of

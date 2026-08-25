@@ -12,6 +12,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -38,6 +39,9 @@ fun MikuHomescreenLongpressMenu(
     onHomeSettings: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    // Pixel popup feel: the card scales 0.85 → 1 with a slight overshoot (~150 ms) and fades in.
+    val appear = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, androidx.compose.animation.core.spring(dampingRatio = 0.62f, stiffness = 1100f)) }
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
@@ -57,6 +61,11 @@ fun MikuHomescreenLongpressMenu(
         ) {
             Box(
                 modifier = Modifier
+                    .graphicsLayer {
+                        val sc = 0.85f + 0.15f * appear.value
+                        scaleX = sc; scaleY = sc
+                        alpha = appear.value.coerceIn(0f, 1f)
+                    }
                     .width(260.dp)
                     .clip(RoundedCornerShape(22.dp))
                     .background(

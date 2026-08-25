@@ -885,7 +885,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     }
     LaunchedEffect(showFullNowPlaying, showTape) {
         com.miku.player.screentime.MikuSmartScreenTimeEngine.isNowPlayingOrTapeActive = showFullNowPlaying || showTape
-        MikuPowerGovernor.setNowPlayingVisible(showFullNowPlaying || showTape)
+        MikuPowerGovernor.noteNowPlayingVisible(showFullNowPlaying || showTape)
     }
     val appScope = rememberCoroutineScope()
 

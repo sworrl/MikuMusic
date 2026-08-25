@@ -89,6 +89,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
+import com.miku.launcher.ui.gatedFloat
+import com.miku.launcher.ui.gatedColor
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -308,6 +311,17 @@ class MikuLauncherActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        com.miku.launcher.ui.MikuLaunchSource.onHomeReturn()
+    }
+    // Power: pollers/timers park while another app is in front (Compose's frame clock already
+    // pauses animations at ON_STOP); see MikuPowerProfile.awaitVisible().
+    override fun onStart() {
+        super.onStart()
+        com.miku.launcher.ui.MikuPowerProfile.setLauncherVisible(true)
+    }
+    override fun onStop() {
+        com.miku.launcher.ui.MikuPowerProfile.setLauncherVisible(false)
+        super.onStop()
     }
 
     // Delegating to the dispatcher IS the recommended replacement for super.onBackPressed();
@@ -503,6 +517,7 @@ fun MikuLauncherScreen() {
 
     LaunchedEffect(Unit) {
         while (true) {
+            com.miku.launcher.ui.MikuPowerProfile.awaitVisible()
             try {
                 val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
                 val bIntent = ctx.registerReceiver(null, ifilter)
@@ -517,7 +532,7 @@ fun MikuLauncherScreen() {
                 val caps = cm?.getNetworkCapabilities(net)
                 isWifiConnected = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
             } catch (_: Throwable) {}
-            delay(2500L)
+            delay(com.miku.launcher.ui.MikuPowerProfile.refreshMs(2500L))
         }
     }
 
@@ -568,6 +583,7 @@ fun MikuLauncherScreen() {
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         val dateFormat = SimpleDateFormat("MM/dd/yyyy", Locale.US)
         while (true) {
+            com.miku.launcher.ui.MikuPowerProfile.awaitVisible()
             val now = Date()
             currentTime = timeFormat.format(now)
             currentDate = dateFormat.format(now)
@@ -760,6 +776,7 @@ fun MikuLauncherScreen() {
 
     LaunchedEffect(Unit) {
         while (true) {
+            com.miku.launcher.ui.MikuPowerProfile.awaitVisible()
             withContext(Dispatchers.IO) {
                 var cTemp = 0f
                 val thermalPaths = listOf(
@@ -796,7 +813,7 @@ fun MikuLauncherScreen() {
                 cpuTempC = cTemp
                 batteryTempC = bTemp
             }
-            delay(4000L)
+            delay(com.miku.launcher.ui.MikuPowerProfile.refreshMs(4000L))
         }
     }
 
@@ -807,6 +824,7 @@ fun MikuLauncherScreen() {
     var isHardwareAudioActive by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         while (true) {
+            com.miku.launcher.ui.MikuPowerProfile.awaitVisible()
             snapshot.value = PlayerHolder.snapshot()
             val npBpmPlaying = com.miku.launcher.bpm.MikuBpmEngine.state.value.isPlaying
             val globalPlaying = try { android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_is_playing", 0) == 1 } catch (_: Throwable) { false }
@@ -814,11 +832,18 @@ fun MikuLauncherScreen() {
             val amActive = audioManager?.isMusicActive == true
             isSystemMusicActive = playerHolderPlaying || npBpmPlaying || globalPlaying || amActive
             isHardwareAudioActive = amActive || playerHolderPlaying || (npBpmPlaying && globalPlaying)
-            delay(500L)
+            delay(com.miku.launcher.ui.MikuPowerProfile.refreshMs(500L))
         }
     }
     val hasActiveAudioOutput = isSystemMusicActive && isHardwareAudioActive
     val isAudioPlaying = hasActiveAudioOutput
+    // Album-art accent (Miku Music → Settings.Global miku_np_accent*) blended subtly into the OS chrome.
+    val npAccent = com.miku.launcher.ui.rememberNpAccent()
+    // Pixel-style drawer sheet physics (finger-follow + spring settle); see ui/MikuDrawerSheet.kt.
+    val drawerSheet = com.miku.launcher.ui.rememberDrawerSheetState()
+    val drawerHeightPx = with(LocalDensity.current) { LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    drawerSheet.heightPx = drawerHeightPx
+    LaunchedEffect(isAllAppsOpen) { if (isAllAppsOpen) drawerSheet.open() else if (!drawerSheet.dragging) drawerSheet.close() }
 
     Box(
         Modifier
@@ -856,6 +881,9 @@ fun MikuLauncherScreen() {
                     )
                 )
         )
+
+        // Now-playing accent tint over the wallpaper (~8 %, animated, transparent when idle).
+        Box(Modifier.fillMaxSize().background(npAccent.scrim))
 
         var rootDragY by remember { mutableFloatStateOf(0f) }
         Column(
@@ -912,12 +940,19 @@ fun MikuLauncherScreen() {
                     )
                 },
                 QuiltBadge("nowplaying", "Now playing / BPM") {
-                    MikuNowPlayingBadge(
-                        bpm = npBpm.bpm,
-                        isPlaying = isAudioPlaying || npBpm.isPlaying,
-                        beatIntervalMs = npBpm.beatIntervalMs,
-                        onClick = { isBpmObservatoryOpen = true }
-                    )
+                    Box(
+                        Modifier.then(
+                            if (npAccent.active) Modifier.border(1.2.dp, npAccent.full.copy(alpha = 0.85f), RoundedCornerShape(12.dp))
+                            else Modifier
+                        )
+                    ) {
+                        MikuNowPlayingBadge(
+                            bpm = npBpm.bpm,
+                            isPlaying = isAudioPlaying || npBpm.isPlaying,
+                            beatIntervalMs = npBpm.beatIntervalMs,
+                            onClick = { isBpmObservatoryOpen = true }
+                        )
+                    }
                 },
                 QuiltBadge("dac", "CS43198 DAC") {
                     CyberBespokeBadge(
@@ -1021,7 +1056,12 @@ fun MikuLauncherScreen() {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .homeVerticalSwipe(onSwipeUp = { isAllAppsOpen = true }, onSwipeDown = { expandNotificationShade(ctx) })
+                    .homeVerticalSwipe(
+                        onSwipeUp = { isAllAppsOpen = true },
+                        onSwipeDown = { expandNotificationShade(ctx) },
+                        onDragUp = { dy -> drawerSheet.dragBy(dy) },
+                        onDragUpEnd = { vy -> if (drawerSheet.release(vy)) isAllAppsOpen = true }
+                    )
             ) { page ->
                 when (page) {
                     0 -> MainDesktopPage(
@@ -1075,8 +1115,10 @@ fun MikuLauncherScreen() {
             val liveBpm = if (bpmState.bpm in 40f..260f) bpmState.bpm else 128f
             val beatIntervalMs = (60_000f / liveBpm).toInt().coerceIn(240, 1500)
 
+            val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+
             val dockInfiniteTransition = rememberInfiniteTransition(label = "DivaDockAura")
-            val rainbowRotation by dockInfiniteTransition.animateFloat(
+            val rainbowRotation by dockInfiniteTransition.gatedFloat(lowPowerGate, 
                 initialValue = 0f,
                 targetValue = 360f,
                 animationSpec = infiniteRepeatable(
@@ -1087,7 +1129,7 @@ fun MikuLauncherScreen() {
             )
 
             // Subtle BPM background aura glow (ONLY animated when active audio output = true)
-            val bpmAuraAlpha by dockInfiniteTransition.animateFloat(
+            val bpmAuraAlpha by dockInfiniteTransition.gatedFloat(lowPowerGate, 
                 initialValue = if (isBpmAudioPlaying) 0.35f else 0.18f,
                 targetValue = if (isBpmAudioPlaying) 0.72f else 0.18f,
                 animationSpec = infiniteRepeatable(
@@ -1249,7 +1291,7 @@ fun MikuLauncherScreen() {
                                 .background(
                                     Brush.radialGradient(
                                         listOf(
-                                            if (isBpmAudioPlaying) Color(bpmState.dominantColor).copy(alpha = bpmAuraAlpha) else MikuCyan.copy(alpha = 0.20f),
+                                            if (isBpmAudioPlaying) Color(bpmState.dominantColor).copy(alpha = bpmAuraAlpha) else npAccent.full.copy(alpha = 0.20f),
                                             Color(0xFFB388FF).copy(alpha = if (isBpmAudioPlaying) 0.25f else 0.08f),
                                             Color.Transparent
                                         )
@@ -1441,28 +1483,32 @@ fun MikuLauncherScreen() {
         // ============================================================
         // ALL-APPS CYBER DRAWER SHEET (SWIPE-UP GESTURE)
         // ============================================================
-        AnimatedVisibility(
-            visible = isAllAppsOpen,
-            enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
-        ) {
-            CyberAllAppsDrawer(
-                apps = allApps,
-                searchQuery = searchQuery,
-                onSearchChange = { searchQuery = it },
-                selectedCategory = selectedCategory,
-                onCategoryChange = { selectedCategory = it },
-                onLaunchApp = {
-                    isAllAppsOpen = false
-                    launchApp(ctx, it)
-                },
-                onAppLongClick = { contextMenuApp = it },
-                onOpenQuickSettings = {
-                    isAllAppsOpen = false
-                    isCyberQuickSettingsOpen = true
-                },
-                onClose = { isAllAppsOpen = false }
-            )
+        // Pixel-style drawer SHEET: translated by (1 - progress) * height so it follows the finger
+        // from the home swipe, settles with a spring, scrim fades with progress, grid parallax.
+        if (drawerSheet.visible || isAllAppsOpen) {
+            val drawerProgress = drawerSheet.progress.value
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.6f * drawerProgress.coerceIn(0f, 1f))))
+            Box(Modifier.fillMaxSize().graphicsLayer { translationY = (1f - drawerProgress) * drawerHeightPx }) {
+                CyberAllAppsDrawer(
+                    apps = allApps,
+                    searchQuery = searchQuery,
+                    onSearchChange = { searchQuery = it },
+                    selectedCategory = selectedCategory,
+                    onCategoryChange = { selectedCategory = it },
+                    onLaunchApp = {
+                        isAllAppsOpen = false
+                        launchApp(ctx, it)
+                    },
+                    onAppLongClick = { contextMenuApp = it },
+                    onOpenQuickSettings = {
+                        isAllAppsOpen = false
+                        isCyberQuickSettingsOpen = true
+                    },
+                    onClose = { isAllAppsOpen = false },
+                    sheet = drawerSheet,
+                    revealProgress = drawerProgress
+                )
+            }
         }
 
         // ============================================================
@@ -1569,7 +1615,7 @@ fun MikuLauncherScreen() {
             )
         }
 
-        if (isRecentsOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isRecentsOpen, onDismiss = { isRecentsOpen = false }) {
             com.miku.launcher.recents.MikuRecentsOverviewCarousel(
                 tasks = recentTasks,
                 onLaunchTask = { task -> bringTaskToFront(ctx, task) },
@@ -1583,51 +1629,51 @@ fun MikuLauncherScreen() {
             )
         }
 
-        if (isWeatherObservatoryOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isWeatherObservatoryOpen, onDismiss = { isWeatherObservatoryOpen = false }) {
             com.miku.launcher.weather.MikuWeatherObservatoryModal(
                 onDismissRequest = { isWeatherObservatoryOpen = false }
             )
         }
-        if (isGpsModalOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isGpsModalOpen, onDismiss = { isGpsModalOpen = false }) {
             com.miku.launcher.gps.MikuGpsTacticalMapModal(
                 onDismissRequest = { isGpsModalOpen = false }
             )
         }
-        if (isBatteryObservatoryOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isBatteryObservatoryOpen, onDismiss = { isBatteryObservatoryOpen = false }) {
             com.miku.launcher.battery.MikuBatteryObservatoryModal(
                 onDismissRequest = { isBatteryObservatoryOpen = false }
             )
         }
-        if (isNetworkObservatoryOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isNetworkObservatoryOpen, onDismiss = { isNetworkObservatoryOpen = false }) {
             com.miku.launcher.network.MikuNetworkObservatoryModal(
                 onDismissRequest = { isNetworkObservatoryOpen = false }
             )
         }
-        if (isBrainModalOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isBrainModalOpen, onDismiss = { isBrainModalOpen = false }) {
             com.miku.launcher.observatory.MikuAnatomicalObservatoryModal(
                 onDismissRequest = { isBrainModalOpen = false }
             )
         }
-        if (isBpmObservatoryOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isBpmObservatoryOpen, onDismiss = { isBpmObservatoryOpen = false }) {
             val bpmState by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
             com.miku.launcher.bpm.MikuBpmObservatoryModal(
                 onClose = { isBpmObservatoryOpen = false },
                 bpmState = bpmState
             )
         }
-        if (isFsIngestModalOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isFsIngestModalOpen, onDismiss = { isFsIngestModalOpen = false }) {
             com.miku.launcher.ingest.MikuFsIngestObservatoryModal(
                 onClose = { isFsIngestModalOpen = false }
             )
         }
-        if (isThermalObservatoryOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isThermalObservatoryOpen, onDismiss = { isThermalObservatoryOpen = false }) {
             com.miku.launcher.thermal.MikuThermalObservatoryModal(
                 onClose = { isThermalObservatoryOpen = false },
                 cpuTempC = cpuTempC,
                 batteryTempC = batteryTempC
             )
         }
-        if (isBatteryObservatoryOpen) {
+        com.miku.launcher.ui.MikuModalHost(visible = isBatteryObservatoryOpen, onDismiss = { isBatteryObservatoryOpen = false }) {
             com.miku.launcher.battery.MikuFullscreenChargingModal(
                 onDismiss = { isBatteryObservatoryOpen = false },
                 batteryPct = batteryPct,
@@ -1643,8 +1689,10 @@ fun MikuLauncherScreen() {
                 .padding(top = 92.dp, end = 4.dp)
         )
 
+        val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+
         val infinitePulse = rememberInfiniteTransition(label = "verPulse")
-        val verColor by infinitePulse.animateColor(
+        val verColor by infinitePulse.gatedColor(lowPowerGate, 
             initialValue = Color(0x9989ACA7),
             targetValue = MikuCyan.copy(alpha = 0.85f),
             animationSpec = infiniteRepeatable(
@@ -2144,7 +2192,15 @@ fun CyberAppContextDialog(
     onUninstall: () -> Unit,
     onTogglePinDesktop: () -> Unit
 ) {
+    // Appear: scale 0.85 → 1 with a slight overshoot (~150 ms) + fade, like a Pixel popup.
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 1100f)) }
     AlertDialog(
+        modifier = Modifier.graphicsLayer {
+            val sc = 0.85f + 0.15f * appear.value
+            scaleX = sc; scaleY = sc
+            alpha = appear.value.coerceIn(0f, 1f)
+        },
         onDismissRequest = onDismiss,
         containerColor = Color(0xF504141E),
         tonalElevation = 12.dp,
@@ -2378,7 +2434,9 @@ fun CyberAllAppsDrawer(
     onLaunchApp: (InstalledApp) -> Unit,
     onAppLongClick: (InstalledApp) -> Unit = {},
     onOpenQuickSettings: () -> Unit = {},
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    sheet: com.miku.launcher.ui.DrawerSheetState? = null,
+    revealProgress: Float = 1f
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val categories = remember { listOf("All", "Audio", "Tools", "Media", "System") }
@@ -2425,16 +2483,29 @@ fun CyberAllAppsDrawer(
         // here and dismisses the drawer past a threshold. Works alongside the back arrow.
         var pullDownAccum by remember { mutableFloatStateOf(0f) }
         val dismissThresholdPx = with(LocalDensity.current) { 90.dp.toPx() }
-        val swipeDownDismiss = remember(dismissThresholdPx) {
+        val latestClose = rememberUpdatedState(onClose)
+        val swipeDownDismiss = remember(dismissThresholdPx, sheet) {
             object : NestedScrollConnection {
                 override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                    if (sheet != null) {
+                        // While the sheet sits pulled-down, an upward drag restores it before the grid scrolls.
+                        if (source == NestedScrollSource.Drag && available.y < 0f && sheet.progress.value < 0.999f) {
+                            sheet.pullDownBy(available.y)
+                            return Offset(0f, available.y)
+                        }
+                        return Offset.Zero
+                    }
                     // Any upward scroll (list moving up) resets the pull accumulator.
                     if (available.y < 0f) pullDownAccum = 0f
                     return Offset.Zero
                 }
-
                 override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
                     if (source == NestedScrollSource.Drag && available.y > 0f) {
+                        if (sheet != null) {
+                            // Grid already at its top: the leftover pull moves the whole sheet with the finger.
+                            sheet.pullDownBy(available.y)
+                            return Offset(0f, available.y)
+                        }
                         pullDownAccum += available.y
                         if (pullDownAccum > dismissThresholdPx) {
                             pullDownAccum = 0f
@@ -2443,14 +2514,25 @@ fun CyberAllAppsDrawer(
                     }
                     return Offset.Zero
                 }
+                override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                    if (sheet != null && (sheet.dragging || sheet.progress.value < 0.999f)) {
+                        if (sheet.releasePull(available.y)) latestClose.value()
+                        return available
+                    }
+                    return androidx.compose.ui.unit.Velocity.Zero
+                }
             }
         }
+        val lowPowerDrawer by com.miku.launcher.ui.rememberLowPower()
+        val parallaxPx = if (lowPowerDrawer) 0f else with(LocalDensity.current) { 12.dp.toPx() }
 
         Column(
             Modifier
                 .fillMaxSize()
                 .systemBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 6.dp)
+                // Content lags the sheet by up to 12dp while revealing (Pixel drawer parallax).
+                .graphicsLayer { translationY = (1f - revealProgress.coerceIn(0f, 1f)) * parallaxPx }
                 .nestedScroll(swipeDownDismiss)
         ) {
             // Drag Down Dismiss Pull-Bar (Tapping or pulling down triggers close or QS)
@@ -2602,7 +2684,8 @@ fun DesktopAppIconItem(
             .fillMaxWidth()
             .mikuAppIconClickable(
                 onClick = onClick,
-                onLongClick = onLongClick
+                onLongClick = onLongClick,
+                launchPackage = app.packageName
             )
             .padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
@@ -2778,7 +2861,7 @@ fun launchApp(ctx: Context, app: InstalledApp) {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
             }
             if (intent != null) {
-                ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN))
+                ctx.startActivity(intent, MikuCompositing.optionsForLaunch(ctx, MikuTransitionEvent.APP_OPEN, com.miku.launcher.ui.MikuLaunchSource.take()))
                 return
             }
         }
@@ -2794,7 +2877,7 @@ fun launchApp(ctx: Context, app: InstalledApp) {
             }
         }
         if (intent != null) {
-            val opts = MikuCompositing.optionsFor(ctx, MikuTransitionEvent.APP_OPEN)
+            val opts = MikuCompositing.optionsForLaunch(ctx, MikuTransitionEvent.APP_OPEN, com.miku.launcher.ui.MikuLaunchSource.take())
             ctx.startActivity(intent, opts)
         }
     } catch (_: Throwable) {}
@@ -3168,8 +3251,9 @@ fun MikuCyberWeatherGpsBadge(
     onGpsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
     val infiniteTransition = rememberInfiniteTransition(label = "TelemetryGlow")
-    val pulseGlow by infiniteTransition.animateFloat(
+    val pulseGlow by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.7f,
         targetValue = 1.0f,
         animationSpec = infiniteRepeatable(
@@ -3178,7 +3262,7 @@ fun MikuCyberWeatherGpsBadge(
         ),
         label = "TelemetryGlow"
     )
-    val weatherAnimPhase by infiniteTransition.animateFloat(
+    val weatherAnimPhase by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -3634,8 +3718,9 @@ fun UnifiedWeatherGpsCapsule(
     onGpsClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
     val infiniteTransition = rememberInfiniteTransition(label = "UnifiedCapsuleShimmer")
-    val pulseGlow by infiniteTransition.animateFloat(
+    val pulseGlow by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.65f,
         targetValue = 1.0f,
         animationSpec = infiniteRepeatable(
@@ -3936,8 +4021,10 @@ fun MikuQuantumBatteryBadge(
         else -> Color(0xFFFF1744)
     }
 
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+
     val infiniteTransition = rememberInfiniteTransition(label = "ChargeSparkle")
-    val sparkAlpha by infiniteTransition.animateFloat(
+    val sparkAlpha by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.6f,
         targetValue = 1.0f,
         animationSpec = infiniteRepeatable(
@@ -4120,13 +4207,15 @@ fun MikuNowPlayingBadge(
     val nBars = bandColors.size
     val interval = beatIntervalMs.coerceIn(250L, 1500L).toInt()
 
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
+
     val eq = rememberInfiniteTransition(label = "eqBadge")
-    val beatPhase by eq.animateFloat(
+    val beatPhase by eq.gatedFloat(lowPowerGate, 
         0f, 1f, infiniteRepeatable(tween(interval, easing = LinearEasing), RepeatMode.Restart), label = "beat"
     )
     val beatEnv = if (isPlaying) (1f - beatPhase) * (1f - beatPhase) else 0f
     val osc = (0 until nBars).map { i ->
-        eq.animateFloat(
+        eq.gatedFloat(lowPowerGate, 
             0f, 1f,
             infiniteRepeatable(tween(200 + i * 85, easing = FastOutSlowInEasing), RepeatMode.Reverse),
             label = "osc$i"
@@ -4178,8 +4267,9 @@ fun Cyber3dEmbossedPill(
     glowGradient: List<Color> = listOf(Color(0xEE0E242C), Color(0xFF041015)),
     content: @Composable RowScope.() -> Unit
 ) {
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
     val infiniteTransition = rememberInfiniteTransition(label = "PillShimmer")
-    val shimmerAlpha by infiniteTransition.animateFloat(
+    val shimmerAlpha by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.7f,
         targetValue = 1.0f,
         animationSpec = infiniteRepeatable(
@@ -4344,10 +4434,11 @@ fun CyberPlasmaGlowClock(
     time: String,
     date: String
 ) {
+    val lowPowerGate by com.miku.launcher.ui.rememberLowPower()
     val infiniteTransition = rememberInfiniteTransition(label = "ClockPlasmaPulse")
 
     // Continuous 24-Bit Truecolor Spectrum Shift Engine (Rotates 360 degrees smoothly)
-    val colorShiftPhase by infiniteTransition.animateFloat(
+    val colorShiftPhase by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
@@ -4360,6 +4451,7 @@ fun CyberPlasmaGlowClock(
     // Real system wall-clock second tick (0 or 1)
     val secondTick by produceState(initialValue = (System.currentTimeMillis() / 1000) % 2) {
         while (true) {
+            com.miku.launcher.ui.MikuPowerProfile.awaitVisible()
             val sec = (System.currentTimeMillis() / 1000)
             value = sec % 2
             val msToNextSec = 1000L - (System.currentTimeMillis() % 1000L)
@@ -4369,12 +4461,29 @@ fun CyberPlasmaGlowClock(
 
     // Snappy tactile heartbeat scale bounce on every single second tick
     val heartbeatScale = remember { Animatable(1.0f) }
-    LaunchedEffect(secondTick) {
+    val npAccentClock = com.miku.launcher.ui.rememberNpAccent()
+    val lowPowerClock by com.miku.launcher.ui.rememberLowPower()
+    val bpmClock by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
+    val beatSynced = bpmClock.isPlaying && bpmClock.beatIntervalMs in 250L..1500L && !lowPowerClock
+    // Idle: heartbeat on the second tick. Music playing: the hearts pulse ON THE BEAT.
+    // Low-power profile (audio_only / idle): no pulse at all.
+    LaunchedEffect(secondTick, beatSynced, lowPowerClock) {
+        if (beatSynced || lowPowerClock) return@LaunchedEffect
         heartbeatScale.snapTo(1.32f)
-        heartbeatScale.animateTo(
-            targetValue = 1.0f,
-            animationSpec = tween(durationMillis = 380, easing = FastOutSlowInEasing)
-        )
+        heartbeatScale.animateTo(1.0f, tween(durationMillis = 380, easing = FastOutSlowInEasing))
+    }
+    LaunchedEffect(beatSynced, bpmClock.beatIntervalMs, bpmClock.lastPulseEpochMs) {
+        if (!beatSynced) return@LaunchedEffect
+        val interval = bpmClock.beatIntervalMs
+        val anchor = if (bpmClock.lastPulseEpochMs > 0L) bpmClock.lastPulseEpochMs else System.currentTimeMillis()
+        while (true) {
+            com.miku.launcher.ui.MikuPowerProfile.awaitVisible()
+            val now = System.currentTimeMillis()
+            val toNext = interval - ((now - anchor) % interval)
+            delay(toNext.coerceIn(10L, interval))
+            heartbeatScale.snapTo(1.30f)
+            heartbeatScale.animateTo(1.0f, tween((interval * 0.6f).toInt().coerceIn(120, 380), easing = FastOutSlowInEasing))
+        }
     }
 
     // 24-Bit Smooth Gradient Colors for Numbers and Integrated Colon Shift:
@@ -4384,7 +4493,10 @@ fun CyberPlasmaGlowClock(
     // Integrated Colon: Seamlessly flowing with dynamic harmonic offset on second tick
     val colonHarmonicOffset = if (secondTick == 0L) 25f else 165f
     val colonHue = colorShiftPhase + colonHarmonicOffset
-    val colonColor = cyber24BitColorShift(colonHue, saturation = 0.95f, brightness = 1.0f)
+    val colonColor = com.miku.launcher.ui.MikuNowPlayingAccent.blend(
+        cyber24BitColorShift(colonHue, saturation = 0.95f, brightness = 1.0f),
+        npAccentClock.full, if (npAccentClock.active) 0.45f else 0f
+    )
     val colonHaloColor = cyber24BitColorShift(colonHue + 20f, saturation = 0.85f, brightness = 0.95f)
 
     // Minutes digit: Phase offset for continuous flowing gradient across the face
@@ -4392,7 +4504,7 @@ fun CyberPlasmaGlowClock(
     val minutesCoreColor = cyber24BitColorShift(colorShiftPhase + 50f, saturation = 0.12f, brightness = 1.0f)
 
     // Breathing plasma halo alpha
-    val glowAlpha by infiniteTransition.animateFloat(
+    val glowAlpha by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0.40f,
         targetValue = 0.95f,
         animationSpec = infiniteRepeatable(
@@ -4403,7 +4515,7 @@ fun CyberPlasmaGlowClock(
     )
 
     // Chromatic aberration fringe phase
-    val shimmerPhase by infiniteTransition.animateFloat(
+    val shimmerPhase by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = -2.8f,
         targetValue = 2.8f,
         animationSpec = infiniteRepeatable(
@@ -4414,7 +4526,7 @@ fun CyberPlasmaGlowClock(
     )
 
     // Particle drift animation phase (0..1 continuous)
-    val particlePhase by infiniteTransition.animateFloat(
+    val particlePhase by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -4425,7 +4537,7 @@ fun CyberPlasmaGlowClock(
     )
 
     // Sweeping holographic scanline Y position
-    val scanlineY by infiniteTransition.animateFloat(
+    val scanlineY by infiniteTransition.gatedFloat(lowPowerGate, 
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(
@@ -4436,12 +4548,12 @@ fun CyberPlasmaGlowClock(
     )
 
     // 6-Band animated micro equalizer
-    val bar1 by infiniteTransition.animateFloat(initialValue = 0.25f, targetValue = 0.95f, animationSpec = infiniteRepeatable(tween(420), RepeatMode.Reverse), label = "b1")
-    val bar2 by infiniteTransition.animateFloat(initialValue = 0.85f, targetValue = 0.20f, animationSpec = infiniteRepeatable(tween(580), RepeatMode.Reverse), label = "b2")
-    val bar3 by infiniteTransition.animateFloat(initialValue = 0.35f, targetValue = 1.0f, animationSpec = infiniteRepeatable(tween(340), RepeatMode.Reverse), label = "b3")
-    val bar4 by infiniteTransition.animateFloat(initialValue = 0.90f, targetValue = 0.45f, animationSpec = infiniteRepeatable(tween(510), RepeatMode.Reverse), label = "b4")
-    val bar5 by infiniteTransition.animateFloat(initialValue = 0.20f, targetValue = 0.80f, animationSpec = infiniteRepeatable(tween(390), RepeatMode.Reverse), label = "b5")
-    val bar6 by infiniteTransition.animateFloat(initialValue = 0.70f, targetValue = 0.30f, animationSpec = infiniteRepeatable(tween(620), RepeatMode.Reverse), label = "b6")
+    val bar1 by infiniteTransition.gatedFloat(lowPowerGate, initialValue = 0.25f, targetValue = 0.95f, animationSpec = infiniteRepeatable(tween(420), RepeatMode.Reverse), label = "b1")
+    val bar2 by infiniteTransition.gatedFloat(lowPowerGate, initialValue = 0.85f, targetValue = 0.20f, animationSpec = infiniteRepeatable(tween(580), RepeatMode.Reverse), label = "b2")
+    val bar3 by infiniteTransition.gatedFloat(lowPowerGate, initialValue = 0.35f, targetValue = 1.0f, animationSpec = infiniteRepeatable(tween(340), RepeatMode.Reverse), label = "b3")
+    val bar4 by infiniteTransition.gatedFloat(lowPowerGate, initialValue = 0.90f, targetValue = 0.45f, animationSpec = infiniteRepeatable(tween(510), RepeatMode.Reverse), label = "b4")
+    val bar5 by infiniteTransition.gatedFloat(lowPowerGate, initialValue = 0.20f, targetValue = 0.80f, animationSpec = infiniteRepeatable(tween(390), RepeatMode.Reverse), label = "b5")
+    val bar6 by infiniteTransition.gatedFloat(lowPowerGate, initialValue = 0.70f, targetValue = 0.30f, animationSpec = infiniteRepeatable(tween(620), RepeatMode.Reverse), label = "b6")
 
     val timeParts = remember(time) {
         if (time.contains(":")) {
