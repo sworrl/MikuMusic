@@ -110,6 +110,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1153,36 +1154,9 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     Box(
         Modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                var startX = 0f
-                var startY = 0f
-                var isFromEdge = false
-                detectDragGestures(
-                    onDragStart = { offset ->
-                        startX = offset.x
-                        startY = offset.y
-                        val width = size.width.toFloat()
-                        // Left edge or right edge (< 32dp or > width - 32dp)
-                        isFromEdge = startX < 32.dp.toPx() || startX > (width - 32.dp.toPx())
-                    },
-                    onDragEnd = {},
-                    onDragCancel = {},
-                    onDrag = { change, _ ->
-                        if (isFromEdge) {
-                            val dx = change.position.x - startX
-                            val dy = Math.abs(change.position.y - startY)
-                            val isLeftInward = startX < 32.dp.toPx() && dx > 24.dp.toPx()
-                            val isRightInward = startX > (size.width.toFloat() - 32.dp.toPx()) && dx < -24.dp.toPx()
-                            if ((isLeftInward || isRightInward) && dy < Math.abs(dx) * 1.5f) {
-                                isFromEdge = false
-                                change.consume()
-                                Haptics.tick(ctx)
-                                performBack()
-                            }
-                        }
-                    }
-                )
-            }
+            // (Edge-swipe back used to be handled here too. Removed: the MikuOS SystemUI gesture service
+            // owns the screen edges system-wide; a second handler only fought it and ate the bottom/side
+            // gesture zones. System back still lands via BackHandler below.)
     ) {
         Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f).haze(hazeState).padding(top = with(density) { headerHeightPx.toDp() })) {
@@ -6705,8 +6679,12 @@ object TransportShapes {
     val pc3 by animateColorAsState(targetPalette.color3, tween(600), label = "barC3")
     val palette = ArtPalette(pc1, pc2, pc3)
 
-    // Flush-to-bottom cyber docked NowPlayingBar
-    Box(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp)) {
+    // Two-row docked bar. Row 1 is the FULL width for text (thumb at the far left, then one long
+    // "Title · Artist · Album · Year" marquee) — the old side-by-side layout left ~80dp for text
+    // once art + heart + four transport keys took their share, so titles read as "-Produc". Row 2
+    // holds the heart, quality badges and transport. 24dp of clear space stays under the bar so the
+    // system's gesture pill never sits on the play key.
+    Box(Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = 4.dp, bottom = 24.dp)) {
         Column(
             Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
                 // Raised panel drop shadow + top specular hairline
@@ -6787,110 +6765,66 @@ object TransportShapes {
                                 .background(Brush.horizontalGradient(listOf(palette.color1, MikuTealBright)))
                         )
                     }
+
+                    // ROW 1 — thumb + one long marquee line with the full width of the bar.
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                        Modifier.fillMaxWidth().padding(start = 8.dp, end = 10.dp, top = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // 2x Enlarged Hero Album Art Presentation
                         Box(
                             Modifier
-                                .size(76.dp)
-                                .drawBehind {
-                                    val rr = CornerRadius(12.dp.toPx(), 12.dp.toPx())
-                                    drawRoundRect(
-                                        Color(0x77000000),
-                                        topLeft = Offset(0f, 2.5.dp.toPx()),
-                                        size = size,
-                                        cornerRadius = rr
-                                    )
-                                }
-                                .clip(RoundedCornerShape(12.dp))
-                                .border(
-                                    1.2.dp,
-                                    Brush.linearGradient(
-                                        listOf(
-                                            palette.color1.copy(alpha = 0.85f),
-                                            Color(0x55FFFFFF),
-                                            palette.color3.copy(alpha = 0.65f)
-                                        )
-                                    ),
-                                    RoundedCornerShape(12.dp)
-                                )
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    Haptics.tick(ctx)
-                                    onBarClick()
-                                }
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .border(1.dp, palette.color1.copy(alpha = 0.75f), RoundedCornerShape(8.dp))
                         ) {
-                            AlbumArtImage(
-                                track.id,
-                                Modifier.fillMaxSize(),
-                                trackPath = track.path,
-                                contentScale = ContentScale.Crop
-                            )
-                            // Like heart — the mini bar lost it in the docked redesign. Lives on the
-                            // art's corner so it costs the title/artist column no width at all.
-                            Box(
-                                Modifier.align(Alignment.BottomEnd).padding(1.dp)
-                                    .background(Color(0x99000000), RoundedCornerShape(topStart = 9.dp, bottomEnd = 11.dp))
-                            ) {
-                                RainbowHeart(LikeStore.isLiked(track.id), size = 26.dp) { LikeStore.toggle(ctx, track) }
+                            AlbumArtImage(track.id, Modifier.fillMaxSize(), trackPath = track.path, contentScale = ContentScale.Crop)
+                        }
+                        Spacer(Modifier.width(9.dp))
+                        val line = remember(track.id, track.title, track.artist, track.album, displayYear, palette.color1) {
+                            androidx.compose.ui.text.buildAnnotatedString {
+                                withStyle(androidx.compose.ui.text.SpanStyle(color = Color(0xFFEAF6F4), fontWeight = FontWeight.Bold)) { append(track.title) }
+                                withStyle(androidx.compose.ui.text.SpanStyle(color = Color(0x88EAF6F4))) { append("   ·   ") }
+                                withStyle(androidx.compose.ui.text.SpanStyle(color = palette.color1, fontWeight = FontWeight.SemiBold)) { append(track.artist) }
+                                if (track.album.isNotBlank()) {
+                                    withStyle(androidx.compose.ui.text.SpanStyle(color = Color(0x88EAF6F4))) { append("   ·   ") }
+                                    withStyle(androidx.compose.ui.text.SpanStyle(color = Color(0xFFC9DEDB))) { append(track.album) }
+                                    if (displayYear != null) withStyle(androidx.compose.ui.text.SpanStyle(color = MikuGold)) { append("  $displayYear") }
+                                }
                             }
                         }
-
-                        // Middle Track Information Column (Expanded Touch Zone & Responsive Typography)
-                        Column(
-                            Modifier
+                        Text(
+                            line,
+                            fontSize = 13.5.sp,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Clip,
+                            modifier = Modifier
                                 .weight(1f)
-                                .padding(horizontal = 8.dp)
+                                .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 1200, initialDelayMillis = 900, velocity = 28.dp)
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null
                                 ) {
                                     Haptics.tick(ctx)
-                                    onBarClick()
+                                    onArtistClick(track.artist)
                                 }
+                        )
+                    }
+
+                    // ROW 2 — heart · quality badges · transport keys.
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 3.dp, bottom = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RainbowHeart(LikeStore.isLiked(track.id), size = 30.dp) { LikeStore.toggle(ctx, track) }
+                        Spacer(Modifier.width(4.dp))
+                        Row(
+                            Modifier.weight(1f).height(20.dp).clipToBounds(),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                track.title,
-                                color = Color(0xFFEAF6F4),
-                                fontSize = 13.5.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
-                            )
-                            Spacer(Modifier.height(1.5.dp))
-                            val artistAlbumText = remember(track.artist, track.album, displayYear) {
-                                val alb = if (track.album.isNotBlank()) {
-                                    if (displayYear != null) "${track.album} · $displayYear" else track.album
-                                } else ""
-                                if (alb.isNotBlank()) "${track.artist}  ·  $alb" else track.artist
-                            }
-                            Text(
-                                artistAlbumText,
-                                color = palette.color1,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier
-                                    .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) {
-                                        Haptics.tick(ctx)
-                                        onArtistClick(track.artist)
-                                    }
-                            )
-                            Spacer(Modifier.height(3.dp))
-                            Row(Modifier.height(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                                TechBadgeRow(ctx, track, fontSize = 8.5.sp, spacing = 3.dp)
-                            }
+                            TechBadgeRow(ctx, track, fontSize = 8.5.sp, spacing = 3.dp)
                         }
+                        Spacer(Modifier.width(4.dp))
 
                         // Transport Controls with Tightened, Isolated Touch Hitboxes
                         ControlAssembly {
@@ -6901,31 +6835,31 @@ object TransportShapes {
                                     PlayerPreferences.saveShuffle(ctx, shuffle)
                                 },
                                 flat = true,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(26.dp)
                             ) {
-                                Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) MikuPink else Muted, modifier = Modifier.size(15.dp))
+                                Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) MikuPink else Muted, modifier = Modifier.size(14.dp))
                             }
                             HapticIconButton(
                                 onClick = { player.seekToPreviousMediaItem() },
                                 keyShape = TransportShapes.prevWing,
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
-                                Icon(Icons.Default.SkipPrevious, "Prev", tint = Muted, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.SkipPrevious, "Prev", tint = Muted, modifier = Modifier.size(19.dp))
                             }
                             HapticIconButton(
                                 onClick = onToggle,
                                 face = palette.color1,
                                 keyShape = TransportShapes.hero,
-                                modifier = Modifier.size(width = 48.dp, height = 38.dp)
+                                modifier = Modifier.size(width = 46.dp, height = 34.dp)
                             ) {
-                                PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 22.dp)
+                                PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 20.dp)
                             }
                             HapticIconButton(
                                 onClick = { player.seekToNextMediaItem() },
                                 keyShape = TransportShapes.nextWing,
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(32.dp)
                             ) {
-                                Icon(Icons.Default.SkipNext, "Next", tint = Muted, modifier = Modifier.size(20.dp))
+                                Icon(Icons.Default.SkipNext, "Next", tint = Muted, modifier = Modifier.size(19.dp))
                             }
                         }
                     }

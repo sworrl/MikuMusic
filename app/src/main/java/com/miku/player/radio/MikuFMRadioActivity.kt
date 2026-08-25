@@ -158,14 +158,47 @@ class MikuFMRadioActivity : ComponentActivity() {
         } catch (_: Throwable) {}
     }
 
+    private var handedOff = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         CrashSentinel.install(this)
         super.onCreate(savedInstanceState)
         setupSystemBars()
-        FmRadioManager.initAndPowerOn(this)
-        setContent {
-            MikuFMRadioScreen(onBack = { finish() })
+        // SELinux only lets the package com.caf.fmradio (seinfo=platform → vendor_fm_app) open
+        // /dev/radio0. This package can never tune: its engine used to fall to a V4L2 "fallback"
+        // that made a sub-second noise and then kept a fake tuner on screen. So this entry now
+        // HANDS OFF to the real Miku FM app when it's installed, and otherwise says so honestly —
+        // it never starts the in-app engine and never touches the HiBy FM audio-path props.
+        val real = realFmComponent()
+        if (real != null) {
+            handedOff = true
+            runCatching {
+                startActivity(
+                    Intent().setComponent(real)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                )
+            }.onFailure { handedOff = false }
+            if (handedOff) { finish(); return }
         }
+        setContent {
+            FmTunerUnavailableScreen(onBack = { finish() })
+        }
+    }
+
+    /** The platform-signed Miku FM app (com.caf.fmradio, versionCode ≥ 1000) if it's installed. */
+    private fun realFmComponent(): android.content.ComponentName? {
+        val pm = packageManager
+        val info = runCatching { pm.getPackageInfo(REAL_FM_PACKAGE, 0) }.getOrNull() ?: return null
+        val vc = androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(info)
+        if (vc < REAL_FM_MIN_VERSION_CODE) return null
+        // Prefer its LAUNCHER activity; fall back to the known class name.
+        pm.getLaunchIntentForPackage(REAL_FM_PACKAGE)?.component?.let { return it }
+        return android.content.ComponentName(REAL_FM_PACKAGE, "$REAL_FM_PACKAGE.MikuFMRadioActivity")
+    }
+
+    companion object {
+        const val REAL_FM_PACKAGE = "com.caf.fmradio"
+        const val REAL_FM_MIN_VERSION_CODE = 1000L
     }
 
     override fun onResume() {
@@ -180,7 +213,48 @@ class MikuFMRadioActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        FmRadioManager.stop(this)
+        if (!handedOff) runCatching { FmRadioManager.stop(this) }
+    }
+}
+
+/** Honest no-tuner state: this package is not allowed to open the FM hardware and the real Miku FM
+ *  app isn't installed — no simulated tuner, no noise, no fake signal bars. */
+@Composable
+fun FmTunerUnavailableScreen(onBack: () -> Unit) {
+    val ctx = LocalContext.current
+    Box(Modifier.fillMaxSize().background(CyberDarkBg)) {
+        Image(
+            painter = painterResource(id = R.drawable.miku_bg_fm),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+            alpha = 0.35f
+        )
+        Column(
+            Modifier.fillMaxSize().padding(28.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("📻", fontSize = 54.sp)
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "FM TUNER UNAVAILABLE",
+                color = Color(0xFFFF8A80), fontSize = 18.sp, fontWeight = FontWeight.Black, letterSpacing = 1.5.sp,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Miku Music can't open the FM hardware itself (the tuner is reserved for the Miku FM app, com.caf.fmradio). Install the Miku FM app from the MikuOS system image to listen to radio — nothing here is simulated.",
+                color = Color(0xFFD4ECE9), fontSize = 13.sp, lineHeight = 18.sp, textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(24.dp))
+            Button(
+                onClick = onBack,
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0x3339C5BB)),
+                border = BorderStroke(1.dp, Color(0xFF39C5BB)),
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("BACK", color = Color.White, fontWeight = FontWeight.Bold) }
+        }
     }
 }
 

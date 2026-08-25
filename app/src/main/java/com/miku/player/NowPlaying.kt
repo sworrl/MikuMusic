@@ -432,7 +432,8 @@ fun NowPlayingScreen(
             .fillMaxSize()
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = 20.dp, vertical = 8.dp)
+            // 24dp clear under the transport keys — the system gesture pill lives there.
+            .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
     ) {
         // Top Nav Bar.
         Row(verticalAlignment = Alignment.CenterVertically) {
