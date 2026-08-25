@@ -117,7 +117,7 @@ class MikuTrackHud(
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                         WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
                     PixelFormat.TRANSLUCENT
-                ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = dp(TOP_STRIP_DP + 8f).toInt() }
+                ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = dp(TOP_STRIP_DP + 16f).toInt()   // below the launcher's ~32dp status bar }
                 try { windowManager.addView(hv, params) } catch (t: Throwable) { Log.w(TAG, "addView: $t"); return@post }
                 view = hv
                 hv.slideIn()
@@ -203,8 +203,8 @@ class MikuTrackHud(
             val tw = titlePaint.measureText("${pp.title}   ·   ${pp.artist}")
             if (width > 0 && tw > avail) {
                 marqueeAnim = ValueAnimator.ofFloat(0f, tw - avail + dp(24f)).apply {
-                    duration = ((tw - avail) / dp(28f) * 1000f).toLong().coerceIn(1500L, 9000L)
-                    startDelay = 900; repeatCount = ValueAnimator.INFINITE; repeatMode = ValueAnimator.REVERSE
+                    duration = ((tw - avail) / dp(22f) * 1000f).toLong().coerceIn(2000L, 12000L)
+                    startDelay = 1600; repeatCount = ValueAnimator.INFINITE; repeatMode = ValueAnimator.REVERSE
                     addUpdateListener { marquee = it.animatedValue as Float; invalidate() }
                     start()
                 }
@@ -260,20 +260,20 @@ class MikuTrackHud(
             val textRight = w - dp(44f) - dp(8f)
             canvas.save(); canvas.clipRect(tx, 0f, textRight, h)
             val line = "${pp.title}   ·   ${pp.artist}"
-            canvas.drawText(line, tx - marquee, dp(26f), titlePaint)
-            canvas.drawText(pp.album.ifBlank { pp.artist }, tx, dp(44f), artistPaint)
+            canvas.drawText(line, tx - marquee, dp(24f), titlePaint)
+            canvas.drawText(pp.album.ifBlank { pp.artist }, tx, dp(41f), artistPaint)
             canvas.restore()
             // quality chip + heart, bottom row of the text block
             var cx = tx
             pp.quality?.takeIf { it.isNotBlank() }?.let { q ->
                 chipPaint.color = accent
                 val cw = chipPaint.measureText(q) + dp(12f)
-                rect.set(cx, dp(50f), cx + cw, dp(64f))
+                rect.set(cx, dp(49f), cx + cw, dp(63f))
                 glass.shader = null; glass.color = accent and 0x33FFFFFF; canvas.drawRoundRect(rect, dp(7f), dp(7f), glass)
-                canvas.drawText(q, cx + dp(6f), dp(60.5f), chipPaint)
+                canvas.drawText(q, cx + dp(6f), dp(59.5f), chipPaint)
                 cx += cw + dp(8f)
             }
-            if (pp.liked) canvas.drawText("♥", cx + dp(7f), dp(61f), heartPaint)
+            if (pp.liked) canvas.drawText("♥", cx + dp(7f), dp(60f), heartPaint)
             // ✕ (44dp target at the right)
             canvas.drawText("✕", w - dp(22f), h / 2f + dp(5f), xPaint)
             // progress hairline

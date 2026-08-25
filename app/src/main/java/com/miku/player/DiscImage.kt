@@ -119,9 +119,22 @@ object DiscImage {
             }
             if (cues.isEmpty()) return null
             val want = f.name.lowercase()
+            // Exact FILE "<name>" reference first.
             for (c in cues) {
                 val head = runCatching { c.inputStream().use { ins -> String(ins.readNBytes(8192), Charsets.UTF_8) } }.getOrNull() ?: continue
                 if (head.lowercase().contains("\"$want\"")) return c.absolutePath
+            }
+            // Then a stem match: "00 Arch Enemy - Wages Of Sin.flac" ↔ "Arch Enemy - Wages Of Sin [FLAC].cue" /
+            // FILE "Arch Enemy - Wages Of Sin.wav" — rips rename the audio and keep a WAV-era cue.
+            val audioStem = stemKey(f.name)
+            if (audioStem.isNotBlank()) {
+                for (c in cues) {
+                    if (stemKey(c.name) == audioStem) return c.absolutePath
+                    val head = runCatching { c.inputStream().use { ins -> String(ins.readNBytes(8192), Charsets.UTF_8) } }.getOrNull() ?: continue
+                    val fileLine = head.lines().firstOrNull { it.trim().startsWith("FILE ", true) } ?: continue
+                    val ref = fileLine.substringAfter('"', "").substringBefore('"')
+                    if (ref.isNotBlank() && stemKey(ref) == audioStem) return c.absolutePath
+                }
             }
             // Single cue + this is the only audio file in the folder → it's ours even if the FILE line names a .wav
             if (cues.size == 1) {
@@ -132,6 +145,16 @@ object DiscImage {
         } catch (_: Throwable) { null }
     }
     private val AUDIO_EXTS = setOf("flac", "ape", "wav", "wv", "dsf", "dff", "m4a", "mp3", "ogg", "opus", "tta", "mpc")
+    private val STEM_EXT_RE = Regex("(?i)\\.(flac|ape|wav|wv|dsf|dff|m4a|mp3|ogg|opus|tta|mpc|cue)$")
+    private val STEM_TAG_RE = Regex("\\[[^\\]]*\\]|\\([^)]*\\)")
+    /** "00 Arch Enemy - Wages Of Sin.flac" / "Arch Enemy - Wages Of Sin [FLAC].cue" → "archenemywagesofsin" */
+    private fun stemKey(name: String): String {
+        var s = name
+        while (STEM_EXT_RE.containsMatchIn(s)) s = STEM_EXT_RE.replace(s, "")
+        s = STEM_TAG_RE.replace(s, "")
+        s = s.replace(Regex("^\\s*00[ ._-]*"), "")
+        return norm(s)
+    }
 
     /** Human label for a track row: "Whole disc · 1 file · 47:12" (cue-less image). */
     fun rowLabel(t: Track): String? {

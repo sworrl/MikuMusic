@@ -279,7 +279,7 @@ fun MikuPowerMenuScreen(
                                 letterSpacing = 1.2.sp
                             )
                             Text(
-                                text = "MikuOS · hold to confirm",
+                                text = "MikuOS · tap, then 3s to cancel",
                                 color = MikuTealBright.copy(alpha = 0.85f),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,

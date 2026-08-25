@@ -5442,6 +5442,7 @@ fun CyberQuickTile(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .heightIn(min = 76.dp)
                 .padding(0.9.dp)
                 .clip(RoundedCornerShape(13.dp))
                 .background(
@@ -5498,10 +5499,11 @@ fun CyberQuickTile(
                     Text(
                         text = title,
                         color = Color.White,
-                        fontSize = 12.5.sp,
+                        fontSize = 11.5.sp,
+                        lineHeight = 13.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = AudiowideFont,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(

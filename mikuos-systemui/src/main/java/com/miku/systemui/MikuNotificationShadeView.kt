@@ -471,13 +471,13 @@ private fun extraTiles(ctx: Context, onRefresh: () -> Unit): List<QsTile> {
                 onRefresh()
             },
             onLongClick = { runCatching { ctx.startActivity(Intent().setClassName("com.miku.launcher", "com.miku.launcher.MikuLauncherActivity").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }),
-        QsTile("pause_unplug", "Pause on Unplug", if (pause) "Stock behaviour" else "Keep playing", Icons.Default.HeadsetOff, pause,
+        QsTile("pause_unplug", "Unplug Pause", if (pause) "Stock behaviour" else "Keep playing", Icons.Default.HeadsetOff, pause,
             onClick = {
                 putGlobal("miku_pause_on_unplug", if (pause) 0 else 1)
                 ctx.sendBroadcast(Intent("com.miku.player.SET_PAUSE_ON_UNPLUG").setPackage("com.miku.player").putExtra("enabled", !pause))
                 onRefresh()
             }),
-        QsTile("track_hud", "Now Playing HUD", if (hud) "Pops over apps" else "Off", Icons.Default.MusicNote, hud,
+        QsTile("track_hud", "Track HUD", if (hud) "Pops over apps" else "Off", Icons.Default.MusicNote, hud,
             onClick = { putGlobal("miku_track_hud_enabled", if (hud) 0 else 1); onRefresh() })
     )
 }
@@ -503,8 +503,9 @@ private fun CompactTile(t: QsTile, modifier: Modifier) {
     ) {
         Icon(t.icon, t.label, tint = if (t.isActive) MikuDarkBg else MikuTealBright, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(2.dp))
+        val short = when (t.id) { "wifi" -> "WI-FI"; "bluetooth" -> "BLUETOOTH"; "ingest" -> "INGRESS"; "wireless_adb" -> "ADB"; else -> t.label.uppercase().take(10) }
         Text(
-            t.label.uppercase().take(12), color = if (t.isActive) MikuDarkBg else MikuTextSecondary,
+            short, color = if (t.isActive) MikuDarkBg else MikuTextSecondary,
             fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, letterSpacing = 0.5.sp
         )
     }
