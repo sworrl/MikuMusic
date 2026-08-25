@@ -14,8 +14,8 @@ android {
         applicationId = "com.miku.systemui"
         minSdk = 26
         targetSdk = 34
-        versionCode = 104
-        versionName = "0.1.5"
+        versionCode = 105
+        versionName = "0.1.6"
     }
 
     val signingProps = Properties().apply {

@@ -41,13 +41,36 @@ object MikuBpmEngine {
     @Volatile private var npTitle: String = ""
     @Volatile private var npArtist: String = ""
 
+    /** Last item handed to [onPlaybackChanged] — replayed when the power governor lets analysis run again. */
+    @Volatile private var lastMediaItem: MediaItem? = null
+    @Volatile private var governorListenerArmed = false
+
+    /**
+     * Once: when the governor leaves AUDIO_ONLY/IDLE (screen back on) while we're playing, redo
+     * the deferred analysis + beat pulse. Without this the launcher's BPM game sat on "ALSA
+     * Standby" for a track that started while the screen was off — the state was never
+     * published and nothing ever retried.
+     */
+    private fun armGovernorListener(context: Context) {
+        if (governorListenerArmed) return
+        governorListenerArmed = true
+        val app = context.applicationContext
+        MikuPowerGovernor.addListener { _ ->
+            if (MikuPowerGovernor.allowBackgroundWork && isPlaying && beatJob?.isActive != true) {
+                lastMediaItem?.let { onPlaybackChanged(app, it, true) }
+            }
+        }
+    }
+
     fun onPlaybackChanged(
         context: Context,
         mediaItem: MediaItem?,
         playing: Boolean,
         albumArtColor: Int? = null
     ) {
+        armGovernorListener(context)
         isPlaying = playing
+        lastMediaItem = mediaItem
         if (albumArtColor != null) {
             dominantColor = albumArtColor
         }
@@ -59,10 +82,13 @@ object MikuBpmEngine {
             publishState(context, currentBpm, false)
             return
         }
-        // Power governor: BPM analysis is screen-facing work — skipped while the screen is off
-        // (AUDIO_ONLY/IDLE). The listener in PlayerHolder re-triggers it when the profile returns.
+        // Power governor: BPM *analysis* and the beat pulse are screen-facing work — skipped
+        // while the screen is off (AUDIO_ONLY/IDLE) and replayed by [armGovernorListener] when
+        // the profile returns. The play/pause STATE itself is always published (a few Settings
+        // writes + one broadcast) so OS surfaces never show "standby" for a live stream.
         if (!MikuPowerGovernor.allowBackgroundWork) {
             stopBeatPulse(context)
+            publishState(context, currentBpm, true)
             return
         }
 

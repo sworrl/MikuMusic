@@ -61,6 +61,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         const val ACTION_DEBUG_BACK = "com.miku.systemui.action.DEBUG_BACK"
 
         // Gesture geometry (dp)
+        const val POWER_HOLD_MS = 450L
         const val EDGE_STRIP_DP = 24
         const val EDGE_CLAIM_DP = 16f
         const val EDGE_COMMIT_DP = 32f
@@ -276,7 +277,15 @@ class MikuNotificationShadeService : AccessibilityService() {
             if (dragOffsetPx >= 0) putExtra(MikuShadeActivity.EXTRA_DRAG_OFFSET_PX, dragOffsetPx)
         }
 
-    private fun openPowerMenuActivity() = launchOwnActivity(MikuPowerMenuActivity::class.java, 1)
+    private var lastPowerMenuOpenMs = 0L
+    private fun openPowerMenuActivity() {
+        // Debounce: the framework assist path (if it ever fires) and our hold timer may both
+        // land within the same hold — one launch per second is plenty.
+        val now = SystemClock.uptimeMillis()
+        if (now - lastPowerMenuOpenMs < 1000L) return
+        lastPowerMenuOpenMs = now
+        launchOwnActivity(MikuPowerMenuActivity::class.java, 1)
+    }
 
     fun openRecents() = launchOwnActivity(MikuRecentsActivity::class.java, 2)
 
@@ -389,19 +398,41 @@ class MikuNotificationShadeService : AccessibilityService() {
                 .startsWith("com.miku.systemui/")
     } catch (_: Throwable) { false }
 
+    /** Hold timer for the power key: fires the modal at [POWER_HOLD_MS] unless an UP cancels it. */
+    private val powerHoldRunnable = Runnable {
+        powerDownTimestamp = 0L
+        // Fire only while the display is still interactive: from the Miku lockscreen a power
+        // DOWN turns the panel off immediately, and a modal over a dark panel is worse than none.
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (pm != null && !pm.isInteractive) return@Runnable
+        Log.i(TAG, "power hold ${POWER_HOLD_MS}ms → power menu")
+        openPowerMenuActivity()
+    }
+
+    /**
+     * Power long-press → MikuPowerMenuActivity, owned HERE regardless of the framework path.
+     * Settings power_button_long_press=5 + assistant=our component is still kept: it makes the
+     * framework mark the key handled (no sleep on release) and play the long-press haptic. But
+     * on this HiBy SystemUI the assist hand-off (StatusBar.startAssist → AssistManager) dies
+     * silently — the user gets the vibration and no modal (measured 2026-08-25: powerLongPress
+     * behavior=5 logged, no activity start ever follows). So the a11y key filter times the hold
+     * itself. Timer-based on DOWN (not "second DOWN > 450ms"): key repeats are synthesized inside
+     * InputDispatcher AFTER the a11y input filter, so this service only ever sees DOWN and UP.
+     * Double-fire is harmless: the activity is singleInstance and [openPowerMenuActivity] has a
+     * debounce.
+     */
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
         if (event == null) return false
-        if (event.keyCode == android.view.KeyEvent.KEYCODE_POWER && !frameworkOwnsPowerLongPress()) {
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_POWER) {
             if (event.action == android.view.KeyEvent.ACTION_DOWN) {
-                if (powerDownTimestamp == 0L) {
+                if (event.repeatCount == 0 || powerDownTimestamp == 0L) {
                     powerDownTimestamp = System.currentTimeMillis()
-                } else if (System.currentTimeMillis() - powerDownTimestamp > 450L) {
-                    openPowerMenuActivity()
-                    powerDownTimestamp = 0L
-                    return true
+                    mainHandler.removeCallbacks(powerHoldRunnable)
+                    mainHandler.postDelayed(powerHoldRunnable, POWER_HOLD_MS)
                 }
             } else if (event.action == android.view.KeyEvent.ACTION_UP) {
                 powerDownTimestamp = 0L
+                mainHandler.removeCallbacks(powerHoldRunnable)
             }
         }
         return super.onKeyEvent(event)
