@@ -36,8 +36,13 @@ object MikuCarAudioRouter {
         "com.google.android.autosimulator",       // Desktop Head Unit / AA simulator
         "com.google.android.carassistant",        // Assistant Driving Mode
         "com.google.android.gms",                 // some AA connection flows arrive via GMS
-        "com.android.car.media",                  // Android Automotive OS system browser
-        "com.android.bluetooth"                   // in-car Bluetooth media browser
+        "com.android.car.media"                   // Android Automotive OS system browser
+        // NOTE: com.android.bluetooth was REMOVED here. It is the controller package for ANY
+        // Bluetooth audio (headphones, speakers) via AVRCP, not just an in-car head unit — so
+        // including it made every BT connection latch car-mode and force-route audio to the
+        // analog jack, yanking it off the BT device ("Bluetooth audio disconnected") and leaving
+        // the player spinning at ~300% CPU on a dead sink (starves the whole system incl. a11y
+        // nav). Real Android Auto is still caught by gearhead/projection/automotive + UI_MODE_CAR.
     )
 
     // Latches true once we've seen a car controller so later re-assertions (e.g. right before
