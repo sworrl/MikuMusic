@@ -72,13 +72,13 @@ object MikuDirectAudio {
             else ->
                 """{"list":[{"packageName":"com.hiby.music"},{"packageName":"${ctx.packageName}"}]}"""
         }
+        // Platform path ONLY (standing directive: MikuOS is unrestricted via platform-signing,
+        // never su). WRITE_SECURE_SETTINGS is granted to the platform-signed build; if this write
+        // fails the fix is the ROM permission grant, not a root shell.
         val direct = runCatching {
             Settings.Global.putString(ctx.contentResolver, KEY_APP_LIST, updated)
         }.getOrDefault(false)
-        if (!direct) {
-            // Single-quote for the shell; the JSON contains no single quotes.
-            RootShell.execFast("settings put global $KEY_APP_LIST '$updated'")
-        }
+        if (!direct) Log.w(TAG, "ensureAllowListed: Settings write denied — check WRITE_SECURE_SETTINGS grant")
         val ok = allowList(ctx).contains(ctx.packageName)
         Log.i(TAG, "ensureAllowListed: ok=$ok list=${allowList(ctx)}")
         return ok
@@ -111,17 +111,9 @@ object MikuDirectAudio {
             Settings.System.putInt(cr, "volume_music_speaker", 100)
             Settings.System.putInt(cr, "volume_music_headset", 100)
         }
-        RootShell.execFast(
-            "settings put global $KEY_VOLUME_LOCK no; " +
-            "settings put global volum_tips_ce_flag yes; " +
-            "settings put global audio_safe_volume_state 0; " +
-            "settings put system max_volume_value 100; " +
-            "settings put system max_volume_value_preout 100; " +
-            "settings put system volume_music_headphone 100; " +
-            "settings put system volume_music_speaker 100; " +
-            "settings put system volume_music_headset 100; " +
-            "setprop $KEY_VOLUME_LOCK no"
-        )
+        // No su fallback (standing no-root directive): the Settings writes above run on the
+        // platform WRITE_SECURE_SETTINGS/WRITE_SETTINGS grants, and the HAL push below covers the
+        // setprop mirror (SystemUI re-reads the Global on every volume event anyway).
         // Live-apply: push the unlock into the audio HAL (what SystemUI's own receiver does) and
         // poke HibyBarTool's registered "volume_lock_state_update" receiver so the running
         // SystemUI drops its 35/40 cap without a reboot.
