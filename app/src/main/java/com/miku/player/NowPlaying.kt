@@ -24,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -395,7 +396,7 @@ fun NowPlayingScreen(
                             Text(track.artist + "   ·   " + presetToast.ifBlank { ProjectMNative.presetName() }.ifBlank { "visualizer" },
                                 color = MikuTeal.copy(alpha = .9f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        RainbowHeart(LikeStore.isLiked(track.id)) { LikeStore.toggle(ctx, track) }
+                        NowPlayingHeart(track)
                     }
                     Spacer(Modifier.height(8.dp))
                     EmbossedScrubber(
@@ -645,7 +646,7 @@ fun NowPlayingScreen(
                                 .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
                         )
                         Spacer(Modifier.width(8.dp))
-                        RainbowHeart(LikeStore.isLiked(track.id), size = 34.dp) { LikeStore.toggle(ctx, track) }
+                        NowPlayingHeart(track, size = 34.dp)
                     }
 
                     // Middle Section: Artist & Album with Year (occupies middle of card)
@@ -1270,12 +1271,16 @@ fun AlbumRainbowHeart(liked: Boolean, size: androidx.compose.ui.unit.Dp = 42.dp,
 fun ArtistRainbowHeart(liked: Boolean, size: androidx.compose.ui.unit.Dp = 42.dp, onToggle: () -> Unit) =
     TieredRainbowHeart(LikeTier.ARTIST, liked, size, onToggle)
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun TieredRainbowHeart(
     tier: LikeTier,
     liked: Boolean,
     size: androidx.compose.ui.unit.Dp = 42.dp,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    earnable: Boolean = false,
+    badgeCount: Int = 0,
+    onLongPress: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
     var phase by remember { mutableStateOf(0f) }
@@ -1296,15 +1301,21 @@ fun TieredRainbowHeart(
             .size(size)
             .scale(pulse)
             .semantics { contentDescription = "${if (liked) "Unlike" else "Like"} $label"; role = Role.Checkbox; toggleableState = ToggleableState(liked) }
-            .clickable(
+            .combinedClickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-                indication = null
-            ) {
-                Haptics.tick(ctx)
-                onToggle()
-            },
+                indication = null,
+                onLongClick = onLongPress?.let { { Haptics.tick(ctx); it() } },
+                onClick = { Haptics.tick(ctx); onToggle() }
+            ),
         contentAlignment = Alignment.Center
     ) {
+        // Earnable-this-play ring: a soft green glow telling the user a heart is ready to spend.
+        if (earnable) {
+            Canvas(Modifier.size(size)) {
+                drawCircle(Color(0x5500E676), radius = this.size.minDimension * 0.5f)
+                drawCircle(Color(0xCC00E676), radius = this.size.minDimension * 0.48f, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.2f))
+            }
+        }
         Canvas(Modifier.size(size * 0.84f)) {
             val w = this.size.width
             val h = this.size.height
@@ -1448,7 +1459,65 @@ fun TieredRainbowHeart(
                 drawPath(p, Color(0xFF426863).copy(alpha = 0.85f), style = Stroke(width = 1.3f))
             }
         }
+        // Cumulative heart-score badge — appears once a track has more than one heart (played
+        // through and hearted multiple times). The count is what feeds TasteEngine.
+        if (badgeCount > 1) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = 3.dp, y = (-2).dp)
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFFFF2277)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (badgeCount > 99) "99+" else badgeCount.toString(),
+                    color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Black, maxLines = 1
+                )
+            }
+        }
     }
+}
+
+/**
+ * Now-Playing heart with the earn-per-play model: a heart is earnable only after the current play
+ * passes 94% without skipping (MikuPlayQualifier). Tap when earnable = +1 to the cumulative heart
+ * score; long-press = clear all hearts. Shows the count badge and an earnable glow ring.
+ */
+@Composable
+fun NowPlayingHeart(track: Track, size: androidx.compose.ui.unit.Dp = 42.dp) {
+    val ctx = LocalContext.current
+    var count by remember(track.id) { mutableStateOf(LikeStore.heartCount(ctx, track.id)) }
+    var earnable by remember(track.id) { mutableStateOf(MikuPlayQualifier.isHeartable(track.id)) }
+    // Cheap 1s poll (same cadence as the progress bar) keeps earnable/count fresh across the play.
+    LaunchedEffect(track.id) {
+        while (true) {
+            earnable = MikuPlayQualifier.isHeartable(track.id)
+            count = LikeStore.heartCount(ctx, track.id)
+            delay(1000)
+        }
+    }
+    TieredRainbowHeart(
+        tier = LikeTier.TRACK,
+        liked = count > 0,
+        size = size,
+        earnable = earnable,
+        badgeCount = count,
+        onToggle = {
+            val n = LikeStore.heart(ctx, track)   // +1 only when earnable
+            if (n >= 0) { count = n; earnable = false }
+            else android.widget.Toast.makeText(
+                ctx,
+                if (count > 0) "♥ ${count} — play it through again to add another" else "Listen to 94% to earn a ♥",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        },
+        onLongPress = {
+            LikeStore.clearHearts(ctx, track); count = 0; earnable = MikuPlayQualifier.isHeartable(track.id)
+            android.widget.Toast.makeText(ctx, "Hearts cleared", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    )
 }
 
 /** Live FFT visualizer via the Android Visualizer API, drawn as a Miku-teal mirrored bar spectrum. */

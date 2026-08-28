@@ -19,6 +19,29 @@ object PlayerPreferences {
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
+    // ---- Heart score (cumulative) -----------------------------------------------------------
+    // New hearting model (2026-08-28): a track's "heart" is a COUNT, not a boolean — one heart is
+    // earned per qualifying play (>=94% without skipping, see MikuPlayQualifier) and the total
+    // feeds TasteEngine. isLiked stays "count > 0" so all existing heart UI keeps working, and
+    // existing boolean likes migrate lazily to a count of 1.
+    private const val KEY_HEART_PREFIX = "heart_count_"
+
+    fun getHeartCount(context: Context, id: Long): Int {
+        val p = prefs(context)
+        val stored = p.getInt(KEY_HEART_PREFIX + id, -1)
+        if (stored >= 0) return stored
+        // Lazy migration: a pre-existing boolean like counts as one heart.
+        return if (loadLikedTracks(context).contains(id)) 1 else 0
+    }
+
+    fun setHeartCount(context: Context, id: Long, count: Int) {
+        val n = count.coerceAtLeast(0)
+        prefs(context).edit().putInt(KEY_HEART_PREFIX + id, n).apply()
+        // Keep the boolean liked set in lockstep (n>0 == liked) so isLiked and every heart-filled
+        // UI element stay correct.
+        saveLikedTrack(context, id, n > 0)
+    }
+
     fun saveLastPlayback(context: Context, trackId: Long, positionMs: Long) {
         prefs(context).edit()
             .putLong(KEY_LAST_TRACK_ID, trackId)

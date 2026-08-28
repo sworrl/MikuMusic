@@ -199,6 +199,15 @@ object PlayerHolder {
         var lastErrorAtMs = 0L
         var errorRetryStreak = 0
         p.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPos: androidx.media3.common.Player.PositionInfo,
+                newPos: androidx.media3.common.Player.PositionInfo,
+                reason: Int
+            ) {
+                if (reason == androidx.media3.common.Player.DISCONTINUITY_REASON_SEEK) {
+                    newPos.mediaItem?.mediaId?.toLongOrNull()?.let { MikuPlayQualifier.onSeek(it, newPos.positionMs) }
+                }
+            }
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 WidgetUpdateExecutor.push(app)
                 MikuTrackHud.publish(app, p, if (isPlaying) "play" else "pause")
@@ -224,6 +233,7 @@ object PlayerHolder {
                 }
             }
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                mediaItem?.mediaId?.toLongOrNull()?.let { MikuPlayQualifier.onTrackStart(it); MikuPlayQualifier.publish(app, it) }
                 WidgetUpdateExecutor.push(app)
                 MikuTrackHud.publish(app, p, "transition:$reason")
                 mediaItem?.mediaId?.toLongOrNull()?.let { MikuArtTheme.updateForTrackId(app, it) }
@@ -293,6 +303,24 @@ object PlayerHolder {
             }
         })
         player = p
+        // Heart-qualification progress feed: while playing, tick the qualifier so a track that
+        // reaches >=94% without skipping becomes heartable (see MikuPlayQualifier).
+        run {
+            val mainH = android.os.Handler(android.os.Looper.getMainLooper())
+            val tick = object : Runnable {
+                override fun run() {
+                    val pl = player
+                    if (pl != null && pl.isPlaying) {
+                        pl.currentMediaItem?.mediaId?.toLongOrNull()?.let { id ->
+                            MikuPlayQualifier.onProgress(id, pl.currentPosition, pl.duration)
+                            MikuPlayQualifier.publish(app, id)
+                        }
+                    }
+                    mainH.postDelayed(this, 1000L)
+                }
+            }
+            mainH.postDelayed(tick, 1000L)
+        }
         // Work deferred by the power governor (art/palette/HUD while the screen was off) catches up
         // the moment a profile that allows background work is back.
         MikuPowerGovernor.addListener { prof ->

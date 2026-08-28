@@ -36,7 +36,28 @@ object TasteEngine {
     private const val ARTIST_TO_ALBUM = 0.25f
     private const val ARTIST_TO_TRACK = 0.1f
 
-    /** 1.0 if explicitly liked; otherwise the implied score from its album/artist likes. */
+    /**
+     * Normalised cumulative heart strength for a track (0..1), saturating at ~10 hearts. This is
+     * the new per-play heart score (LikeStore.heartCount) folded into the taste model — a track
+     * you played through and hearted many times outranks one hearted once, which is exactly what
+     * feeds smart shuffle / recommendations.
+     */
+    fun heartScore(ctx: Context, id: Long): Float =
+        (LikeStore.heartCount(ctx, id).toFloat() / 10f).coerceIn(0f, 1f)
+
+    /** Heart-weighted fraction of an entity's tracks: each track contributes by heart intensity
+     *  (min 3 hearts = full weight) rather than a flat liked/not-liked, so heavily-hearted tracks
+     *  pull their album/artist affinity up more. Falls back to the boolean count without a ctx. */
+    private fun heartWeightedFrac(tracks: List<Track>, ctx: Context?): Float {
+        if (tracks.isEmpty()) return 0f
+        if (ctx == null) return tracks.count { LikeStore.isLiked(it.id) }.toFloat() / tracks.size
+        var acc = 0f
+        for (t in tracks) acc += (LikeStore.heartCount(ctx, t.id).coerceAtMost(3)).toFloat() / 3f
+        return (acc / tracks.size).coerceIn(0f, 1f)
+    }
+
+    /** 1.0 if explicitly liked; otherwise the implied score from its album/artist likes. Ranking
+     *  consumers additionally read [heartScore] to break ties between two liked tracks. */
     fun trackAffinity(track: Track, ctx: Context? = null): Float {
         if (LikeStore.isLiked(track.id)) return 1f
         val albumArtist = track.albumArtist.ifBlank { track.artist }
@@ -54,8 +75,7 @@ object TasteEngine {
         var score = 0f
         if (LikeStore.isArtistLiked(album.artist, ctx)) score += ARTIST_TO_ALBUM
         if (album.tracks.isNotEmpty()) {
-            val likedFrac = album.tracks.count { LikeStore.isLiked(it.id) }.toFloat() / album.tracks.size
-            score += likedFrac * TRACK_TO_ALBUM
+            score += heartWeightedFrac(album.tracks, ctx) * TRACK_TO_ALBUM
         }
         return score.coerceIn(0f, 1f)
     }
@@ -66,7 +86,7 @@ object TasteEngine {
         if (LikeStore.isArtistLiked(artist.name, ctx)) return 1f
         var score = 0f
         if (artist.tracks.isNotEmpty()) {
-            val likedFrac = artist.tracks.count { LikeStore.isLiked(it.id) }.toFloat() / artist.tracks.size
+            val likedFrac = heartWeightedFrac(artist.tracks, ctx)
             score += likedFrac * TRACK_TO_ARTIST
         }
         val albumNames = artist.tracks.map { it.album }.distinct()

@@ -50,6 +50,51 @@ object LikeStore {
 
     fun isLiked(id: Long): Boolean = liked.contains(id)
 
+    /** Cumulative heart score for a track (0 = not hearted). Feeds TasteEngine and ranking. */
+    fun heartCount(ctx: Context, id: Long): Int = PlayerPreferences.getHeartCount(ctx, id)
+
+    /**
+     * Earn a heart for the CURRENT play. Only succeeds when the play qualified (>=94%, no skip)
+     * and the user hasn't already spent this play's heart — that is the whole new model: hearts
+     * are earned by listening. Returns the new cumulative count, or -1 when not currently earnable.
+     */
+    fun heart(ctx: Context, track: Track): Int {
+        if (!MikuPlayQualifier.isHeartable(track.id)) return -1
+        val n = PlayerPreferences.getHeartCount(ctx, track.id) + 1
+        PlayerPreferences.setHeartCount(ctx, track.id, n)         // also flips the boolean liked set
+        if (!liked.contains(track.id)) liked.add(track.id)
+        PlayerPreferences.saveLikedTrackMeta(ctx, track.id, track.title, track.artist)
+        MikuPlayQualifier.markHearted(track.id)
+        PulsarLight.indicateHearted(ctx)
+        broadcastLike(ctx, track.id, true, n)
+        if (n == 1 && track.artist.isNotBlank() && track.title.isNotBlank()) {
+            LastFmPreferences.loadSessionKey(ctx)?.let { LastFm.setLoved(it, track.artist, track.title, true) }
+        }
+        return n
+    }
+
+    /** Remove ALL hearts for a track (un-like). Long-press / explicit clear. */
+    fun clearHearts(ctx: Context, track: Track) {
+        PlayerPreferences.setHeartCount(ctx, track.id, 0)          // flips liked off
+        liked.remove(track.id)
+        PlayerPreferences.removeLikedTrackMeta(ctx, track.id)
+        broadcastLike(ctx, track.id, false, 0)
+        if (track.artist.isNotBlank() && track.title.isNotBlank()) {
+            LastFmPreferences.loadSessionKey(ctx)?.let { LastFm.setLoved(it, track.artist, track.title, false) }
+        }
+    }
+
+    private fun broadcastLike(ctx: Context, id: Long, liked: Boolean, count: Int) {
+        try {
+            android.provider.Settings.Global.putString(ctx.contentResolver, "miku_current_track_liked", if (liked) "1" else "0")
+            android.provider.Settings.Global.putLong(ctx.contentResolver, "miku_current_liked_track_id", id)
+            android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_current_track_heart_count", count)
+            ctx.sendBroadcast(Intent("com.miku.player.action.LIKE_STATE_CHANGED").apply {
+                putExtra("track_id", id); putExtra("is_liked", liked); putExtra("heart_count", count)
+            })
+        } catch (_: Throwable) {}
+    }
+
     /** id-only overload — kept for any call site that genuinely doesn't have the Track object
      *  handy. Prefer the Track overload below when it's available: it also mirrors the like onto
      *  Last.fm's "loved tracks" (see LastFm.setLoved), which this one can't do without a title/
@@ -57,6 +102,9 @@ object LikeStore {
     fun toggle(ctx: Context, id: Long): Boolean {
         val nowLiked = if (liked.contains(id)) { liked.remove(id); false } else { liked.add(id); true }
         PlayerPreferences.saveLikedTrack(ctx, id, nowLiked)
+        // Keep the heart score consistent with the boolean: turning it on seeds at least one heart,
+        // turning it off zeroes the score. (Earning extra hearts goes through heart() per play.)
+        PlayerPreferences.setHeartCount(ctx, id, if (nowLiked) PlayerPreferences.getHeartCount(ctx, id).coerceAtLeast(1) else 0)
         if (nowLiked) PulsarLight.indicateHearted(ctx)
         try {
             android.provider.Settings.Global.putString(

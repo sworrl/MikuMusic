@@ -101,12 +101,15 @@ object MikuVolumeManager {
             .getString(KEY_HUD_STYLE, VolumeHudStyle.RIGHT_CYBER_BAR.key)
         val style = VolumeHudStyle.values().firstOrNull { it.key == raw } ?: VolumeHudStyle.RIGHT_CYBER_BAR
         _hudStyle.value = style
+        runCatching { android.provider.Settings.Global.putString(ctx.contentResolver, KEY_HUD_STYLE, style.key) }
         return style
     }
 
     fun setVolumeHudStyle(ctx: Context, style: VolumeHudStyle) {
         ctx.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_HUD_STYLE, style.key).apply()
+        // Mirror to Settings.Global so MikuSystemUI's over-3rd-party-app volume HUD uses the same style.
+        runCatching { android.provider.Settings.Global.putString(ctx.contentResolver, KEY_HUD_STYLE, style.key) }
         _hudStyle.value = style
     }
 
