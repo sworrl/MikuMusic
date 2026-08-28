@@ -55,6 +55,24 @@ object MikuBpmEngine {
         if (candidate in MIN_INTERVAL_MS..MAX_INTERVAL_MS) candidate
         else (60_000f / bpm).toLong().coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
 
+    /** Live output-mix detector reports a beat at [bpm] — authoritative "audio is playing". */
+    fun pushLivePulse(bpm: Float) {
+        val prev = _state.value
+        val b = sanitizeBpm(bpm, prev.bpm)
+        _state.value = prev.copy(
+            bpm = b,
+            beatIntervalMs = sanitizeInterval((60_000f / b).toLong(), b),
+            isPlaying = true,
+            lastPulseEpochMs = System.currentTimeMillis()
+        )
+    }
+
+    /** Live detector reports whether the DAC is actually outputting audio (gates "ALSA Standby"). */
+    fun pushLivePlaying(playing: Boolean) {
+        val prev = _state.value
+        if (prev.isPlaying != playing) _state.value = prev.copy(isPlaying = playing)
+    }
+
     fun startListening(context: Context) {
         if (receiver != null) return
         val cr = context.contentResolver
@@ -154,5 +172,9 @@ object MikuBpmEngine {
             // see the comment above). One warning per attempt; startListening retries on next call.
             Log.w(TAG, "BPM receiver registration failed — live tempo UI will run on defaults", t)
         }
+
+        // Live output-mix beat detection so the counter "sees ALSA" for ANY source (Spotify etc),
+        // not only Miku's offline file analysis. Idempotent; fails soft without RECORD_AUDIO.
+        try { MikuLiveBeatDetector.start(context.applicationContext) } catch (_: Throwable) {}
     }
 }
