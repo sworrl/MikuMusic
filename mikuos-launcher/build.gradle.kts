@@ -36,7 +36,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 29
-        versionName = "0.1.34"
+        versionName = "0.1.35"
 
         buildConfigField("String", "ARCO_HMAC_KEY_ID", "\"${arcoProp("ARCO_HMAC_KEY_ID")}\"")
         buildConfigField("String", "ARCO_HMAC_SECRET", "\"${arcoProp("ARCO_HMAC_SECRET")}\"")

@@ -573,26 +573,38 @@ fun MikuKawaiiLockscreenScreen(
         }
     }
 
-    LaunchedEffect(controller) {
-        val c = controller
-        if (c == null) {
-            nowPlaying = MikuNowPlaying()
-            return@LaunchedEffect
-        }
+    // Keyed on Unit and reads `controller` inside the loop so it doesn't thrash-restart every
+    // second, and falls back to what com.miku.player publishes to Settings.Global when the live
+    // platform session read is momentarily empty — so the lockscreen is always aware of what's
+    // playing (any app via the session, our player via the reliable Settings fallback).
+    LaunchedEffect(Unit) {
         val cr = context.contentResolver
         while (true) {
+            val c = controller
             nowPlaying = try {
-                val title = c.title
-                val artist = c.artist ?: "Hatsune Miku"
-                val album = c.album ?: ""
-                val mediaId = c.mediaId
-                val isMiku = c.packageName == "com.miku.player"
+                var title = c?.title
+                var artist = c?.artist
+                val album = c?.album ?: ""
+                val mediaId = c?.mediaId
+                var isPlaying = c?.isPlaying ?: false
+                val pkg = c?.packageName ?: "com.miku.player"
+                val isMiku = pkg == "com.miku.player"
+                // Fallback: our player always writes these; use them when the session read is empty.
+                if (title.isNullOrEmpty()) {
+                    val t = try { Settings.Global.getString(cr, "miku_now_playing_title") } catch (_: Throwable) { null }
+                    if (!t.isNullOrEmpty()) {
+                        title = t
+                        artist = try { Settings.Global.getString(cr, "miku_now_playing_artist") } catch (_: Throwable) { null }
+                        isPlaying = try { Settings.Global.getInt(cr, "miku_is_playing", 0) == 1 } catch (_: Throwable) { true }
+                    }
+                }
+                if (artist.isNullOrEmpty()) artist = "Hatsune Miku"
                 // Our player publishes true format/bpm/like into Settings.Global; for a 3rd-party
                 // app (Spotify etc) show its source rather than a false "DTA" claim.
                 val format = if (isMiku) {
                     try { Settings.Global.getString(cr, "miku_now_playing_format") ?: "Direct DTA 24-bit / 96kHz" }
                     catch (_: Throwable) { "Direct DTA 24-bit / 96kHz" }
-                } else appLabelFor(context, c.packageName)
+                } else appLabelFor(context, pkg)
                 val bpm = if (isMiku) {
                     try { Settings.Global.getFloat(cr, "miku_now_playing_bpm", 128f) } catch (_: Throwable) { 128f }
                 } else 128f
@@ -605,10 +617,10 @@ fun MikuKawaiiLockscreenScreen(
                     MikuPlayHistoryStore.recordPlay(
                         mediaId = mediaId ?: "",
                         title = title,
-                        artist = artist,
+                        artist = artist ?: "",
                         album = album,
                         format = format,
-                        durationMs = c.durationMs.coerceAtLeast(0L)
+                        durationMs = (c?.durationMs ?: 0L).coerceAtLeast(0L)
                     )
                 }
 
@@ -618,11 +630,11 @@ fun MikuKawaiiLockscreenScreen(
                     title = title,
                     artist = artist,
                     album = album,
-                    isPlaying = c.isPlaying,
+                    isPlaying = isPlaying,
                     isLiked = isLikedFromSettings,
-                    artwork = c.artwork,
-                    positionMs = c.positionMs.coerceAtLeast(0L),
-                    durationMs = c.durationMs.coerceAtLeast(0L),
+                    artwork = c?.artwork,
+                    positionMs = (c?.positionMs ?: 0L).coerceAtLeast(0L),
+                    durationMs = (c?.durationMs ?: 0L).coerceAtLeast(0L),
                     format = format,
                     bpm = bpm
                 )
