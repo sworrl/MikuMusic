@@ -13,6 +13,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.miku.player.RootShell
@@ -600,7 +601,23 @@ object MikuBluetoothController {
         }
     }
 
-    fun applyCodecConfig(ldacQuality: String, aptx: Boolean, aac: Boolean) {
+    /**
+     * Apply a BT codec/bitrate. AUDIO LOCKDOWN (user directive 2026-08-27): while
+     * Settings.Global miku_bt_quality_locked=1 (default), any config BELOW the maximum
+     * (LDAC 990 / aptX-HD) is REFUSED unless [confirmed] is true — the settings UI must show
+     * an explicit confirmation dialog and call this with confirmed=true. Highest quality is
+     * always allowed to apply silently. Returns true if applied, false if blocked pending confirm.
+     */
+    fun applyCodecConfig(ldacQuality: String, aptx: Boolean, aac: Boolean, confirmed: Boolean = false): Boolean {
+        val isMax = ldacQuality.contains("990") && aptx
+        val cr = appContext?.contentResolver
+        val locked = try {
+            if (cr != null) Settings.Global.getInt(cr, "miku_bt_quality_locked", 1) == 1 else true
+        } catch (_: Throwable) { true }
+        if (locked && !isMax && !confirmed) {
+            Log.w(TAG, "codec downgrade to '$ldacQuality' BLOCKED by audio lockdown (needs explicit GUI confirm)")
+            return false
+        }
         scope.launch(Dispatchers.IO) {
             try {
                 val ldacVal = when {
@@ -617,5 +634,10 @@ object MikuBluetoothController {
                 )
             } catch (_: Throwable) {}
         }
+        return true
     }
+
+    /** Re-assert the maximum BT codec (LDAC 990 + aptX-HD). Called on BT connect / boot so the
+     *  link never sits on a silently-negotiated lower codec. Always allowed (it's the max). */
+    fun enforceMaxCodec() { applyCodecConfig("990", aptx = true, aac = true, confirmed = true) }
 }
