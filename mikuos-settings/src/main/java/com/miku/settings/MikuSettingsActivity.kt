@@ -2366,7 +2366,16 @@ fun Modifier.mikuEdgeSwipeBack(
 @Composable
 fun BatteryScreen(ctx: Context) {
     val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
-    val pct = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+    // Primary source = the sticky ACTION_BATTERY_CHANGED broadcast (BatteryService-fed, always
+    // correct). BATTERY_PROPERTY_CAPACITY goes through the health HAL directly and returns 0
+    // on this vendor for normal apps — that was the "battery stuck / not reading" bug.
+    val pct = remember {
+        val sticky = ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val lvl = sticky?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = sticky?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
+        if (lvl >= 0 && scale > 0) (lvl * 100) / scale
+        else bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 1..100 } ?: 0
+    }
     val currentMa = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)?.let { it / 1000 } ?: 0
 
     Column(Modifier.mikuHeroCard().padding(16.dp)) {

@@ -1,0 +1,175 @@
+#include <jni.h>
+#include <android/log.h>
+#include <string>
+#include <exception>
+#include <mutex>
+#include <projectM-4/projectM.h>
+#include <projectM-4/playlist.h>
+
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  "projectM-native", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "projectM-native", __VA_ARGS__)
+
+static projectm_handle          s_pm       = nullptr;
+static projectm_playlist_handle s_playlist = nullptr;
+// Serializes all access to the globals. During a fullscreen transition two GL threads can
+// briefly coexist (old surface tearing down, new one initializing); without this, the old
+// thread's render can run while the new thread destroys+recreates the handle → use-after-free.
+static std::mutex               s_lock;
+// Remembered playlist position so re-creating the handle for a new GL surface (e.g. entering
+// fullscreen) can restore the SAME preset instead of jumping to a random one.
+static int                      s_lastPos  = -1;
+
+extern "C" {
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeInit(JNIEnv* /*env*/, jobject /*thiz*/) {
+    std::lock_guard<std::mutex> g(s_lock);
+    // A new GL surface (e.g. entering fullscreen) has a fresh GL context; projectM's
+    // GL objects are context-bound, so tear down any old instance and rebuild here.
+    if (s_pm) {
+        if (s_playlist) {
+            s_lastPos = (int) projectm_playlist_get_position(s_playlist);   // remember before teardown
+            projectm_playlist_destroy(s_playlist); s_playlist = nullptr;
+        }
+        projectm_destroy(s_pm);
+        s_pm = nullptr;
+    }
+    s_pm = projectm_create();
+    if (!s_pm) { LOGE("projectm_create() returned null"); return; }
+    // Lower mesh = far fewer per-pixel-equation evaluations per frame → the key perf lever on the
+    // M500's weak GPU. 24x18 lets even heavy presets run without dropping any from the pack.
+    projectm_set_mesh_size(s_pm, 24, 18);
+    projectm_set_fps(s_pm, 60);
+    projectm_set_aspect_correction(s_pm, true);
+    projectm_set_preset_duration(s_pm, 30.0);
+    projectm_set_soft_cut_duration(s_pm, 3.0);
+    projectm_set_hard_cut_enabled(s_pm, true);
+    projectm_set_hard_cut_sensitivity(s_pm, 1.0f);
+    projectm_set_beat_sensitivity(s_pm, 1.2f);
+
+    s_playlist = projectm_playlist_create(s_pm);
+    if (s_playlist) {
+        projectm_playlist_set_shuffle(s_playlist, true);
+        projectm_playlist_set_retry_count(s_playlist, 5);   // skip presets that fail to load
+    }
+    LOGI("libprojectM 4.2.0 initialized");
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeResize(JNIEnv* /*env*/, jobject /*thiz*/, jint w, jint h) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (s_pm && w > 0 && h > 0)
+        projectm_set_window_size(s_pm, (size_t) w, (size_t) h);
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeFeedAudio(JNIEnv* env, jobject /*thiz*/,
+                                                    jfloatArray /*fft*/, jfloatArray pcm) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_pm || pcm == nullptr) return;
+    jsize n = env->GetArrayLength(pcm);
+    if (n <= 0) return;
+    jfloat* samples = env->GetFloatArrayElements(pcm, nullptr);
+    if (samples) {
+        projectm_pcm_add_float(s_pm, samples, (unsigned int) n, PROJECTM_MONO);
+        env->ReleaseFloatArrayElements(pcm, samples, JNI_ABORT);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeRender(JNIEnv* /*env*/, jobject /*thiz*/,
+                                                 jfloat /*t*/, jint /*preset*/,
+                                                 jfloat /*bass*/, jfloat /*treble*/) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_pm) return;
+    try { projectm_opengl_render_frame(s_pm); }
+    catch (const std::exception& e) { LOGE("render threw: %s", e.what()); }
+    catch (...) { LOGE("render threw (unknown)"); }
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeSetPreset(JNIEnv* /*env*/, jobject /*thiz*/, jint /*preset*/) {
+    // No-op by design: preset changes come from the playlist auto-cycle + gestures (next/prev).
+    // Advancing here made mounting a surface (e.g. entering fullscreen) jump to a new preset.
+}
+
+static std::string basename_noext(const char* p) {
+    if (!p) return "";
+    std::string s(p);
+    auto slash = s.find_last_of("/\\");
+    if (slash != std::string::npos) s = s.substr(slash + 1);
+    auto dot = s.find_last_of('.');
+    if (dot != std::string::npos) s = s.substr(0, dot);
+    return s;
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeNext(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_playlist) return;
+    try { projectm_playlist_play_next(s_playlist, true); } catch (...) { LOGE("next threw"); }
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativePrev(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_playlist) return;
+    try { projectm_playlist_play_previous(s_playlist, true); } catch (...) { LOGE("prev threw"); }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_miku_player_ProjectMNative_nativeToggleLock(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_pm) return JNI_FALSE;
+    try {
+        bool locked = projectm_get_preset_locked(s_pm);
+        projectm_set_preset_locked(s_pm, !locked);
+        return (!locked) ? JNI_TRUE : JNI_FALSE;
+    } catch (...) { LOGE("toggleLock threw"); return JNI_FALSE; }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_miku_player_ProjectMNative_nativeIsLocked(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> g(s_lock);
+    return (s_pm && projectm_get_preset_locked(s_pm)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_miku_player_ProjectMNative_nativePresetName(JNIEnv* env, jobject) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_playlist) return env->NewStringUTF("");
+    try {
+        uint32_t pos = projectm_playlist_get_position(s_playlist);
+        char* path = projectm_playlist_item(s_playlist, pos);
+        std::string name = basename_noext(path);
+        if (path) projectm_playlist_free_string(path);
+        return env->NewStringUTF(name.c_str());
+    } catch (...) { return env->NewStringUTF(""); }
+}
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeSetBeatSensitivity(JNIEnv*, jobject, jfloat s) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (s_pm) projectm_set_beat_sensitivity(s_pm, s);
+}
+
+// Load a directory of .milk presets into the playlist (called with the extracted assets path).
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeLoadPresets(JNIEnv* env, jobject /*thiz*/, jstring dir) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!s_playlist || dir == nullptr) return;
+    const char* path = env->GetStringUTFChars(dir, nullptr);
+    if (path) {
+        uint32_t added = projectm_playlist_add_path(s_playlist, path, true, false);
+        LOGI("loaded %u presets from %s", added, path);
+        env->ReleaseStringUTFChars(dir, path);
+        projectm_playlist_set_shuffle(s_playlist, true);
+        // Restore the same preset across a surface re-create (fullscreen); else start fresh.
+        if (s_lastPos >= 0 && (uint32_t) s_lastPos < added)
+            projectm_playlist_set_position(s_playlist, (uint32_t) s_lastPos, true);
+        else
+            projectm_playlist_play_next(s_playlist, true);
+    }
+}
+
+} // extern "C"

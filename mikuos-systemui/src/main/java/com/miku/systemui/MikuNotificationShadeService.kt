@@ -107,6 +107,8 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     /** Now-Playing HUD (track-change pop-over drawn in our overlay layer). */
     private var trackHud: MikuTrackHud? = null
+    /** Right-edge volume bar overlay — visible over 3rd-party apps (launcher HUD is launcher-only). */
+    private var volumeHud: MikuVolumeHud? = null
 
     /** Album accent bled ≈25% into the nav chrome (pill glow, back capsule), animated 400ms. */
     @Volatile private var navTeal = MikuAccent.TEAL
@@ -143,6 +145,8 @@ class MikuNotificationShadeService : AccessibilityService() {
                     if (a != 0) MikuAccent.push(a, a2)
                     trackHud?.show(MikuTrackHud.Payload.from(intent))
                 }
+                "android.media.VOLUME_CHANGED_ACTION", "android.media.RINGER_MODE_CHANGED" ->
+                    volumeHud?.onVolumeChanged()
                 ACTION_TRIGGER_BACK, ACTION_DEBUG_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
                 ACTION_DEBUG_HOME -> triggerHome()
                 ACTION_DEBUG_RECENTS -> openRecents()
@@ -160,6 +164,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         trackHud = MikuTrackHud(this, windowManager) { dragPx -> openShadeActivity(dragPx) }
+        volumeHud = MikuVolumeHud(this, windowManager)
         MikuPowerProfile.observe(this)
         startAccentObserver()
         try {
@@ -168,6 +173,8 @@ class MikuNotificationShadeService : AccessibilityService() {
                 addAction(ACTION_DEBUG_HOME); addAction(ACTION_DEBUG_RECENTS)
                 addAction(ACTION_DEBUG_QUICK_SWITCH)
                 addAction(MikuTrackHud.ACTION_TRACK_CHANGED); addAction(MikuTrackHud.ACTION_DEBUG)
+                addAction("android.media.VOLUME_CHANGED_ACTION")
+                addAction("android.media.RINGER_MODE_CHANGED")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -189,6 +196,7 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onDestroy() {
         try { unregisterReceiver(receiver) } catch (_: Throwable) {}
         trackHud?.destroy(); trackHud = null
+        volumeHud?.destroy(); volumeHud = null
         accentJob?.cancel(); accentAnim?.cancel()
         removeOverlays()
         try { workThread.quitSafely() } catch (_: Throwable) {}
