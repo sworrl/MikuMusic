@@ -232,7 +232,7 @@ fun MikuSettingsScreen(onBack: () -> Unit) {
             SettingsCategoryItem(
                 id = "storage",
                 title = "Storage",
-                subtitle = "MicroSD /storage/EAFF-98FE & Internal Flash Management",
+                subtitle = "MicroSD & Internal Flash Management",
                 icon = Icons.Default.SdCard,
                 accentColor = Color(0xFF00E5FF),
                 onClick = { isStorageModalOpen = true }
@@ -1189,10 +1189,12 @@ fun MikuStorageSettingsModal(onDismissRequest: () -> Unit) {
         } catch (_: Throwable) { Triple(24L, 64L, 40L) }
     }
 
+    // Resolve the actually-inserted card (never hardcode a per-card FAT UUID).
+    val sdRoot = remember { MikuVolumes.removableRoot(ctx) }
     val sdStats = remember {
         try {
-            val sdDir = File("/storage/EAFF-98FE")
-            if (sdDir.exists()) {
+            val sdDir = sdRoot
+            if (sdDir != null && sdDir.exists()) {
                 val stat = StatFs(sdDir.path)
                 val total = (stat.blockCountLong * stat.blockSizeLong) / (1024 * 1024 * 1024)
                 val free = (stat.availableBlocksLong * stat.blockSizeLong) / (1024 * 1024 * 1024)
@@ -1258,7 +1260,7 @@ fun MikuStorageSettingsModal(onDismissRequest: () -> Unit) {
                                 .padding(12.dp)
                         ) {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("MicroSD Card (/storage/EAFF-98FE)", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
+                                Text(if (sdRoot != null) "MicroSD Card (${sdRoot.absolutePath})" else "MicroSD Card (not inserted)", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold)
                                 Text(if (sdStats.second > 0) "${sdStats.first} GB / ${sdStats.second} GB" else "Not Mounted", color = MikuNeonPink, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.height(6.dp))
@@ -1613,7 +1615,7 @@ fun MikuAboutDeviceModal(
                             CyberInfoRow("Max PCM / DSD", "Direct ALSA 384kHz 32-Bit / DSD256")
                             CyberInfoRow("RAM Memory", "4.0 GB LPDDR4x Ultra High Speed")
                             CyberInfoRow("Internal Flash", storageStats.first + " (${storageStats.second})")
-                            CyberInfoRow("MicroSD Storage", "/storage/EAFF-98FE (Mounted SDXC)")
+                            CyberInfoRow("MicroSD Storage", MikuVolumes.removableLabel(ctx)?.let { "$it (Mounted)" } ?: "No card inserted")
                             CyberInfoRow("Display Panel", "4.0\" IPS Retina 1080x540 (300 PPI)")
                             CyberInfoRow("Battery Cell", "3200 mAh Li-Po w/ QuickCharge 3.0")
                         }

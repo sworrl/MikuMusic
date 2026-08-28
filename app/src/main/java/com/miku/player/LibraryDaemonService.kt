@@ -225,7 +225,7 @@ class LibraryDaemonService : Service() {
         val syncDetail = if (!MikuIngestGate.isEnabled(this)) {
             "Ingress engine is OFF — local SD card scans only. Flip it on from the MikuOS quick settings."
         } else if (sync.isTransferring) {
-            "Active ingress at ${String.format("%.1f", sync.transferRateMBs)} MB/s to /storage/EAFF-98FE/MUSIC."
+            "Active ingress at ${String.format("%.1f", sync.transferRateMBs)} MB/s to ${MikuVolumes.removableLabel(this) ?: "the MicroSD"}/MUSIC."
         } else {
             "Daemon listening on port ${MikuSyncTransceiver.RSYNC_PORT}. FastLibraryStore index is current."
         }
