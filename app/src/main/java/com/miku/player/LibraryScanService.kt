@@ -203,14 +203,18 @@ class LibraryScanService : Service() {
             ScanProgress.tagsTotal = totalNew
             ScanProgress.phase = "Indexing $totalNew new files…"
 
-            // Crash-proof sequential batching with background priority and gentle pacing (zero audio underruns)
-            val scanGate = Semaphore(2)
-            val batches = discoveredNew.map { it.path }.chunked(64)
-            val batchPool = Executors.newFixedThreadPool(2) { r ->
+            // Crash-proof SEQUENTIAL batching (one batch at a time) with background priority and
+            // adaptive pacing — a 14k-track first-boot scan was saturating ~3 cores and making the
+            // whole device feel laggy while in use. Now: single worker, and each batch yields harder
+            // while the user is actively interacting (screen on), faster when idle/asleep.
+            val scanGate = Semaphore(1)
+            val batches = discoveredNew.map { it.path }.chunked(48)
+            val batchPool = Executors.newFixedThreadPool(1) { r ->
                 Thread(r, "MikuScanBatcher").apply {
                     priority = Thread.MIN_PRIORITY
                 }
             }
+            val powerMgr = app.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
 
             try {
                 batches.forEach { batch ->
@@ -236,8 +240,10 @@ class LibraryScanService : Service() {
                                     maybeRefreshUi()
                                 }
                             }
-                            // Yield CPU time to audio playback decoder & ALSA buffer threads
-                            Thread.sleep(12)
+                            // Adaptive yield: back off hard while the user is actively using the
+                            // device so the first-boot scan never makes the UI feel laggy; run
+                            // faster when the screen is off. Also always yields to audio threads.
+                            Thread.sleep(if (powerMgr?.isInteractive == true) 55L else 10L)
                         } catch (_: Throwable) {
                             val count = ScanProgress.tagsScanned.addAndGet(batch.size)
                             ScanProgress.updateProgress("", count, totalNew)

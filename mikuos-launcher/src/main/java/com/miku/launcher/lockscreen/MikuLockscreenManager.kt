@@ -239,10 +239,25 @@ object MikuLockscreenManager {
         // fight the Miku overlay lockscreen if they half-succeeded. So gate the entire keyguard-disable
         // path behind an actual privilege check — when not privileged, the Miku lockscreen simply layers
         // as an overlay via the SCREEN_ON/SCREEN_OFF receiver below (no stock-keyguard disable at all).
-        if (RootShell.isAvailable()) {
+        // Platform-signed builds hold WRITE_SECURE_SETTINGS and can disable the stock keyguard
+        // WITHOUT root — the previous root-only gate meant this unrooted (platform-signed) OS just
+        // left the stock keyguard up, so the user saw stock lockscreen instead of ours.
+        val canSecure = runCatching {
+            appContext.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
+        if (RootShell.isAvailable() || canSecure) {
             try {
                 Settings.Secure.putInt(appContext.contentResolver, "lockscreen.disabled", 1)
                 Settings.System.putInt(appContext.contentResolver, "lockscreen.disabled", 1)
+                // Authoritative A14 disable (needs WRITE_SECURE_SETTINGS) — the Settings key alone
+                // isn't always honored; LockPatternUtils.setLockScreenDisabled is.
+                runCatching {
+                    val lpu = Class.forName("com.android.internal.widget.LockPatternUtils")
+                        .getConstructor(android.content.Context::class.java).newInstance(appContext)
+                    lpu.javaClass.getMethod("setLockScreenDisabled", java.lang.Boolean.TYPE, Integer.TYPE)
+                        .invoke(lpu, true, 0)
+                }
                 Settings.System.putString(appContext.contentResolver, Settings.System.TIME_12_24, "24")
                 Settings.Secure.putInt(appContext.contentResolver, "camera_double_tap_power_gesture_disabled", 0)
                 Settings.Secure.putInt(appContext.contentResolver, "camera_gesture_disabled", 0)
