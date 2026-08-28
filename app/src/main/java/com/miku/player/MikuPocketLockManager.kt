@@ -118,23 +118,28 @@ object MikuPocketLockManager {
                 // ==================== LOCK ACTIVE ====================
                 when (fnMode) {
                     "touch_and_key_lock" -> {
-                        // 1. Lock physical keys
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 1) } catch (_: Throwable) {}
-                        // 2. Lock touchscreen digitizer across entire OS
+                        // Root-free digitizer lock (the old setprop no-ops unrooted). +blank screen.
+                        MikuInputLock.setTouch(ctx, enabled = false)
                         RootShell.execFast("setprop vendor.audio.hw.set.disable_touch true")
+                        blankScreen(ctx)
                     }
                     "key_lock" -> {
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 1) } catch (_: Throwable) {}
+                        MikuInputLock.setTouch(ctx, enabled = true)
                         RootShell.execFast("setprop vendor.audio.hw.set.disable_touch false")
                     }
                     "touch_lock" -> {
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 0) } catch (_: Throwable) {}
+                        MikuInputLock.setTouch(ctx, enabled = false)
                         RootShell.execFast("setprop vendor.audio.hw.set.disable_touch true")
+                        blankScreen(ctx)
                     }
                     else -> {
-                        // Default fallback to both
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 1) } catch (_: Throwable) {}
+                        MikuInputLock.setTouch(ctx, enabled = false)
                         RootShell.execFast("setprop vendor.audio.hw.set.disable_touch true")
+                        blankScreen(ctx)
                     }
                 }
 
@@ -147,8 +152,10 @@ object MikuPocketLockManager {
 
                 // 4. Volume wheel rotary encoder (/dev/input/event2)
                 if (!allowVolume && fnMode != "touch_lock") {
+                    MikuInputLock.setWheel(ctx, enabled = false)
                     RootShell.execFast("chmod 000 /dev/input/event2")
                 } else {
+                    MikuInputLock.setWheel(ctx, enabled = true)
                     RootShell.execFast("chmod 660 /dev/input/event2")
                 }
             } else {
@@ -158,6 +165,7 @@ object MikuPocketLockManager {
                     Settings.System.putInt(cr, "media_lock", 0)
                     Settings.System.putInt(cr, "volume_lock", 0)
                 } catch (_: Throwable) {}
+                MikuInputLock.enableAll(ctx)
                 RootShell.execFast("setprop vendor.audio.hw.set.disable_touch false; chmod 666 /dev/input/event*; settings put system media_lock 0; settings put system volume_lock 0")
             }
 
@@ -177,6 +185,19 @@ object MikuPocketLockManager {
                     Log.w(TAG, "HUD launch error: ${t.message}")
                 }
             }
+        }
+    }
+
+    /** Blank the screen on lock (root-free; DEVICE_POWER via the platform key). goToSleep is @hide. */
+    private fun blankScreen(ctx: Context) {
+        try {
+            val pm = ctx.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager ?: return
+            val m = android.os.PowerManager::class.java.getMethod("goToSleep", Long::class.javaPrimitiveType)
+            m.isAccessible = true
+            m.invoke(pm, android.os.SystemClock.uptimeMillis())
+            Log.i(TAG, "blankScreen: goToSleep issued")
+        } catch (t: Throwable) {
+            Log.w(TAG, "blankScreen failed (no DEVICE_POWER?): $t")
         }
     }
 }

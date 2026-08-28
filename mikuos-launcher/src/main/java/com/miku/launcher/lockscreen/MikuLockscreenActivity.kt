@@ -425,37 +425,25 @@ data class MikuNowPlaying(
  * made (app not running) — callers must null-check and degrade gracefully.
  */
 @Composable
-private fun rememberMusicController(): State<MediaController?> {
+private fun rememberMusicController(): State<MikuMediaLink?> {
     val context = LocalContext.current
-    val controllerState = remember { mutableStateOf<MediaController?>(null) }
-    DisposableEffect(Unit) {
-        var future: com.google.common.util.concurrent.ListenableFuture<MediaController>? = null
-        try {
-            val token = SessionToken(
-                context,
-                ComponentName("com.miku.player", "com.miku.player.PlaybackService")
-            )
-            val f = MediaController.Builder(context, token).buildAsync()
-            future = f
-            f.addListener({
-                controllerState.value = try {
-                    f.get()
-                } catch (_: Throwable) {
-                    null
-                }
-            }, ContextCompat.getMainExecutor(context))
-        } catch (_: Throwable) {
-            controllerState.value = null
-        }
-        onDispose {
-            controllerState.value = null
-            try {
-                future?.let { MediaController.releaseFuture(it) }
-            } catch (_: Throwable) {}
+    val controllerState = remember { mutableStateOf<MikuMediaLink?>(null) }
+    // Session-agnostic: poll the platform MediaSessionManager for the ACTIVE media app (Spotify,
+    // Tidal, our player, anything) so the lockscreen surfaces and controls whatever is playing.
+    LaunchedEffect(Unit) {
+        while (true) {
+            controllerState.value = MikuMediaLink.active(context)
+            kotlinx.coroutines.delay(1000)
         }
     }
     return controllerState
 }
+
+private fun appLabelFor(ctx: android.content.Context, pkg: String): String = try {
+    val pm = ctx.packageManager
+    val ai = pm.getApplicationInfo(pkg, 0)
+    pm.getApplicationLabel(ai).toString()
+} catch (_: Throwable) { pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() } }
 
 private fun formatTimeMs(ms: Long): String {
     val totalSec = (ms / 1000).coerceAtLeast(0)
@@ -594,19 +582,21 @@ fun MikuKawaiiLockscreenScreen(
         val cr = context.contentResolver
         while (true) {
             nowPlaying = try {
-                val md = c.mediaMetadata
-                val title = md.title?.toString()
-                val artist = (md.artist ?: md.albumArtist)?.toString() ?: "Hatsune Miku"
-                val album = md.albumTitle?.toString() ?: ""
-                val mediaId = c.currentMediaItem?.mediaId
-                val format = try {
-                    Settings.Global.getString(cr, "miku_now_playing_format") ?: "Direct DTA 24-bit / 96kHz"
-                } catch (_: Throwable) { "Direct DTA 24-bit / 96kHz" }
-                val bpm = try {
-                    Settings.Global.getFloat(cr, "miku_now_playing_bpm", 128f)
-                } catch (_: Throwable) { 128f }
-
-                val isLikedFromSettings = try {
+                val title = c.title
+                val artist = c.artist ?: "Hatsune Miku"
+                val album = c.album ?: ""
+                val mediaId = c.mediaId
+                val isMiku = c.packageName == "com.miku.player"
+                // Our player publishes true format/bpm/like into Settings.Global; for a 3rd-party
+                // app (Spotify etc) show its source rather than a false "DTA" claim.
+                val format = if (isMiku) {
+                    try { Settings.Global.getString(cr, "miku_now_playing_format") ?: "Direct DTA 24-bit / 96kHz" }
+                    catch (_: Throwable) { "Direct DTA 24-bit / 96kHz" }
+                } else appLabelFor(context, c.packageName)
+                val bpm = if (isMiku) {
+                    try { Settings.Global.getFloat(cr, "miku_now_playing_bpm", 128f) } catch (_: Throwable) { 128f }
+                } else 128f
+                val isLikedFromSettings = isMiku && try {
                     Settings.Global.getString(cr, "miku_current_track_liked") == "1"
                 } catch (_: Throwable) { false }
                 localLikedState = isLikedFromSettings
@@ -618,7 +608,7 @@ fun MikuKawaiiLockscreenScreen(
                         artist = artist,
                         album = album,
                         format = format,
-                        durationMs = c.duration.coerceAtLeast(0L)
+                        durationMs = c.durationMs.coerceAtLeast(0L)
                     )
                 }
 
@@ -630,9 +620,9 @@ fun MikuKawaiiLockscreenScreen(
                     album = album,
                     isPlaying = c.isPlaying,
                     isLiked = isLikedFromSettings,
-                    artwork = md.artworkData ?: md.artworkUri,
-                    positionMs = c.currentPosition.coerceAtLeast(0L),
-                    durationMs = c.duration.coerceAtLeast(0L),
+                    artwork = c.artwork,
+                    positionMs = c.positionMs.coerceAtLeast(0L),
+                    durationMs = c.durationMs.coerceAtLeast(0L),
                     format = format,
                     bpm = bpm
                 )

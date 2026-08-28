@@ -72,7 +72,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         const val TOP_STRIP_DP = 20
         const val SHADE_PULL_DP = 24f
         const val PILL_ZONE_W_DP = 132
-        const val PILL_ZONE_H_DP = 24
+        const val PILL_ZONE_H_DP = 30
         const val PILL_W_DP = 104f
         const val PILL_H_DP = 4f
         const val HOME_DP = 24f
@@ -247,7 +247,10 @@ class MikuNotificationShadeService : AccessibilityService() {
             runCatching { windowManager.addView(v, topParams) }.onFailure { Log.w(TAG, "top strip add: $it") }
         }
         pillView = HomePillView(this).also { v ->
-            val p = overlayParams(dp(PILL_ZONE_W_DP.toFloat()).toInt(), pillZoneH, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
+            // Full-width bottom strip so the home swipe is catchable across the whole bottom edge,
+            // not only the centre 132dp (3rd-party apps like Spotify own the centre-bottom). The pill
+            // is still DRAWN centred (onDraw uses width/2), so it looks identical.
+            val p = overlayParams(WindowManager.LayoutParams.MATCH_PARENT, pillZoneH, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL)
             runCatching { windowManager.addView(v, p) }.onFailure { Log.w(TAG, "pill add: $it") }
         }
         overlaysAdded = true
