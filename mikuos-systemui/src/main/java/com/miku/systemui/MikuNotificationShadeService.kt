@@ -205,11 +205,13 @@ class MikuNotificationShadeService : AccessibilityService() {
     private fun suppressStockShade() {
         runCatching {
             val sb = getSystemService(Context.STATUS_BAR_SERVICE)
-            // DISABLE_EXPAND(0x00010000) | DISABLE_NOTIFICATION_ICONS(0x00020000) |
-            // DISABLE_NOTIFICATION_ALERTS(0x00040000)
-            val flags = 0x00010000 or 0x00020000 or 0x00040000
-            sb.javaClass.getMethod("disable", Int::class.javaPrimitiveType).invoke(sb, flags)
-            Log.i(TAG, "stock shade suppressed (DISABLE_EXPAND)")
+            // Block ONLY the stock shade PANEL (DISABLE_EXPAND) so the Miku top-strip shade is the
+            // one that opens. Deliberately do NOT disable notification ALERTS/ICONS — heads-up
+            // popups + notification sounds are a function the Miku shade does not replicate (it only
+            // lists notifications passively), so killing them would lose notifications entirely.
+            val DISABLE_EXPAND = 0x00010000
+            sb.javaClass.getMethod("disable", Int::class.javaPrimitiveType).invoke(sb, DISABLE_EXPAND)
+            Log.i(TAG, "stock shade panel blocked (DISABLE_EXPAND only; alerts/sounds preserved)")
         }.onFailure { Log.w(TAG, "suppressStockShade failed: $it") }
     }
 
