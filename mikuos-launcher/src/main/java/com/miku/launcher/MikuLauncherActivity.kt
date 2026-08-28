@@ -270,6 +270,21 @@ class MikuLauncherActivity : ComponentActivity() {
 
             // Initialize OS-Level Real-Time BPM Engine & Pulsar Light Link
             try {
+                // Ensure the MikuSystemUI accessibility service (the OS nav + notification shade)
+                // is enabled — on a fresh /data the ROM boot-grant doesn't reliably stick, which
+                // leaves the stock SystemUI status bar/shade showing through instead of ours.
+                runCatching {
+                    val comp = "com.miku.systemui/com.miku.systemui.MikuNotificationShadeService"
+                    val cur = android.provider.Settings.Secure.getString(
+                        contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+                    if (!cur.split(":").contains(comp)) {
+                        val updated = if (cur.isBlank()) comp else "$cur:$comp"
+                        android.provider.Settings.Secure.putString(
+                            contentResolver, android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, updated)
+                        android.provider.Settings.Secure.putInt(
+                            contentResolver, android.provider.Settings.Secure.ACCESSIBILITY_ENABLED, 1)
+                    }
+                }
                 com.miku.launcher.bpm.MikuBpmEngine.startListening(applicationContext)
                 com.miku.launcher.PulsarLight.startBpmSync(applicationContext)
             } catch (t: Throwable) {

@@ -189,6 +189,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         super.onServiceConnected()
         addOverlays()
         MikuNotificationStore.ensureEnabled(this)
+        suppressStockShade()
         Log.i(TAG, "MikuNav connected; overlays=$overlaysAdded canGestures=" +
             (serviceInfo?.capabilities?.and(android.accessibilityservice.AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES) != 0))
     }
@@ -201,6 +202,23 @@ class MikuNotificationShadeService : AccessibilityService() {
         removeOverlays()
         try { workThread.quitSafely() } catch (_: Throwable) {}
         super.onDestroy()
+    }
+
+    /**
+     * The AOSP-stock SystemUI we ship still draws its own status bar + pull-down shade, which
+     * competed with the Miku shade ("both stock and our swipe-from-top"). Block the STOCK shade
+     * expansion + notification chrome via StatusBarManager so ONLY the Miku a11y top-strip shade
+     * responds. Our shade is a separate overlay, unaffected by DISABLE_EXPAND.
+     */
+    private fun suppressStockShade() {
+        runCatching {
+            val sb = getSystemService(Context.STATUS_BAR_SERVICE)
+            // DISABLE_EXPAND(0x00010000) | DISABLE_NOTIFICATION_ICONS(0x00020000) |
+            // DISABLE_NOTIFICATION_ALERTS(0x00040000)
+            val flags = 0x00010000 or 0x00020000 or 0x00040000
+            sb.javaClass.getMethod("disable", Int::class.javaPrimitiveType).invoke(sb, flags)
+            Log.i(TAG, "stock shade suppressed (DISABLE_EXPAND)")
+        }.onFailure { Log.w(TAG, "suppressStockShade failed: $it") }
     }
 
     override fun onInterrupt() {}
