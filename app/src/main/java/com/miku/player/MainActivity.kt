@@ -734,7 +734,7 @@ class MainActivity : ComponentActivity() {
             MediaStore.Audio.Media.ALBUM_ID, MediaStore.Audio.Media.TRACK, MediaStore.Audio.Media.ALBUM_ARTIST,
             MediaStore.Audio.Media.DATE_ADDED,
         ).apply { if (hasBitrate) add(MediaStore.Audio.Media.BITRATE) }.toTypedArray()
-        contentResolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, proj,
+        contentResolver.safeQuery(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, proj,
             "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, "${MediaStore.Audio.Media.TITLE} ASC")?.use { c ->
             val iId = c.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val iT = c.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)

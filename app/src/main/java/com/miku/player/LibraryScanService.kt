@@ -66,7 +66,7 @@ class LibraryScanService : Service() {
             // 1. Load known tracks from MediaStore and crash checkpoint
             val known = HashSet<String>()
             try {
-                app.contentResolver.query(
+                app.contentResolver.safeQuery(
                     MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                     arrayOf(MediaStore.Audio.Media.DATA), null, null, null
                 )?.use { c ->
@@ -113,7 +113,7 @@ class LibraryScanService : Service() {
                     val artists = runCatching { LibraryCounts.countDistinct(app, MediaStore.Audio.Media.ARTIST) }.getOrDefault(0)
                     val formats = runCatching {
                         val extMap = mutableMapOf<String, Int>()
-                        app.contentResolver.query(
+                        app.contentResolver.safeQuery(
                             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                             arrayOf(MediaStore.Audio.Media.DATA), "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
                         )?.use { c ->
@@ -331,7 +331,7 @@ object ScanCheckpoint {
 object LibraryCounts {
     fun countTracks(ctx: Context): Int {
         var n = 0
-        ctx.contentResolver.query(
+        ctx.contentResolver.safeQuery(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Media._ID),
             "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
         )?.use { n = it.count }
@@ -340,7 +340,7 @@ object LibraryCounts {
 
     fun countDistinct(ctx: Context, column: String): Int {
         val set = HashSet<String>()
-        ctx.contentResolver.query(
+        ctx.contentResolver.safeQuery(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(column),
             "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
         )?.use { c ->

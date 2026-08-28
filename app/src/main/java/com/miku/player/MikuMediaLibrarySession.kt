@@ -682,7 +682,7 @@ private object MikuMediaStoreFallback {
             if (hasAlbumArtist) add("album_artist")
         }.toTypedArray()
         try {
-            context.contentResolver.query(
+            context.contentResolver.safeQuery(
                 MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
                 projection,
                 "${MediaStore.Audio.Media.IS_MUSIC}=1",

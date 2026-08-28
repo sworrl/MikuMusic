@@ -206,7 +206,7 @@ private fun findFolderArtViaMediaStore(ctx: Context, trackPath: String): Bitmap?
         val proj = arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DISPLAY_NAME, MediaStore.Images.Media.DATA)
         val sel = "${MediaStore.Images.Media.DATA} LIKE ? AND ${MediaStore.Images.Media.DATA} NOT LIKE ?"
         val args = arrayOf("$dir/%", "$dir/%/%")
-        ctx.contentResolver.query(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, sel, args, null)?.use { c ->
+        ctx.contentResolver.safeQuery(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, proj, sel, args, null)?.use { c ->
             val iId = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
             val iName = c.getColumnIndexOrThrow(MediaStore.Images.Media.DISPLAY_NAME)
             var best: Long = -1L; var bestRank = Int.MAX_VALUE; var count = 0; var only: Long = -1L
@@ -244,7 +244,7 @@ private fun loadMediaStoreAlbumArt(ctx: Context, trackId: Long): Bitmap? {
     try {
         val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, trackId)
         var albumId = -1L
-        ctx.contentResolver.query(uri, arrayOf(MediaStore.Audio.Media.ALBUM_ID), null, null, null)?.use { c ->
+        ctx.contentResolver.safeQuery(uri, arrayOf(MediaStore.Audio.Media.ALBUM_ID), null, null, null)?.use { c ->
             if (c.moveToFirst() && !c.isNull(0)) albumId = c.getLong(0)
         }
         if (albumId <= 0) return null

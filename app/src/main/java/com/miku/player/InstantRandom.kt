@@ -48,7 +48,7 @@ object InstantRandom {
         try {
             val uri = android.provider.MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
             val sel = "${android.provider.MediaStore.Audio.Media.IS_MUSIC}!=0"
-            val total = ctx.contentResolver.query(uri, arrayOf(android.provider.MediaStore.Audio.Media._ID), sel, null, null)?.use { it.count } ?: 0
+            val total = ctx.contentResolver.safeQuery(uri, arrayOf(android.provider.MediaStore.Audio.Media._ID), sel, null, null)?.use { it.count } ?: 0
             if (total <= 0) return out
             val rnd = java.util.concurrent.ThreadLocalRandom.current()
             val proj = arrayOf(
@@ -66,7 +66,7 @@ object InstantRandom {
                     putInt(android.content.ContentResolver.QUERY_ARG_LIMIT, 1)
                     putInt(android.content.ContentResolver.QUERY_ARG_OFFSET, rnd.nextInt(total))
                 }
-                ctx.contentResolver.query(uri, proj, args, null)?.use { c ->
+                ctx.contentResolver.safeQuery(uri, proj, args, null)?.use { c ->
                     if (c.moveToFirst()) {
                         val id = c.getLong(0)
                         if (seen.add(id)) out.add(

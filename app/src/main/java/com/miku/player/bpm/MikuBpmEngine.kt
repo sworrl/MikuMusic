@@ -1,5 +1,6 @@
 package com.miku.player.bpm
 
+import com.miku.player.safeQuery
 import com.miku.player.MikuPowerGovernor
 import android.content.Context
 import android.content.Intent
@@ -138,7 +139,7 @@ object MikuBpmEngine {
         if (uri.scheme == null || uri.scheme == "file") return uri.path
         if (uri.scheme == "content") {
             runCatching {
-                context.contentResolver.query(
+                context.contentResolver.safeQuery(
                     uri, arrayOf(android.provider.MediaStore.Audio.Media.DATA), null, null, null
                 )?.use { c -> if (c.moveToFirst()) return c.getString(0) }
             }

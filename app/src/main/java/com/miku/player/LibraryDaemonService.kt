@@ -133,7 +133,7 @@ class LibraryDaemonService : Service() {
             MediaStore.Audio.Media.DATE_ADDED,
         ).apply { if (hasBitrate) add(MediaStore.Audio.Media.BITRATE) }.toTypedArray()
 
-        contentResolver.query(
+        contentResolver.safeQuery(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
             proj,
             "${MediaStore.Audio.Media.IS_MUSIC}!=0",

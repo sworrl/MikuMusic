@@ -30,7 +30,7 @@ object AlarmLibrary {
             MediaStore.Audio.Media.ALBUM, MediaStore.Audio.Media.DURATION, MediaStore.Audio.Media.SIZE,
             MediaStore.Audio.Media.MIME_TYPE, MediaStore.Audio.Media.DATA, MediaStore.Audio.Media.ALBUM_ID
         )
-        ctx.contentResolver.query(
+        ctx.contentResolver.safeQuery(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, proj,
             "${MediaStore.Audio.Media.IS_MUSIC}!=0", null, null
         )?.use { c ->

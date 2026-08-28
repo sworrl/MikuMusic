@@ -64,7 +64,7 @@ fun queryVideos(ctx: Context): List<VideoItem> {
             MediaStore.Video.Media.DURATION, MediaStore.Video.Media.SIZE,
             MediaStore.Video.Media.WIDTH, MediaStore.Video.Media.HEIGHT, MediaStore.Video.Media.DATE_ADDED,
         )
-        ctx.contentResolver.query(
+        ctx.contentResolver.safeQuery(
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI, proj, null, null, "${MediaStore.Video.Media.TITLE} ASC"
         )?.use { c ->
             val iId = c.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
