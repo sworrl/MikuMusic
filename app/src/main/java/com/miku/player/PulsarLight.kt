@@ -442,7 +442,13 @@ object PulsarLight {
 
     private fun batteryIndicatorDual(ctx: Context): Pair<Int, Int> {
         val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? android.os.BatteryManager
-        val level = (bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 50).coerceIn(0, 100)
+        val level = run {
+                    val bi = ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                    val l = bi?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                    val sc = bi?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
+                    if (l >= 0 && sc > 0) (l * 100 / sc).coerceIn(0, 100)
+                    else (bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 50).coerceIn(0, 100)
+                }
         val t = level / 100f
         val r = ((1f - t) * 255f).toInt().coerceIn(0, 255)
         val b = (t * 255f).toInt().coerceIn(0, 255)

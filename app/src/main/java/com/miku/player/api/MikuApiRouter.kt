@@ -230,7 +230,12 @@ class MikuApiRouter(private val context: Context) {
         val volPct = if (maxVol > 0) (curVol * 100) / maxVol else 0
 
         val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
-        val batteryLevel = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val batteryLevel = run {
+            val bi = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            val l = bi?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val sc = bi?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+            if (l >= 0 && sc > 0) l * 100 / sc else bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        }
         val isCharging = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_STATUS) == BatteryManager.BATTERY_STATUS_CHARGING
 
         val dacRate = getDacSampleRate()
