@@ -1,12 +1,16 @@
 package com.m500.hardware
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,10 +33,17 @@ class AmbientBrightnessService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    @Volatile private var lastSampleMs = 0L
+
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context, intent: Intent) {
             when (intent.action) {
                 Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                    // SCREEN_ON and USER_PRESENT arrive back to back on wake;
+                    // two overlapping samples evict each other off the camera.
+                    val now = System.currentTimeMillis()
+                    if (now - lastSampleMs < 3000) return
+                    lastSampleMs = now
                     scope.launch {
                         try {
                             val applied = AmbientBrightnessManager.sampleAndApply(ctx)
@@ -48,6 +59,10 @@ class AmbientBrightnessService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Must be a FOREGROUND service: a plain background service in a
+        // non-foreground app is killed by A14 within hours and the screen-on
+        // receiver dies with it (verified: pidof empty, stale ServiceRecord).
+        startForeground(NOTIF_ID, buildNotification())
         if (!AmbientCamera.isAvailable(this)) {
             // No camera enumerable - the whole feature is inert on this
             // hardware. Stop rather than sit resident doing nothing.
@@ -73,12 +88,33 @@ class AmbientBrightnessService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun buildNotification(): android.app.Notification {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Ambient light sensor",
+                NotificationManager.IMPORTANCE_MIN).apply { setShowBadge(false) })
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Ambient light sensor")
+            .setContentText("Adjusting brightness on wake")
+            .setSmallIcon(android.R.drawable.ic_menu_compass)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .build()
+    }
+
     companion object {
         private const val TAG = "AmbientBrightnessSvc"
+        private const val CHANNEL_ID = "ambient_brightness"
+        private const val NOTIF_ID = 4102
 
         fun start(ctx: Context) {
             try {
-                ctx.startService(Intent(ctx, AmbientBrightnessService::class.java))
+                val i = Intent(ctx, AmbientBrightnessService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ctx.startForegroundService(i)
+                } else {
+                    ctx.startService(i)
+                }
             } catch (t: Throwable) {
                 Log.w(TAG, "could not start ambient brightness service", t)
             }

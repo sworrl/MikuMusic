@@ -12,6 +12,9 @@
          The M500 has no ALS. No image is stored or transmitted. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
 
@@ -150,10 +153,17 @@
             </intent-filter>
         </service>
 
+        <!-- Exported so the baked boot-exec (shell) can start it; foreground so
+             A14 does not reap the screen-on receiver it hosts. -->
         <service
             android:name=".AmbientBrightnessService"
-            android:exported="false"
-            android:description="@string/app_name" />
+            android:exported="true"
+            android:foregroundServiceType="camera|specialUse"
+            android:description="@string/app_name">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Camera-derived ambient light auto-brightness (device has no ALS)" />
+        </service>
 
         <service
             android:name=".PocketLockService"
