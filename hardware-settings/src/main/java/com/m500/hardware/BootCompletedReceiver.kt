@@ -37,14 +37,13 @@ class BootCompletedReceiver : BroadcastReceiver() {
                     Log.e(TAG, "Failed to restore Pulsar LED on boot", e)
                 }
 
-                // Camera-derived ambient light -> screen brightness. The M500 has
-                // no ALS (docs/01_hardware_and_sensors_report.md); this service
-                // stops itself immediately if no camera is enumerable.
-                try {
-                    AmbientBrightnessService.start(context)
-                } catch (e: Throwable) {
-                    Log.e(TAG, "Failed to start ambient brightness service", e)
-                }
+                // Ambient brightness service is deliberately NOT started here.
+                // A14 stamps while-in-use camera eligibility on the service's
+                // FIRST start, and a BOOT_COMPLETED start is ineligible forever
+                // (verified live: even later TOP-context re-starts could not
+                // upgrade the running process). The MikuOS launcher pokes the
+                // service from onResume (TOP = eligible), and the baked boot
+                // exec starts it from shell context (allow-listed = eligible).
             }
         }
     }
