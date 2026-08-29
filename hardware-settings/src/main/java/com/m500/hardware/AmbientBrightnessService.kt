@@ -44,6 +44,7 @@ class AmbientBrightnessService : Service() {
                     val now = System.currentTimeMillis()
                     if (now - lastSampleMs < 3000) return
                     lastSampleMs = now
+                    if (!cameraTypeForeground) goForeground()
                     scope.launch {
                         try {
                             val applied = AmbientBrightnessManager.sampleAndApply(ctx)
@@ -57,12 +58,41 @@ class AmbientBrightnessService : Service() {
         }
     }
 
+    /** True once startForeground succeeded WITH the camera type (needed for
+     *  camera access from the background). */
+    @Volatile private var cameraTypeForeground = false
+
+    /**
+     * A14 forbids a camera-type FGS started from BOOT_COMPLETED unless the app
+     * is while-in-use exempt (e.g. SYSTEM_ALERT_WINDOW appop granted) - it
+     * throws SecurityException from startForeground (seen live: 2 boot crashes).
+     * Try camera type first; degrade to specialUse instead of crashing, and
+     * re-try the camera upgrade on each screen-on until it sticks.
+     */
+    private fun goForeground() {
+        val notif = buildNotification()
+        try {
+            startForeground(NOTIF_ID, notif,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA or
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            cameraTypeForeground = true
+        } catch (t: Throwable) {
+            Log.w(TAG, "camera-type FGS refused (boot start?); degrading to specialUse")
+            try {
+                startForeground(NOTIF_ID, notif,
+                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } catch (t2: Throwable) {
+                Log.w(TAG, "specialUse FGS also refused; running non-foreground", t2)
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         // Must be a FOREGROUND service: a plain background service in a
         // non-foreground app is killed by A14 within hours and the screen-on
         // receiver dies with it (verified: pidof empty, stale ServiceRecord).
-        startForeground(NOTIF_ID, buildNotification())
+        goForeground()
         if (!AmbientCamera.isAvailable(this)) {
             // No camera enumerable - the whole feature is inert on this
             // hardware. Stop rather than sit resident doing nothing.
