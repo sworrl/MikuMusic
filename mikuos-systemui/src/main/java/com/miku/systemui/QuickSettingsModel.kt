@@ -48,8 +48,10 @@ object QuickSettingsModel {
         val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         val isEnabled = wm?.isWifiEnabled == true
         val info = wm?.connectionInfo
+        // Associated (not just radio-on) — subtitle said "Connected" whenever the radio was on.
+        val associated = isEnabled && (info?.networkId ?: -1) != -1
         val rawSsid = info?.ssid?.replace("\"", "") ?: ""
-        val ssid = if (rawSsid.isBlank() || rawSsid == "<unknown ssid>") "Wi-Fi" else rawSsid
+        val ssid = if (!associated || rawSsid.isBlank() || rawSsid == "<unknown ssid>") "Wi-Fi" else rawSsid
         val rssi = info?.rssi ?: -100
         val level = WifiManager.calculateSignalLevel(rssi, 5)
         return Triple(isEnabled, ssid, level)
@@ -67,10 +69,14 @@ object QuickSettingsModel {
         var connectedName = ""
         if (isEnabled && bt != null) {
             runCatching {
-                val bonded = bt.bondedDevices
-                val firstConnected = bonded?.firstOrNull()
-                if (firstConnected != null) {
-                    connectedName = runCatching { firstConnected.name }.getOrNull() ?: "Paired Device"
+                // Real CONNECTED device (was showing any PAIRED device as "Active").
+                val a2dp = bt.getProfileConnectionState(android.bluetooth.BluetoothProfile.A2DP)
+                val hs = bt.getProfileConnectionState(android.bluetooth.BluetoothProfile.HEADSET)
+                if (a2dp == android.bluetooth.BluetoothProfile.STATE_CONNECTED ||
+                    hs == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                    connectedName = bt.bondedDevices?.firstOrNull {
+                        bt.getProfileConnectionState(android.bluetooth.BluetoothProfile.A2DP) == android.bluetooth.BluetoothProfile.STATE_CONNECTED
+                    }?.let { runCatching { it.name }.getOrNull() } ?: "Connected"
                 }
             }
         }

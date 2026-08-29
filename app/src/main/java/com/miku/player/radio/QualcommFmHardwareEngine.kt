@@ -143,6 +143,11 @@ class QualcommFmHardwareEngine(private val context: Context) {
                     getStationMethod?.invoke(fmReceiverInstance) as? Int ?: currentFrequencyKHz.value
                 } catch (_: Throwable) { currentFrequencyKHz.value }
                 if (freq > 0) currentFrequencyKHz.value = freq
+                // Real RSSI read (was hardcoded 68) — getRssiMethod was resolved but never invoked.
+                try { (getRssiMethod?.invoke(fmReceiverInstance) as? Int)?.let { if (it in 0..127) rssi.value = it } } catch (_: Throwable) {}
+            }
+            methodName.contains("Rssi", ignoreCase = true) || methodName.contains("SignalStrength", ignoreCase = true) -> {
+                try { (getRssiMethod?.invoke(fmReceiverInstance) as? Int)?.let { if (it in 0..127) rssi.value = it } } catch (_: Throwable) {}
             }
             methodName.contains("Rds", ignoreCase = true) || methodName.contains("RadioText", ignoreCase = true) -> {
                 val rt = try {

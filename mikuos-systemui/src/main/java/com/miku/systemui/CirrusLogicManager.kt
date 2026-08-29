@@ -323,8 +323,8 @@ object CirrusLogicManager {
         val audit = mutableMapOf<String, String>()
         audit["kernel_sysfs_filter"] = readSysfs(ctx, "digital_filter") ?: "N/A"
         audit["kernel_sysfs_gain"] = readSysfs(ctx, "gain") ?: "N/A"
-        audit["kernel_sysfs_dre"] = readSysfs(ctx, "dre") ?: "N/A"
-        audit["kernel_sysfs_turbo"] = readSysfs(ctx, "audio_turbo") ?: "N/A"
+        audit["kernel_sysfs_dre"] = readSysfs(ctx, "dre_mode") ?: "N/A"
+        audit["kernel_sysfs_turbo"] = readSysfs(ctx, "high_power_mode") ?: "N/A"
         audit["kernel_sysfs_out_mode"] = readSysfs(ctx, "out_mode") ?: "N/A"
         audit["kernel_sysfs_balance"] = readSysfs(ctx, "lr_balance") ?: "N/A"
         audit["prop_hw_filter"] = RootShell.execOut("getprop vendor.audio.hiby.hw.digital_filter") ?: "N/A"

@@ -614,7 +614,18 @@ object MikuNetworkService {
         val isSimReady = simState == TelephonyManager.SIM_STATE_READY
         var cellLevel5 = 4
         var cellDbm = -95
-        var cellNetworkType = "LTE+ 4G"
+        // Real network type from the modem (READ_PHONE_STATE) — was hardcoded "LTE+ 4G".
+        var cellNetworkType = try {
+            val nt = tm?.let { if (android.os.Build.VERSION.SDK_INT >= 30) it.dataNetworkType else @Suppress("DEPRECATION") it.networkType } ?: 0
+            when (nt) {
+                android.telephony.TelephonyManager.NETWORK_TYPE_NR -> "5G"
+                android.telephony.TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+                android.telephony.TelephonyManager.NETWORK_TYPE_HSPAP -> "H+"
+                android.telephony.TelephonyManager.NETWORK_TYPE_HSPA, android.telephony.TelephonyManager.NETWORK_TYPE_HSDPA, android.telephony.TelephonyManager.NETWORK_TYPE_HSUPA, android.telephony.TelephonyManager.NETWORK_TYPE_UMTS -> "3G"
+                android.telephony.TelephonyManager.NETWORK_TYPE_EDGE, android.telephony.TelephonyManager.NETWORK_TYPE_GPRS -> "2G"
+                else -> ""
+            }
+        } catch (_: Throwable) { "" }
 
         try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -642,7 +653,7 @@ object MikuNetworkService {
             signalDbm = cellDbm,
             signalLevel5 = cellLevel5,
             signalPct = cellPct,
-            lteBand = "LTE B4/B66",
+            lteBand = cellNetworkType,
             simStateLabel = "DATA-ONLY SIM ACTIVE (VOICE NAGS SHIELDED)"
         )
 
@@ -653,7 +664,7 @@ object MikuNetworkService {
             cellular = cellState,
             activeTransport = activeTransport,
             isInternetReachable = true,
-            latencyMs = 12L,
+            latencyMs = measurePingMs(),
             lastUpdated = System.currentTimeMillis()
         )
 
@@ -667,10 +678,10 @@ object MikuNetworkService {
                     wifiSsid = if (isWifi) cleanSsid else null,
                     wifiFreqMhz = if (isWifi) freq else null,
                     wifiLinkSpeedMbps = if (isWifi) wifiInfo?.linkSpeed else null,
-                    cellularDbm = -95,
-                    cellularType = "LTE",
+                    cellularDbm = if (isSimReady) cellDbm else null,
+                    cellularType = cellNetworkType.ifEmpty { "—" },
                     cellularOperator = simOperator,
-                    isConnected = true
+                    isConnected = isWifi || isSimReady
                 )
             )
         } catch (_: Throwable) {}
@@ -879,4 +890,14 @@ object MikuNetworkService {
             else -> 0
         }
     }
+
+    /** Best-effort real RTT (ms) via a short socket connect to a DNS host — replaces the old
+     *  hardcoded 12ms "ping". Returns the measured value, or -1 when unreachable. */
+    private fun measurePingMs(): Long = try {
+        val host = java.net.InetSocketAddress("1.1.1.1", 53)
+        val t0 = System.nanoTime()
+        java.net.Socket().use { it.connect(host, 800) }
+        ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+    } catch (_: Throwable) { -1L }
+
 }

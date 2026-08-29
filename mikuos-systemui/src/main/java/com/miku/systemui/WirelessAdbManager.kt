@@ -11,8 +11,13 @@ object WirelessAdbManager {
     private const val DEFAULT_PORT = 5555
 
     fun isEnabled(): Boolean {
-        val port = RootShell.execOut("getprop service.adb.tcp.port")?.trim() ?: "-1"
-        return port == "$DEFAULT_PORT" || (port.toIntOrNull() ?: -1) > 0
+        // Read the real port via SystemProperties (reflection) — readable without root; the old
+        // RootShell getprop returned null on this no-root OS so the tile was permanently "Off".
+        val port = try {
+            Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+                .invoke(null, "service.adb.tcp.port") as? String
+        } catch (_: Throwable) { null }?.trim() ?: "-1"
+        return (port.toIntOrNull() ?: -1) > 0
     }
 
     suspend fun setEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {

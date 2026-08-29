@@ -2377,6 +2377,14 @@ fun BatteryScreen(ctx: Context) {
         else bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 1..100 } ?: 0
     }
     val currentMa = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)?.let { it / 1000 } ?: 0
+    val batHealth = remember {
+        val h = try { ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(android.os.BatteryManager.EXTRA_HEALTH, 0) ?: 0 } catch (_: Throwable) { 0 }
+        when (h) { 2 -> "Good"; 3 -> "Overheat"; 4 -> "Dead"; 5 -> "Over-volt"; 6 -> "Failure"; 7 -> "Cold"; else -> "—" }
+    }
+    val batStatus = remember {
+        val st = try { ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, 0) ?: 0 } catch (_: Throwable) { 0 }
+        when (st) { 2 -> "Charging"; 3 -> "Discharging"; 4 -> "Not charging"; 5 -> "Full"; else -> "—" }
+    }
 
     Column(Modifier.mikuHeroCard().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -2397,8 +2405,8 @@ fun BatteryScreen(ctx: Context) {
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             MetricPill(label = "CURRENT", value = "${currentMa} mA")
-            MetricPill(label = "HEALTH", value = "Good")
-            MetricPill(label = "STATUS", value = "Optimal")
+            MetricPill(label = "HEALTH", value = batHealth)
+            MetricPill(label = "STATUS", value = batStatus)
         }
     }
 }

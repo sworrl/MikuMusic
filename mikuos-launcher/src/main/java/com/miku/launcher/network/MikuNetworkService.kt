@@ -700,7 +700,7 @@ object MikuNetworkService {
             cellular = cellState,
             activeTransport = activeTransport,
             isInternetReachable = internetReachable,
-            latencyMs = 12L,
+            latencyMs = measurePingMs(),
             lastUpdated = System.currentTimeMillis()
         )
 
@@ -714,10 +714,10 @@ object MikuNetworkService {
                     wifiSsid = if (isWifi) cleanSsid else null,
                     wifiFreqMhz = if (isWifi) freq else null,
                     wifiLinkSpeedMbps = if (isWifi) wifiInfo?.linkSpeed else null,
-                    cellularDbm = -95,
-                    cellularType = "LTE",
+                    cellularDbm = if (isSimReady) cellDbm else null,
+                    cellularType = cellNetworkType.ifEmpty { "—" },
                     cellularOperator = simOperator,
-                    isConnected = true
+                    isConnected = isWifi || dataConnected
                 )
             )
         } catch (_: Throwable) {}
@@ -926,4 +926,14 @@ object MikuNetworkService {
             else -> 0
         }
     }
+
+    /** Best-effort real RTT (ms) via a short socket connect to a DNS host — replaces the old
+     *  hardcoded 12ms "ping". Returns the measured value, or -1 when unreachable. */
+    private fun measurePingMs(): Long = try {
+        val host = java.net.InetSocketAddress("1.1.1.1", 53)
+        val t0 = System.nanoTime()
+        java.net.Socket().use { it.connect(host, 800) }
+        ((System.nanoTime() - t0) / 1_000_000L).coerceAtLeast(1L)
+    } catch (_: Throwable) { -1L }
+
 }
