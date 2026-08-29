@@ -108,7 +108,14 @@ class AmbientBrightnessService : Service() {
         Log.i(TAG, "ambient brightness service started")
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // While-in-use camera eligibility is stamped per start attempt: a
+        // BOOT_COMPLETED start is ineligible forever, but a later start from a
+        // TOP app (the MikuOS launcher pokes us on every resume) or shell is
+        // eligible - retry the camera-type upgrade on each start command.
+        if (!cameraTypeForeground) goForeground()
+        return START_STICKY
+    }
 
     override fun onDestroy() {
         try { unregisterReceiver(screenReceiver) } catch (_: Throwable) {}

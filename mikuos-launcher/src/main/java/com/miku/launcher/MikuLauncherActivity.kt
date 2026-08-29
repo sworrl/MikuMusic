@@ -329,6 +329,23 @@ class MikuLauncherActivity : ComponentActivity() {
         hideSystemBars()
         com.miku.launcher.ui.MikuLaunchSource.onHomeReturn()
         com.miku.launcher.ui.MikuAmbient.touch()
+        pokeAmbientBrightnessService()
+    }
+
+    // A14 stamps while-in-use camera eligibility per service-start: a
+    // BOOT_COMPLETED start leaves the ambient-light service unable to open the
+    // camera forever. A start from the TOP app (us, the home screen) IS
+    // eligible, so poke it on resume; its onStartCommand retries the
+    // camera-type foreground upgrade. Throttled - resume fires constantly.
+    private var lastAmbientPokeMs = 0L
+    private fun pokeAmbientBrightnessService() {
+        val now = System.currentTimeMillis()
+        if (now - lastAmbientPokeMs < 60_000) return
+        lastAmbientPokeMs = now
+        try {
+            startForegroundService(android.content.Intent().setClassName(
+                "com.m500.hardware", "com.m500.hardware.AmbientBrightnessService"))
+        } catch (_: Throwable) { /* app absent or start refused - fine */ }
     }
     // Any touch (re)arms the ambient-animation attention window (see ui/MikuAmbient.kt).
     override fun dispatchTouchEvent(ev: android.view.MotionEvent?): Boolean {
