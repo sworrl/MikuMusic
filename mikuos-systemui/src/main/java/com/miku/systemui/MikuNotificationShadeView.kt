@@ -182,13 +182,16 @@ fun MikuNotificationShadeView(
         while (true) {
             currentTime = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
             currentDate = SimpleDateFormat("MM / dd / yyyy", Locale.getDefault()).format(Date())
-            val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-            batteryPct = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: batteryPct
-            isCharging = runCatching {
-                val st = ctx.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-                    ?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-                st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
-            }.getOrDefault(false)
+            // Battery from the sticky ACTION_BATTERY_CHANGED (level/scale) — BATTERY_PROPERTY_CAPACITY
+            // returns 0/wrong for apps on this vendor, which showed a fake % in the shade.
+            runCatching {
+                val bi = ctx.registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                val lvl = bi?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                val scale = bi?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                if (lvl >= 0 && scale > 0) batteryPct = lvl * 100 / scale
+                val st = bi?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                isCharging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
+            }
             media = withContext(Dispatchers.IO) { runCatching { MikuMediaHub.now(ctx) }.getOrNull() }
             delay(MikuPowerProfile.pollMs(1000L))
         }

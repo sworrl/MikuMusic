@@ -25,6 +25,33 @@ object PlayerPreferences {
     // feeds TasteEngine. isLiked stays "count > 0" so all existing heart UI keeps working, and
     // existing boolean likes migrate lazily to a count of 1.
     private const val KEY_HEART_PREFIX = "heart_count_"
+    // Per-like event log: "<epochMs>:<fractionPct>:<q>" (q=1 if a full-listen), ";"-joined, capped.
+    // This is the "how much + WHEN" signal the taste algo reads — likes are NEVER gated, the play
+    // fraction is just a weight.
+    private const val KEY_HEART_EVENTS = "heart_events_"
+
+    fun appendHeartEvent(context: Context, id: Long, epochMs: Long, fractionPct: Int, qualified: Boolean) {
+        val p = prefs(context); val key = KEY_HEART_EVENTS + id
+        val cur = p.getString(key, "") ?: ""
+        val ev = "$epochMs:${fractionPct.coerceIn(0,100)}:${if (qualified) 1 else 0}"
+        val list = (if (cur.isBlank()) listOf() else cur.split(";")) + ev
+        val capped = if (list.size > 60) list.takeLast(60) else list
+        p.edit().putString(key, capped.joinToString(";")).apply()
+    }
+
+    /** Returns (epochMs, fraction0to1, qualified) per like, oldest first. */
+    fun getHeartEvents(context: Context, id: Long): List<Triple<Long, Float, Boolean>> {
+        val raw = prefs(context).getString(KEY_HEART_EVENTS + id, "") ?: ""
+        if (raw.isBlank()) return emptyList()
+        return raw.split(";").mapNotNull {
+            val f = it.split(":"); if (f.size < 3) return@mapNotNull null
+            val e = f[0].toLongOrNull() ?: return@mapNotNull null
+            Triple(e, (f[1].toIntOrNull() ?: 0) / 100f, f[2] == "1")
+        }
+    }
+
+    fun clearHeartEvents(context: Context, id: Long) { prefs(context).edit().remove(KEY_HEART_EVENTS + id).apply() }
+
 
     fun getHeartCount(context: Context, id: Long): Int {
         val p = prefs(context)

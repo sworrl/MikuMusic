@@ -631,7 +631,19 @@ object MikuNetworkService {
         val isSimReady = simState == TelephonyManager.SIM_STATE_READY
         var cellLevel5 = 4
         var cellDbm = -95
-        var cellNetworkType = "LTE+ 4G"
+        // Real network type from the modem (READ_PHONE_STATE granted) — was hardcoded "LTE+ 4G".
+        var cellNetworkType = try {
+            val nt = tm?.let { if (android.os.Build.VERSION.SDK_INT >= 30) it.dataNetworkType else @Suppress("DEPRECATION") it.networkType } ?: 0
+            when (nt) {
+                android.telephony.TelephonyManager.NETWORK_TYPE_NR -> "5G"
+                android.telephony.TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+                android.telephony.TelephonyManager.NETWORK_TYPE_HSPAP -> "H+"
+                android.telephony.TelephonyManager.NETWORK_TYPE_HSPA, android.telephony.TelephonyManager.NETWORK_TYPE_HSDPA, android.telephony.TelephonyManager.NETWORK_TYPE_HSUPA, android.telephony.TelephonyManager.NETWORK_TYPE_UMTS -> "3G"
+                android.telephony.TelephonyManager.NETWORK_TYPE_EDGE, android.telephony.TelephonyManager.NETWORK_TYPE_GPRS -> "2G"
+                android.telephony.TelephonyManager.NETWORK_TYPE_UNKNOWN -> ""
+                else -> "4G"
+            }
+        } catch (_: Throwable) { "" }
 
         try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -675,7 +687,7 @@ object MikuNetworkService {
             signalDbm = cellDbm,
             signalLevel5 = cellLevel5,
             signalPct = cellPct,
-            lteBand = "LTE B4/B66",
+            lteBand = cellNetworkType,
             simStateLabel = if (hasCellSignal && !dataConnected) "SIGNAL OK · NO DATA (check APN)"
                             else if (dataConnected) "DATA ACTIVE"
                             else "NO SERVICE"

@@ -1505,13 +1505,8 @@ fun NowPlayingHeart(track: Track, size: androidx.compose.ui.unit.Dp = 42.dp) {
         earnable = earnable,
         badgeCount = count,
         onToggle = {
-            val n = LikeStore.heart(ctx, track)   // +1 only when earnable
-            if (n >= 0) { count = n; earnable = false }
-            else android.widget.Toast.makeText(
-                ctx,
-                if (count > 0) "♥ ${count} — play it through again to add another" else "Listen to 94% to earn a ♥",
-                android.widget.Toast.LENGTH_SHORT
-            ).show()
+            // Always allowed — like anytime. The play fraction is recorded as a WEIGHT, not a gate.
+            count = LikeStore.heart(ctx, track); earnable = MikuPlayQualifier.isHeartable(track.id)
         },
         onLongPress = {
             LikeStore.clearHearts(ctx, track); count = 0; earnable = MikuPlayQualifier.isHeartable(track.id)

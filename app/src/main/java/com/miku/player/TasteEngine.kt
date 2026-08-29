@@ -42,8 +42,7 @@ object TasteEngine {
      * you played through and hearted many times outranks one hearted once, which is exactly what
      * feeds smart shuffle / recommendations.
      */
-    fun heartScore(ctx: Context, id: Long): Float =
-        (LikeStore.heartCount(ctx, id).toFloat() / 10f).coerceIn(0f, 1f)
+    fun heartScore(ctx: Context, id: Long): Float = LikeStore.heartAffinity(ctx, id)
 
     /** Heart-weighted fraction of an entity's tracks: each track contributes by heart intensity
      *  (min 3 hearts = full weight) rather than a flat liked/not-liked, so heavily-hearted tracks
@@ -52,7 +51,7 @@ object TasteEngine {
         if (tracks.isEmpty()) return 0f
         if (ctx == null) return tracks.count { LikeStore.isLiked(it.id) }.toFloat() / tracks.size
         var acc = 0f
-        for (t in tracks) acc += (LikeStore.heartCount(ctx, t.id).coerceAtMost(3)).toFloat() / 3f
+        for (t in tracks) acc += LikeStore.heartAffinity(ctx, t.id)   // weighted by how-much + when
         return (acc / tracks.size).coerceIn(0f, 1f)
     }
 

@@ -131,12 +131,17 @@ fun MikuPowerMenuScreen(
                     (ctx as? Activity)?.finish()
                 }
                 "reboot -p" -> {
-                    try {
-                        val shutdownIntent = Intent("android.intent.action.ACTION_REQUEST_SHUTDOWN")
-                        shutdownIntent.putExtra("android.intent.extra.KEY_CONFIRM", false)
-                        shutdownIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                        ctx.startActivity(shutdownIntent)
-                    } catch (_: Throwable) {}
+                    // PowerManager.shutdown(confirm, reason, wait) is @hide but callable with REBOOT
+                    // perm (which we hold); the ACTION_REQUEST_SHUTDOWN startActivity never resolved.
+                    val ok = runCatching {
+                        val m = android.os.PowerManager::class.java.getMethod("shutdown", Boolean::class.javaPrimitiveType, String::class.java, Boolean::class.javaPrimitiveType)
+                        m.invoke(pm, false, "userrequested", false); true
+                    }.getOrDefault(false)
+                    if (!ok) runCatching {
+                        ctx.sendBroadcast(Intent("android.intent.action.ACTION_REQUEST_SHUTDOWN").apply {
+                            putExtra("android.intent.extra.KEY_CONFIRM", false); flags = Intent.FLAG_RECEIVER_FOREGROUND
+                        })
+                    }
                 }
                 else -> {
                     val reason = when (command) {
@@ -146,7 +151,11 @@ fun MikuPowerMenuScreen(
                     }
                     try {
                         pm?.reboot(reason)
-                    } catch (_: Throwable) {}
+                    } catch (t: Throwable) {
+                        android.util.Log.e("MikuPowerMenu", "reboot($reason) failed", t)
+                        // fallback: request reboot via the recovery/bootloader path or a shell as last resort
+                        runCatching { Runtime.getRuntime().exec(arrayOf("svc", "power", "reboot", reason ?: "")) }
+                    }
                 }
             }
         }
@@ -155,8 +164,10 @@ fun MikuPowerMenuScreen(
     // Battery level telemetry
     val batteryPct = remember {
         try {
-            val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
-            bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
+            val bi = ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            val lvl = bi?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = bi?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+            if (lvl >= 0 && scale > 0) lvl * 100 / scale else 100
         } catch (_: Throwable) { 100 }
     }
 

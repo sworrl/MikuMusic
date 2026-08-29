@@ -54,12 +54,15 @@ object LikeStore {
     fun heartCount(ctx: Context, id: Long): Int = PlayerPreferences.getHeartCount(ctx, id)
 
     /**
-     * Earn a heart for the CURRENT play. Only succeeds when the play qualified (>=94%, no skip)
-     * and the user hasn't already spent this play's heart — that is the whole new model: hearts
-     * are earned by listening. Returns the new cumulative count, or -1 when not currently earnable.
+     * Register a heart for a track. ALWAYS allowed — the user can like anytime (incl. before 94%
+     * and for songs heard before). The 94%-without-skip is NOT a gate; it's a WEIGHT recorded on
+     * the like ("how much of it they'd heard, and WHEN"), which the taste algo reads (TasteEngine).
+     * Each tap is one like event (timestamp + play-fraction + qualified). Returns the new count.
      */
     fun heart(ctx: Context, track: Track): Int {
-        if (!MikuPlayQualifier.isHeartable(track.id)) return -1
+        val fraction = MikuPlayQualifier.currentFraction(track.id)
+        val qualified = MikuPlayQualifier.isQualified(track.id)
+        PlayerPreferences.appendHeartEvent(ctx, track.id, System.currentTimeMillis(), (fraction * 100f).toInt(), qualified)
         val n = PlayerPreferences.getHeartCount(ctx, track.id) + 1
         PlayerPreferences.setHeartCount(ctx, track.id, n)         // also flips the boolean liked set
         if (!liked.contains(track.id)) liked.add(track.id)
@@ -73,9 +76,26 @@ object LikeStore {
         return n
     }
 
+    /** Weighted affinity from the like-event log: base + how-much-heard, with mild recency decay,
+     *  saturating so a heavily-loved track outranks a one-tap like. Read by TasteEngine. */
+    fun heartAffinity(ctx: Context, id: Long): Float {
+        val events = PlayerPreferences.getHeartEvents(ctx, id)
+        if (events.isEmpty()) return if (isLiked(id)) 0.6f else 0f
+        val now = System.currentTimeMillis()
+        var acc = 0f
+        for ((epoch, frac, q) in events) {
+            val ageDays = ((now - epoch).coerceAtLeast(0L)) / 86_400_000f
+            val recency = (1f - ageDays / 365f).coerceIn(0.4f, 1f)   // never below 0.4 — a like still counts
+            val strength = 0.45f + 0.45f * frac + (if (q) 0.10f else 0f)  // full-listen like ~= 1.0
+            acc += strength * recency
+        }
+        return (acc / 2.5f).coerceIn(0f, 1f)   // ~3 solid likes saturates
+    }
+
     /** Remove ALL hearts for a track (un-like). Long-press / explicit clear. */
     fun clearHearts(ctx: Context, track: Track) {
         PlayerPreferences.setHeartCount(ctx, track.id, 0)          // flips liked off
+        PlayerPreferences.clearHeartEvents(ctx, track.id)
         liked.remove(track.id)
         PlayerPreferences.removeLikedTrackMeta(ctx, track.id)
         broadcastLike(ctx, track.id, false, 0)

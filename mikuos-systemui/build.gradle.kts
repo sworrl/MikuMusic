@@ -15,7 +15,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 105
-        versionName = "0.1.12"
+        versionName = "0.1.13"
     }
 
     val signingProps = Properties().apply {

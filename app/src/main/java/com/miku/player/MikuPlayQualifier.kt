@@ -22,11 +22,12 @@ object MikuPlayQualifier {
     @Volatile private var skipped = false
     @Volatile private var heartedThisPlay = false
     @Volatile private var lastPosMs = 0L
+    @Volatile private var durMs = 0L
 
     /** A (possibly new) track became current — reset qualification for the fresh play. */
     fun onTrackStart(id: Long) {
         if (id == trackId) return
-        trackId = id; qualified = false; skipped = false; heartedThisPlay = false; lastPosMs = 0L
+        trackId = id; qualified = false; skipped = false; heartedThisPlay = false; lastPosMs = 0L; durMs = 0L
     }
 
     /** User seeked. A big forward jump disqualifies this play (can't scrub to earn a heart). */
@@ -40,6 +41,7 @@ object MikuPlayQualifier {
     fun onProgress(id: Long, positionMs: Long, durationMs: Long) {
         if (id != trackId) onTrackStart(id)
         lastPosMs = positionMs
+        durMs = durationMs
         if (durationMs > 0 && !skipped && positionMs >= (durationMs * THRESHOLD).toLong()) qualified = true
     }
 
@@ -48,6 +50,13 @@ object MikuPlayQualifier {
 
     /** True once the current play has crossed the threshold (whether or not hearted yet). */
     fun isQualified(id: Long): Boolean = id == trackId && qualified
+
+    /** How much of the current play the user has heard, 0..1 — the "how much" gauge on a like. */
+    fun currentFraction(id: Long): Float =
+        if (id == trackId && durMs > 0) (lastPosMs.toFloat() / durMs).coerceIn(0f, 1f) else 0f
+
+    /** Was this play skipped/scrubbed (so a like here is a lower-confidence signal)? */
+    fun wasSkipped(id: Long): Boolean = id == trackId && skipped
 
     fun markHearted(id: Long) { if (id == trackId) heartedThisPlay = true }
 
