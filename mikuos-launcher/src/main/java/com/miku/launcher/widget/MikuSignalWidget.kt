@@ -76,6 +76,14 @@ class MikuSignalWidget : AppWidgetProvider() {
             val cellLevel = try { tm?.signalStrength?.level?.coerceIn(0, 4) ?: 0 } catch (_: Throwable) { 0 }
             @Suppress("DEPRECATION")
             val dataConnected = try { tm?.dataState == TelephonyManager.DATA_CONNECTED } catch (_: Throwable) { false }
+            val netType = try {
+                when (if (android.os.Build.VERSION.SDK_INT >= 30) tm?.dataNetworkType else @Suppress("DEPRECATION") tm?.networkType) {
+                    TelephonyManager.NETWORK_TYPE_NR -> "5G"; TelephonyManager.NETWORK_TYPE_LTE -> "LTE"
+                    TelephonyManager.NETWORK_TYPE_HSPAP -> "H+"
+                    TelephonyManager.NETWORK_TYPE_HSPA, TelephonyManager.NETWORK_TYPE_HSDPA, TelephonyManager.NETWORK_TYPE_HSUPA, TelephonyManager.NETWORK_TYPE_UMTS -> "3G"
+                    TelephonyManager.NETWORK_TYPE_EDGE, TelephonyManager.NETWORK_TYPE_GPRS -> "2G"; else -> "CELL"
+                }
+            } catch (_: Throwable) { "CELL" }
             // Genuine no-data only: on Wi-Fi the cell pod stays neutral instead of crying wolf.
             val cellNoData = simReady && cellLevel > 0 && !dataConnected && !wifiConnected
 
@@ -89,7 +97,7 @@ class MikuSignalWidget : AppWidgetProvider() {
                     v.setTextColor(R.id.widget_signal_cell, RED)
                 }
                 else -> {
-                    v.setTextViewText(R.id.widget_signal_cell, "LTE ${bars(cellLevel, 4)}")
+                    v.setTextViewText(R.id.widget_signal_cell, "$netType ${bars(cellLevel, 4)}")
                     v.setTextColor(R.id.widget_signal_cell, if (wifiConnected) TEAL_LIGHT else TEAL)
                 }
             }

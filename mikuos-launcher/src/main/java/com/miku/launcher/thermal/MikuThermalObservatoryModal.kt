@@ -433,20 +433,7 @@ fun MikuThermalObservatoryModal(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.Bottom
                         ) {
-                            val displayZones = if (thermalZones.isNotEmpty()) thermalZones else listOf(
-                                ThermalZoneData(0, "Kryo 0", 54.1f, "cpu", "CPU"),
-                                ThermalZoneData(1, "Kryo 1", 49.4f, "cpu", "CPU"),
-                                ThermalZoneData(2, "Kryo 2", 51.0f, "cpu", "CPU"),
-                                ThermalZoneData(3, "Kryo 3", 52.9f, "cpu", "CPU"),
-                                ThermalZoneData(4, "GPU", 47.1f, "gpu", "GPU"),
-                                ThermalZoneData(5, "DSP", 47.1f, "dsp", "DSP"),
-                                ThermalZoneData(6, "Audio", 47.9f, "mapss", "AUDIO"),
-                                ThermalZoneData(7, "LCD", 47.9f, "display", "DISPLAY"),
-                                ThermalZoneData(8, "Battery", 33.9f, "cw2015", "BATTERY"),
-                                ThermalZoneData(9, "PMIC", 33.2f, "mp2731", "BATTERY"),
-                                ThermalZoneData(10, "Wi-Fi", 45.9f, "wlan", "RF"),
-                                ThermalZoneData(11, "4G LTE", 45.9f, "mdm", "RF")
-                            )
+                            val displayZones = thermalZones   // real only — no fabricated zones when sysfs is blocked
 
                             displayZones.forEach { zone ->
                                 val normHeight = ((zone.tempC - 25f) / 50f).coerceIn(0.15f, 1.0f)

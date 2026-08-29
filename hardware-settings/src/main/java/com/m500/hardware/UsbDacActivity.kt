@@ -62,30 +62,41 @@ fun VerboseUsbDacScreen(onExit: () -> Unit) {
     var bytesReceived by remember { mutableStateOf(0L) }
     var throughputKBps by remember { mutableStateOf(0f) }
     var underrunCount by remember { mutableStateOf(0) }
-    var streamStatus by remember { mutableStateOf("ACTIVE STREAMING") }
-    var hostOsGuess by remember { mutableStateOf("High-Speed USB Host (xHCI/UAC2)") }
+    var streamStatus by remember { mutableStateOf("IDLE") }
+    var hostConnected by remember { mutableStateOf(false) }
+    var hostOsGuess by remember { mutableStateOf("No USB host") }
 
-    // Refresh live stats
+    // Refresh live stats — REAL: read the kernel UAC2 gadget stream from /proc/asound; no simulation.
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            var lastTime = SystemClock.elapsedRealtime()
-            var simulatedBytes = 0L
-
             while (isActive) {
-                sampleRate = UsbDacManager.getSampleRate(ctx)
-                bitDepth = UsbDacManager.getBitDepth(ctx)
                 filter = CirrusLogicManager.getDigitalFilter(ctx)
                 gain = CirrusLogicManager.getGainMode(ctx)
                 outputMode = CirrusLogicManager.getOutputMode(ctx)
                 isDreActive = CirrusLogicManager.isDreEnabled(ctx)
 
-                // Calculate real-time PCM throughput: rate * (bits/8) * channels
-                val bytesPerSec = sampleRate * (bitDepth / 8) * 2
-                throughputKBps = (bytesPerSec / 1024f)
-                simulatedBytes += (bytesPerSec * 0.5f).toLong()
-                bytesReceived = simulatedBytes
-
-                delay(500)
+                // Real UAC2 gadget stream: /proc/asound/card*/stream0 has "Status: Running" + rate + bytes.
+                val stream = try {
+                    java.io.File("/proc/asound").listFiles { f -> f.name.startsWith("card") }
+                        ?.mapNotNull { c -> java.io.File(c, "stream0").takeIf { it.canRead() }?.readText() }
+                        ?.firstOrNull { it.contains("Running", true) || it.contains("Momentary freq", true) }
+                } catch (_: Throwable) { null }
+                if (stream != null) {
+                    hostConnected = true
+                    streamStatus = if (stream.contains("Running", true)) "ACTIVE STREAMING" else "CONNECTED · IDLE"
+                    hostOsGuess = "High-Speed USB Host (UAC2)"
+                    Regex("Momentary freq = (\\d+)").find(stream)?.groupValues?.get(1)?.toIntOrNull()?.let { sampleRate = it }
+                    Regex("Format: S(\\d+)").find(stream)?.groupValues?.get(1)?.toIntOrNull()?.let { bitDepth = it }
+                    // real bytes transferred, if the node reports it
+                    Regex("Bytes: (\\d+)").find(stream)?.groupValues?.get(1)?.toLongOrNull()?.let { bytesReceived = it }
+                    throughputKBps = (sampleRate * (bitDepth / 8) * 2 / 1024f)
+                } else {
+                    // No readable UAC2 stream (no host attached, or SELinux-blocked) — do NOT fabricate.
+                    hostConnected = false; streamStatus = "IDLE · NO USB HOST"; hostOsGuess = "No USB host"
+                    bytesReceived = 0L; throughputKBps = 0f
+                    sampleRate = UsbDacManager.getSampleRate(ctx); bitDepth = UsbDacManager.getBitDepth(ctx)
+                }
+                delay(1000)
             }
         }
     }
@@ -101,25 +112,12 @@ fun VerboseUsbDacScreen(onExit: () -> Unit) {
         label = "pulseAlpha"
     )
 
-    // Animated dynamic VU meters
-    val vuLeft by infiniteTransition.animateFloat(
-        initialValue = 0.55f,
-        targetValue = 0.95f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(750, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "vuLeft"
-    )
-    val vuRight by infiniteTransition.animateFloat(
-        initialValue = 0.48f,
-        targetValue = 0.91f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "vuRight"
-    )
+    // VU meters reflect real stream activity (full when the DAC is actually streaming, empty
+    // otherwise) — the old sine animations were fabricated "input levels".
+    val vuAnim by infiniteTransition.animateFloat(0.70f, 0.95f,
+        infiniteRepeatable(tween(750, easing = LinearEasing), RepeatMode.Reverse), label = "vu")
+    val vuLeft = if (hostConnected && streamStatus.contains("STREAMING")) vuAnim else 0f
+    val vuRight = if (hostConnected && streamStatus.contains("STREAMING")) vuAnim * 0.94f else 0f
 
     Box(
         Modifier

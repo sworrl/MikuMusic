@@ -839,7 +839,7 @@ fun MikuLauncherScreen() {
                     }
                 } catch (_: Throwable) {}
 
-                if (cTemp == 0f) cTemp = if (bTemp > 0f) bTemp + 4.5f else 36.5f
+                if (cTemp == 0f && bTemp > 0f) cTemp = bTemp + 4.5f   // derive from REAL battery temp only; no flat fake
                 if (bTemp == 0f) bTemp = cTemp - 4.0f
 
                 cpuTempC = cTemp

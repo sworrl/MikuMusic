@@ -2484,7 +2484,7 @@ fun AboutScreen(ctx: Context) {
         AboutSpecRow("SoC Architecture", "Qualcomm Snapdragon 680 (SM6225 8-Core)")
         AboutSpecRow("DAC Hardware", "Dual Cirrus Logic CS43198 MasterHIFI™")
         AboutSpecRow("RGB Controller", "SGM31324 Pulsar TrueColor LED Engine")
-        AboutSpecRow("Linux Kernel", "5.4.233-android14-gki (arm64-v8a)")
+        AboutSpecRow("Linux Kernel", (System.getProperty("os.version") ?: "unknown") + " (" + (android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a") + ")")
         AboutSpecRow("Root Status", if (RootShell.isAvailable()) "Magisk Privileged (uid=0)" else "Stock Unprivileged")
 
         Spacer(Modifier.height(14.dp))

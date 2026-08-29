@@ -36,6 +36,15 @@ class BootCompletedReceiver : BroadcastReceiver() {
                 } catch (e: Throwable) {
                     Log.e(TAG, "Failed to restore Pulsar LED on boot", e)
                 }
+
+                // Camera-derived ambient light -> screen brightness. The M500 has
+                // no ALS (docs/01_hardware_and_sensors_report.md); this service
+                // stops itself immediately if no camera is enumerable.
+                try {
+                    AmbientBrightnessService.start(context)
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Failed to start ambient brightness service", e)
+                }
             }
         }
     }

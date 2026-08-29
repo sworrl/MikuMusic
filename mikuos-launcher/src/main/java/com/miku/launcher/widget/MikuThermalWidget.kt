@@ -63,7 +63,7 @@ class MikuThermalWidget : AppWidgetProvider() {
                 if (rawB > 0) bat = rawB / 10f
             } catch (_: Throwable) {}
 
-            if (cpu == 0f) cpu = if (bat > 0f) bat + 4.5f else 36.5f
+            if (cpu == 0f && bat > 0f) cpu = bat + 4.5f   // derive from REAL battery temp only; no flat fake
             if (bat == 0f) bat = cpu - 4.0f
 
             // Teal nominal, amber warm, red hot — keyed to the hotter of the two sensors.

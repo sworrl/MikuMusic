@@ -414,6 +414,11 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     // ------------------------------------------------------------------ misc
 
+    /** Real recording: tee the live FM PCM to a WAV file via the audio bridge. */
+    fun startRecording(file: java.io.File): Boolean = audioTrackHelper?.startRecording(file) ?: false
+    fun stopRecording() { audioTrackHelper?.stopRecording() }
+    fun isRecording(): Boolean = audioTrackHelper?.isRecording() == true
+
     private fun registerHeadsetListener() {
         try {
             val filter = IntentFilter(Intent.ACTION_HEADSET_PLUG)

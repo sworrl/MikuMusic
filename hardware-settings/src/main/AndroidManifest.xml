@@ -7,6 +7,11 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Camera used ONLY as a substitute ambient-light sensor: one frame is
+         captured on screen-on to read exposure parameters, then released.
+         The M500 has no ALS. No image is stored or transmitted. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" />
 
@@ -144,6 +149,11 @@
                 <action android:name="android.service.quicksettings.action.QS_TILE" />
             </intent-filter>
         </service>
+
+        <service
+            android:name=".AmbientBrightnessService"
+            android:exported="false"
+            android:description="@string/app_name" />
 
         <service
             android:name=".PocketLockService"

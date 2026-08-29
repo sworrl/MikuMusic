@@ -35,7 +35,9 @@ object CpuPerformance {
     }
 
     fun isEnabled(ctx: Context): Boolean {
-        val sp = ctx.getSharedPreferences("m500_hardware_prefs", Context.MODE_PRIVATE)
-        return sp.getBoolean("cpu_perf_enabled", false)
+        // Real governor, not just the saved pref (which lied when the root write failed).
+        val gov = try { java.io.File("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor").readText().trim() } catch (_: Throwable) { "" }
+        if (gov.isNotEmpty()) return gov == "performance"
+        return ctx.getSharedPreferences("m500_hardware_prefs", Context.MODE_PRIVATE).getBoolean("cpu_perf_enabled", false)
     }
 }

@@ -24,6 +24,8 @@ class AudioTrackHelper(
     private var isInitialized: Boolean = false
     private var isPlaying: Boolean = false
     private var currentVolume: Float = 1.0f
+    private var recOut: java.io.RandomAccessFile? = null
+    private var recBytes: Long = 0L
 
     init {
         val minBuf = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
@@ -124,12 +126,46 @@ class AudioTrackHelper(
         val track = audioTrack ?: return -1
         if (!isPlaying) return 0
         return try {
+            synchronized(this) {
+                recOut?.let { it.write(data, offset, size); recBytes += size }
+            }
             track.write(data, offset, size)
         } catch (t: Throwable) {
             Log.e(TAG, "Exception writing to AudioTrack", t)
             -1
         }
     }
+
+    /** Start teeing the live FM PCM to a WAV file (real recording, not a stub). Returns success. */
+    @Synchronized
+    fun startRecording(file: java.io.File): Boolean = try {
+        file.parentFile?.mkdirs()
+        val f = java.io.RandomAccessFile(file, "rw"); f.setLength(0)
+        // 44-byte WAV header placeholder (patched with real sizes on stop).
+        val ch = 2; val bits = 16; val byteRate = sampleRate * ch * bits / 8
+        f.write("RIFF".toByteArray()); f.writeInt(0)                 // chunk size (patched)
+        f.write("WAVE".toByteArray()); f.write("fmt ".toByteArray())
+        f.write(le32(16)); f.write(le16(1)); f.write(le16(ch))
+        f.write(le32(sampleRate)); f.write(le32(byteRate)); f.write(le16(ch * bits / 8)); f.write(le16(bits))
+        f.write("data".toByteArray()); f.writeInt(0)                 // data size (patched)
+        recOut = f; recBytes = 0L
+        Log.d(TAG, "FM recording -> ${'$'}{file.absolutePath}")
+        true
+    } catch (t: Throwable) { Log.e(TAG, "startRecording failed", t); recOut = null; false }
+
+    /** Finalize the WAV (patch RIFF/data sizes) and close. */
+    @Synchronized
+    fun stopRecording() {
+        val f = recOut ?: return; recOut = null
+        try {
+            f.seek(4);  f.write(le32((36 + recBytes).toInt()))
+            f.seek(40); f.write(le32(recBytes.toInt()))
+        } catch (_: Throwable) {} finally { try { f.close() } catch (_: Throwable) {} }
+    }
+
+    fun isRecording(): Boolean = recOut != null
+    private fun le16(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v shr 8) and 0xff).toByte())
+    private fun le32(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v shr 8) and 0xff).toByte(), ((v shr 16) and 0xff).toByte(), ((v shr 24) and 0xff).toByte())
 
     @Synchronized
     fun setVolume(vol: Float) {

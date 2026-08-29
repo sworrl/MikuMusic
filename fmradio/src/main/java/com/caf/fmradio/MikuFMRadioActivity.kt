@@ -71,7 +71,7 @@ data class FmState(
     val rssi: Int = 68,
     val stationName: String = "Qualcomm CS43131 Direct FM",
     val radioText: String = "Hatsune Miku Live Broadcast",
-    val isHeadsetPlugged: Boolean = true,
+    val isHeadsetPlugged: Boolean = false,
     val favorites: List<Int> = listOf(88500, 91100, 96500, 101100, 104300, 107900)
 )
 
@@ -98,6 +98,23 @@ object FmRadioManager {
                     launch { eng.stationName.collect { name -> _state.value = _state.value.copy(stationName = name) } }
                     launch { eng.radioText.collect { rt -> _state.value = _state.value.copy(radioText = rt) } }
                     launch { eng.presets.collect { favs -> _state.value = _state.value.copy(favorites = favs) } }
+                    // Real antenna/headset state — the headphone cable IS the FM antenna, so
+                    // "ANTENNA OK" must reflect an actually-plugged headset (was hardcoded true).
+                    launch {
+                        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                        while (true) {
+                            val plugged = try {
+                                @Suppress("DEPRECATION")
+                                am?.isWiredHeadsetOn == true ||
+                                am?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.any {
+                                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
+                                } == true
+                            } catch (_: Throwable) { false }
+                            if (plugged != _state.value.isHeadsetPlugged) _state.value = _state.value.copy(isHeadsetPlugged = plugged)
+                            kotlinx.coroutines.delay(1500)
+                        }
+                    }
                 }
             }
         }
@@ -125,8 +142,19 @@ object FmRadioManager {
     }
 
     fun toggleRecording(ctx: Context) {
-        val nextRec = !_state.value.isRecording
-        _state.value = _state.value.copy(isRecording = nextRec)
+        if (_state.value.isRecording) {
+            engine?.stopRecording()
+            _state.value = _state.value.copy(isRecording = false)
+        } else {
+            // Real WAV capture of the live FM PCM into Music/FM Recordings/.
+            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC), "FM Recordings")
+            val f = java.io.File(dir, "FM_%.1f_%s.wav".format(_state.value.frequencyKHz / 1000f,
+                java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())))
+            val ok = engine?.startRecording(f) ?: false
+            _state.value = _state.value.copy(isRecording = ok)
+            if (!ok) android.widget.Toast.makeText(ctx, "Recording failed (needs storage + FM playing)", android.widget.Toast.LENGTH_SHORT).show()
+            else android.widget.Toast.makeText(ctx, "Recording ${f.name}", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     fun toggleMute() {
@@ -300,7 +328,7 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                             )
                             Spacer(Modifier.width(5.dp))
                             Text(
-                                if (fmState.isPowerOn) "FM STEREO • ${fmState.rssi} dBµV" else "STANDBY",
+                                if (fmState.isPowerOn) "${if (fmState.isStereo) "FM STEREO" else "FM MONO"} • ${fmState.rssi} dBµV" else "STANDBY",
                                 color = if (fmState.isPowerOn) MikuCyan else Color.Gray,
                                 fontSize = 8.5.sp,
                                 fontWeight = FontWeight.Bold,
