@@ -70,7 +70,7 @@ private val Muted = Color(0xFF8BA6A9)
 private val SkyBlue = Color(0xFF80D8FF)
 
 @Composable
-fun MikuWeatherTileDetailSheet(onDismiss: () -> Unit) {
+fun MikuWeatherTileDetailSheet(onDismiss: () -> Unit, onOpenObservatory: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val st by MikuWeatherTileEngine.state.collectAsState()
@@ -245,6 +245,18 @@ fun MikuWeatherTileDetailSheet(onDismiss: () -> Unit) {
 
                     // ---- settings: units · Windy key -------------------------------------
                     item {
+                        if (onOpenObservatory != null) {
+                            SheetCard(title = "OBSERVATORY") {
+                                Text(
+                                    "Open the full Weather Observatory (radar, solar arc, history) →",
+                                    color = Color(0xFF39C5BB), fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onDismiss(); onOpenObservatory() }
+                                        .padding(vertical = 6.dp)
+                                )
+                            }
+                        }
                         SheetCard(title = "SETTINGS") {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                                 Text("Units", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)

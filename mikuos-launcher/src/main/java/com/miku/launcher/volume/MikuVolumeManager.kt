@@ -156,7 +156,16 @@ object MikuVolumeManager {
         val volumeReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: android.content.Intent?) {
                 updateFromSystem(ctx)
-                triggerHud(ctx)
+                // Only POP the HUD when the music volume actually changed. HiBy re-applies the
+                // master volume on scene/route changes, firing MASTER_VOLUME_CHANGED (and the
+                // framework fires VOLUME_CHANGED for other streams too) with no real change -
+                // popping on those had the modal appearing on every scene switch.
+                if (intent?.action == "android.media.VOLUME_CHANGED_ACTION") {
+                    val stream = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1)
+                    val now = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_VALUE", -1)
+                    val prev = intent.getIntExtra("android.media.EXTRA_PREV_VOLUME_STREAM_VALUE", -1)
+                    if (stream == AudioManager.STREAM_MUSIC && now != prev) triggerHud(ctx)
+                }
             }
         }
         val filter = android.content.IntentFilter().apply {

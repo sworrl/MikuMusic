@@ -412,7 +412,7 @@ class MikuLauncherActivity : ComponentActivity() {
 }
 
 /** Default quilt patch order (persisted user order is reconciled against this list). */
-val MikuQuiltBadgeIds = listOf("clock", "weather", "wxtile", "network", "nowplaying", "dac", "ingest", "library", "brain", "thermal", "volume", "battery", "control")
+val MikuQuiltBadgeIds = listOf("clock", "wxtile", "network", "nowplaying", "dac", "ingest", "library", "brain", "thermal", "volume", "battery", "control")
 
 @Composable
 fun MikuLauncherScreen() {
@@ -976,17 +976,10 @@ fun MikuLauncherScreen() {
                         ) { launchClockApp(ctx) }
                     ) { CyberPlasmaGlowClock(time = currentTime, date = currentDate) }
                 },
-                QuiltBadge("weather", "Weather") {
-                    com.miku.launcher.ui.MikuKawaiiWeatherBadge(
-                        weather = weatherState.weather,
-                        city = weatherState.gps.city,
-                        onClick = { isWeatherObservatoryOpen = true }
-                    )
-                },
                 // Full-width Miku weather TILE (Open-Meteo + optional Windy, real AQI, 6h strip,
                 // 3-day row). Self-contained: owns its engine + detail sheet, no launcher state.
                 QuiltBadge("wxtile", "Weather tile") {
-                    com.miku.launcher.widget.MikuWeatherTile()
+                    com.miku.launcher.widget.MikuWeatherTile(onOpenObservatory = { isWeatherObservatoryOpen = true })
                 },
                 QuiltBadge("gps", "GPS") {
                     MikuCyberWeatherGpsBadge(

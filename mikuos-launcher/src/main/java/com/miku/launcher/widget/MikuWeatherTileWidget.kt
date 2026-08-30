@@ -68,7 +68,7 @@ private fun tileGradient(code: Int?, isDay: Boolean?): List<Color> = when {
 }
 
 @Composable
-fun MikuWeatherTile(modifier: Modifier = Modifier) {
+fun MikuWeatherTile(modifier: Modifier = Modifier, onOpenObservatory: (() -> Unit)? = null) {
     val ctx = LocalContext.current
     LaunchedEffect(Unit) { MikuWeatherTileEngine.ensureStarted(ctx) }
     val st by MikuWeatherTileEngine.state.collectAsState()
@@ -280,6 +280,6 @@ fun MikuWeatherTile(modifier: Modifier = Modifier) {
     }
 
     if (detailOpen) {
-        MikuWeatherTileDetailSheet(onDismiss = { detailOpen = false })
+        MikuWeatherTileDetailSheet(onDismiss = { detailOpen = false }, onOpenObservatory = onOpenObservatory)
     }
 }
