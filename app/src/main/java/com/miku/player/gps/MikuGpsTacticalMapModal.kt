@@ -39,6 +39,8 @@ import androidx.compose.ui.window.DialogProperties
 import com.miku.player.AudiowideFont
 import com.miku.player.OrbitronFont
 import com.miku.player.ui.swipeUpFromBottomToDismiss
+import com.miku.player.ui.detectDragGesturesEdgeSafe
+import com.miku.player.ui.edgeSafePointerInput
 import com.miku.player.weather.MikuWeatherService
 import kotlinx.coroutines.*
 import java.io.File
@@ -387,8 +389,10 @@ private fun TacticalMapView(
             .clip(CutCornerShape(10.dp))
             .background(Color(0xFF02090D))
             .border(1.dp, Color(0xFF00E5FF).copy(alpha = 0.4f), CutCornerShape(10.dp))
-            .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
+            // Edge-safe: the map fills the modal, so a pan that starts in a window edge band
+            // (side = back, bottom = home, top = shade) is the nav layer's — not a map pan.
+            .edgeSafePointerInput(Unit) { guard ->
+                detectDragGesturesEdgeSafe(guard) { change, dragAmount ->
                     change.consume()
                     onPan(dragAmount.x, dragAmount.y)
                 }

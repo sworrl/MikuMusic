@@ -5,7 +5,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
 import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.dp
 
@@ -26,15 +25,20 @@ private val DISMISS_DISTANCE = 80.dp
  * - Nothing is consumed until the drag passes touch slop AND is moving upward, so taps, clicks,
  *   and downward drags fall through to the modal's own content untouched.
  * - Drags beginning above the bottom band are ignored entirely.
+ * - Drags beginning inside a SYSTEM gesture band of the window (bottom 32dp = home/recents, the
+ *   side/top bands too — see [SystemGestureEdges]) are left entirely to the MikuOS nav layer:
+ *   the modal only answers a swipe that starts in its bottom 15% but ABOVE the OS's home strip.
  */
 fun Modifier.swipeUpFromBottomToDismiss(
     enabled: Boolean = true,
     onDismiss: () -> Unit
 ): Modifier {
     if (!enabled) return this
-    return pointerInput(onDismiss) {
+    return edgeSafePointerInput(onDismiss) { guard ->
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false)
+            // The OS owns the window's edge bands — never arm on a touch that starts there.
+            if (guard.isInSystemGestureEdge(down.position)) return@awaitEachGesture
             // Arm only when the touch lands in the bottom band of this composable.
             if (down.position.y < size.height * (1f - BOTTOM_START_FRACTION)) return@awaitEachGesture
             val dismissPx = DISMISS_DISTANCE.toPx()

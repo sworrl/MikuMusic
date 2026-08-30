@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
@@ -106,6 +107,23 @@ fun ListeningStatsSettingsCard(ctx: Context) {
                 Text("Every listen logged: top tracks, hours, streaks, discoveries — your year in music", color = Muted, fontSize = 11.5.sp, lineHeight = 15.sp)
             }
             Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MikuTealBright, modifier = Modifier.size(18.dp).rotate(180f))
+        }
+        // Miku Rewind — Wrapped-style story cards over the same listen DB (MikuRewindActivity).
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .clickable { MikuRewindActivity.launch(ctx) }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.AutoAwesome, "Miku Rewind", tint = MikuNeonPink, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Miku Rewind", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Your week, month, year and all-time recap as swipeable story cards — shareable", color = Muted, fontSize = 11.5.sp, lineHeight = 15.sp)
+            }
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = MikuNeonPink, modifier = Modifier.size(18.dp).rotate(180f))
         }
         Spacer(Modifier.height(8.dp))
         StatsToggleRow("Log listens", "Keep a per-listen history on this device (nothing leaves the M500)", statsOn) {

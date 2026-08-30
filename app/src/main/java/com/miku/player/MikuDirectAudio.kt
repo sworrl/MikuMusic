@@ -99,6 +99,8 @@ object MikuDirectAudio {
      * and HibyAudioSettingInitUtils preserves a non-empty value across boots. The vendor MUSIC
      * curve (DEFAULT_MEDIA_VOLUME_CURVE, 0 dB at index 100) then rules the whole range.
      */
+    @Volatile private var unlockPushed = false
+
     fun ensureFullVolumeRange(ctx: Context) {
         val cr = ctx.contentResolver
         runCatching {
@@ -107,10 +109,17 @@ object MikuDirectAudio {
             Settings.Global.putInt(cr, "audio_safe_volume_state", 0)
             Settings.System.putInt(cr, "max_volume_value", 100)
             Settings.System.putInt(cr, "max_volume_value_preout", 100)
-            Settings.System.putInt(cr, "volume_music_headphone", 100)
-            Settings.System.putInt(cr, "volume_music_speaker", 100)
-            Settings.System.putInt(cr, "volume_music_headset", 100)
+            // NOTE: deliberately NOT writing volume_music_headphone/speaker/headset = 100 here.
+            // Those are the per-jack CURRENT levels AudioService restores at boot, not ceilings -
+            // writing 100 would start every wired output at full volume after a reboot
+            // (hearing-safety hazard). The ceiling is max_volume_value above; the level is the
+            // user's.
         }
+        // The unlock is idempotent - push/broadcast it once per process. Re-broadcasting
+        // "volume_lock_state_update" on every player start made HiBy SystemUI's HibyBarTool
+        // re-apply its saved per-jack level, snapping the volume back on each launch.
+        if (unlockPushed) return
+        unlockPushed = true
         // No su fallback (standing no-root directive): the Settings writes above run on the
         // platform WRITE_SECURE_SETTINGS/WRITE_SETTINGS grants, and the HAL push below covers the
         // setprop mirror (SystemUI re-reads the Global on every volume event anyway).

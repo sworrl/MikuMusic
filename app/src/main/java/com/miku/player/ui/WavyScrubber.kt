@@ -1,7 +1,6 @@
 package com.miku.player.ui
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -112,9 +111,12 @@ fun WavyScrubber(
         modifier
             .fillMaxWidth()
             .height(44.dp)
-            .pointerInput(d) {
+            // Edge-safe: a drag that starts in a window edge band (side = system back, bottom =
+            // home) is the OS's, not a scrub. Everything inboard of the bands still scrubs.
+            .edgeSafePointerInput(d) { guard ->
                 var frac = 0f
-                detectHorizontalDragGestures(
+                detectHorizontalDragGesturesEdgeSafe(
+                    guard,
                     onDragStart = { o -> frac = (o.x / size.width).coerceIn(0f, 1f); onSeekPreview((frac * d).toLong()) },
                     onDragEnd = { onSeekCommit((frac * d).toLong()) },
                     onDragCancel = { onSeekCommit((frac * d).toLong()) }

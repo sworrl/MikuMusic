@@ -381,6 +381,16 @@
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <!-- Listening stats → Miku Rewind (Wrapped-style story cards over the same listen DB;
+             share PNGs go through the statsexport FileProvider below). -->
+        <activity
+            android:name=".stats.MikuRewindActivity"
+            android:exported="false"
+            android:label="Miku Rewind"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <!-- Listening-stats CSV export (StatsRepository.exportCsv): share-sheet grant for files
              under Android/data/com.miku.player/files/stats/. Separate authority from the HUD art
              provider so its cache-path exposure stays untouched. -->

@@ -36,7 +36,6 @@ import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
@@ -69,10 +68,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import com.miku.player.ui.detectHorizontalDragGesturesEdgeSafe
+import com.miku.player.ui.detectVerticalDragGesturesEdgeSafe
+import com.miku.player.ui.edgeSafePointerInput
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.graphicsLayer
@@ -333,8 +333,13 @@ fun NowPlayingScreen(
             .fillMaxSize()
             .background(Ground)
             .offset { IntOffset(0, animatedOffsetY.roundToInt()) }
-            .pointerInput(Unit) {
-                detectVerticalDragGestures(
+            // Swipe DOWN to close. Edge-safe: a drag that starts in a window edge band (bottom =
+            // home/recents, top = shade pull, sides = back) is the MikuOS nav layer's and is left
+            // untouched; `accept` also declines upward drags at touch slop so this root never
+            // claims (and eats) a swipe-up anywhere on the screen the way the stock detector did.
+            .edgeSafePointerInput(Unit) { guard ->
+                detectVerticalDragGesturesEdgeSafe(
+                    guard,
                     onDragEnd = {
                         if (dragOffsetY > 180f) {
                             onClose()
@@ -342,6 +347,7 @@ fun NowPlayingScreen(
                         dragOffsetY = 0f
                     },
                     onDragCancel = { dragOffsetY = 0f },
+                    accept = { overSlop -> overSlop > 0f },
                     onVerticalDrag = { _, dragAmount ->
                         if (dragAmount > 0 || dragOffsetY > 0) {
                             dragOffsetY = (dragOffsetY + dragAmount).coerceAtLeast(0f)
@@ -398,9 +404,12 @@ fun NowPlayingScreen(
                     )
                 }
                 // Swipe left/right anywhere on the stage = next/previous preset (both engines).
-                .pointerInput(effectiveEngine) {
+                // Edge-safe: a swipe that starts in the side bands is the system BACK gesture (and
+                // one from the bottom/top band is home/shade) — never a preset change.
+                .edgeSafePointerInput(effectiveEngine) { guard ->
                     var dx = 0f
-                    detectHorizontalDragGestures(
+                    detectHorizontalDragGesturesEdgeSafe(
+                        guard,
                         onDragStart = { dx = 0f },
                         onDragEnd = { if (dx < -70f) { Haptics.tick(ctx); nextPreset() } else if (dx > 70f) { Haptics.tick(ctx); prevPreset() }; dx = 0f },
                         onDragCancel = { dx = 0f }
@@ -625,8 +634,11 @@ fun NowPlayingScreen(
                     Box(
                         Modifier.matchParentSize()
                             .padding(horizontal = 32.dp)
-                            .pointerInput(track.id) {
-                                detectHorizontalDragGestures(
+                            // Edge-safe: the parallax/skip swipe never claims a touch that begins
+                            // in a window edge band (bottom/top/sides belong to the nav layer).
+                            .edgeSafePointerInput(track.id) { guard ->
+                                detectHorizontalDragGesturesEdgeSafe(
+                                    guard,
                                     onDragEnd = {
                                         if (totalDragX < -60f) {
                                             Haptics.tick(ctx)
@@ -1309,9 +1321,11 @@ fun EmbossedScrubber(
         Modifier
             .fillMaxWidth()
             .height(40.dp)
-            .pointerInput(d) {
+            // Edge-safe: a drag from the side bands is the system back swipe, not a scrub.
+            .edgeSafePointerInput(d) { guard ->
                 var frac = 0f
-                detectHorizontalDragGestures(
+                detectHorizontalDragGesturesEdgeSafe(
+                    guard,
                     onDragStart = { o -> frac = (o.x / size.width).coerceIn(0f, 1f); onSeekPreview((frac * d).toLong()) },
                     onDragEnd = { onSeekCommit((frac * d).toLong()) },
                     onDragCancel = { onSeekCommit((frac * d).toLong()) }

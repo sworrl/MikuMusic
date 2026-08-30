@@ -94,6 +94,7 @@ import com.miku.player.OrbitronFont
 import com.miku.player.ReleaseTagColor
 import com.miku.player.Surface1
 import com.miku.player.ui.MikuTopBar
+import com.miku.player.ui.yieldSystemGestureEdges
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -279,7 +280,11 @@ private fun PackageStage(
     onOpen: () -> Unit,
 ) {
     val f = fold.value
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    // HorizontalPager can't take an edge guard, so the container yields the window's edge bands
+    // instead: a horizontal swipe that starts in the side bands is the system BACK gesture (and a
+    // vertical one from the bottom/top band is home/shade) — the pager/zoom never see it. Taps
+    // and interior swipes are untouched.
+    Box(Modifier.fillMaxSize().yieldSystemGestureEdges(), contentAlignment = Alignment.Center) {
         // The inside of the package: revealed as the cover folds away.
         if (f > 0.02f || opened) {
             val currentZoom = zoomFor(pagerState.currentPage)

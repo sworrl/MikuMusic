@@ -19,11 +19,15 @@ import java.io.File
  *  • Every image is flagged [Track.isDiscImage] (persisted in the binary index, so it survives
  *    rescans) and stays playable as one item. Multi-file images (".1", ".2") become discs 1, 2… of
  *    one album.
- *  • Where a splitter can produce a real track list (today: the .cue sheet), the image is replaced
- *    by VIRTUAL tracks — [Track.parentId] + [Track.clipStartMs]/[Track.clipEndMs] — which
- *    mediaItemFor() plays through Media3's clipping configuration (seek to INDEX 01, end at the
- *    next index). A later MusicBrainz/Discogs duration-based splitter only needs to implement
- *    [WholeDiscSplitter] and register in [splitters].
+ *  • Where a splitter can produce a real track list, the image is replaced by VIRTUAL tracks —
+ *    [Track.parentId] + [Track.clipStartMs]/[Track.clipEndMs] — which mediaItemFor() plays
+ *    through Media3's clipping configuration (seek to INDEX 01, end at the next index).
+ *    Splitters run in [splitters] order, first non-empty answer wins:
+ *      1. [CueSplitter] — a .cue beside the image (the rip's own track list).
+ *      2. [com.miku.player.discsplit.TracksTxtSplitter] — a user-written tracks.txt (manual override).
+ *      3. [com.miku.player.discsplit.MusicBrainzSplitter] — cue-less images looked up online by
+ *         artist + album + exact running time; answers are cached on disk and applied LAZILY (the
+ *         image shows as one item until the lookup lands and bumps ScanProgress.generation).
  */
 object DiscImage {
     private const val TAG = "DiscImage"
@@ -40,14 +44,19 @@ object DiscImage {
         val name: String
         /** Return the virtual tracks for [image], or null if this splitter can't split it. */
         fun split(ctx: Context, image: Track): List<Track>?
+        /** Called once before / after each [apply] pass on the calling thread (optional). */
+        fun beginPass(ctx: Context) {}
+        fun endPass(ctx: Context) {}
     }
 
-    val splitters: MutableList<WholeDiscSplitter> = mutableListOf(CueSplitter)
-    // TODO(hook): MusicBrainz/Discogs duration-based splitter for cue-less images goes here —
-    //   implement WholeDiscSplitter, look the disc up by total duration/artist/album, and emit the
-    //   same virtual-track shape CueSplitter produces (offsets → clipStartMs/clipEndMs).
+    val splitters: MutableList<WholeDiscSplitter> = mutableListOf(
+        CueSplitter,
+        com.miku.player.discsplit.TracksTxtSplitter,
+        com.miku.player.discsplit.MusicBrainzSplitter,
+    )
 
-    data class Report(var images: Int = 0, var withCue: Int = 0, var virtualTracks: Int = 0)
+    /** [split] = images that became virtual tracks (by any splitter); [images] − [split] still show as one item. */
+    data class Report(var images: Int = 0, var withCue: Int = 0, var virtualTracks: Int = 0, var split: Int = 0)
     @Volatile var lastReport: Report = Report()
         private set
 
@@ -67,6 +76,7 @@ object DiscImage {
         val canReadFiles = MikuStorageAccess.hasAllFilesAccess()
         val cueDirCache = HashMap<String, List<File>>()
         val out = ArrayList<Track>(tracks.size + 64)
+        for (sp in splitters) runCatching { sp.beginPass(ctx) }.onFailure { Log.w(TAG, "${sp.name} beginPass failed", it) }
         for (t in tracks) {
             val name = if (t.path.isNotBlank()) t.path.substringAfterLast('/') else ""
             val base = name.substringBeforeLast('.')
@@ -92,10 +102,11 @@ object DiscImage {
                 virtual = runCatching { sp.split(ctx, image) }.onFailure { Log.w(TAG, "${sp.name} failed on ${t.path}", it) }.getOrNull()
                 if (!virtual.isNullOrEmpty()) break
             }
-            if (!virtual.isNullOrEmpty()) { report.virtualTracks += virtual.size; out.addAll(virtual) } else out.add(image)
+            if (!virtual.isNullOrEmpty()) { report.split++; report.virtualTracks += virtual.size; out.addAll(virtual) } else out.add(image)
         }
         lastReport = report
-        if (report.images > 0) Log.i(TAG, "Whole-disc images: ${report.images} (with cue: ${report.withCue}, virtual tracks: ${report.virtualTracks})")
+        for (sp in splitters) runCatching { sp.endPass(ctx) }.onFailure { Log.w(TAG, "${sp.name} endPass failed", it) }
+        if (report.images > 0) Log.i(TAG, "Whole-disc images: ${report.images} (with cue: ${report.withCue}, split: ${report.split}, virtual tracks: ${report.virtualTracks})")
         return out
     }
 

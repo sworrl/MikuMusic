@@ -19,7 +19,6 @@ import com.miku.player.RootShell
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -54,6 +53,8 @@ import com.miku.player.AudiowideFont
 import com.miku.player.CrashSentinel
 import com.miku.player.R
 import com.miku.player.*
+import com.miku.player.ui.detectDragGesturesEdgeSafe
+import com.miku.player.ui.edgeSafePointerInput
 import dalvik.system.PathClassLoader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -559,47 +560,16 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(4.dp))
 
-            // Pixel-Style Hatsune Miku Gesture Navigation Pill Bar (Flush to bottom edge)
+            // Pixel-style Miku gesture pill — DECORATIVE ONLY. It sits flush inside the window's
+            // bottom 32dp, which is the MikuOS accessibility nav layer's home/recents band; this
+            // strip used to run its own swipe-up → home / swipe-up-and-hold → recents emulation
+            // on top of that, so one finger fired both (the launcher's recents intent AND the
+            // system home). The OS owns that band (see ui/SystemGestureEdges.kt) — no handler here.
             Box(
                 Modifier
                     .fillMaxWidth()
                     .height(14.dp)
-                    .padding(bottom = 1.dp)
-                    .pointerInput(Unit) {
-                        var startTime = 0L
-                        var totalY = 0f
-                        detectDragGestures(
-                            onDragStart = {
-                                startTime = android.os.SystemClock.elapsedRealtime()
-                                totalY = 0f
-                            },
-                            onDragEnd = {
-                                val duration = android.os.SystemClock.elapsedRealtime() - startTime
-                                val finalY = totalY
-                                if (finalY < -30f) {
-                                    if (duration >= 250L || finalY < -100f) {
-                                        // Swipe up & hold: Open Recents Switcher in Launcher
-                                        val recentsIntent = ctx.packageManager.getLaunchIntentForPackage("com.miku.launcher")?.apply {
-                                            putExtra("open_recents", true)
-                                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-                                        }
-                                        if (recentsIntent != null) try { ctx.startActivity(recentsIntent) } catch (_: Throwable) {}
-                                    } else {
-                                        // Quick swipe up: Home
-                                        val launcherIntent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-                                            addCategory(android.content.Intent.CATEGORY_HOME)
-                                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                                        }
-                                        try { ctx.startActivity(launcherIntent) } catch (_: Throwable) {}
-                                    }
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                totalY += dragAmount.y
-                            }
-                        )
-                    },
+                    .padding(bottom = 1.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Box(
@@ -645,8 +615,10 @@ fun RadioWaterfallSpectrum(
                     onTuneFreq(roundedKHz)
                 }
             }
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
+            // Edge-safe: the dial spans the window width, so a drag that starts in a side band is
+            // the system BACK swipe (bottom/top bands = home/shade) — not a tune.
+            .edgeSafePointerInput(Unit) { guard ->
+                detectDragGesturesEdgeSafe(guard) { change, _ ->
                     change.consume()
                     val frac = (change.position.x / size.width).coerceIn(0f, 1f)
                     val targetKHz = (87500 + frac * (108000 - 87500)).roundToInt()

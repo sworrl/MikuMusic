@@ -474,9 +474,67 @@ class MikuNotificationShadeService : AccessibilityService() {
         }
     }
 
+    /**
+     * Rotary volume knob ("ring-keys" KEY_VOLUMEUP/KEY_VOLUMEDOWN), owned HERE for every output.
+     *
+     * Root cause of "knob works on the 4.4mm jack but not on the 3.5mm jack / speaker while the
+     * on-screen sliders always work" (verified in the decompiled vendor services.jar, 2026-08-29):
+     * every GUI slider ends in AudioService.setStreamVolume(), but a key press ends in
+     * AudioService.adjustStreamVolume() — and HiBy's AudioService has an ADJUST-ONLY, RAISE-ONLY,
+     * PER-JACK gate at the top of adjustStreamVolume(): when the current index is already >=
+     * getLockMaxVolume() the step is silently swallowed (it only re-broadcasts the old index).
+     * getLockMaxVolume() comes from getPluggedInState(): balanced = 40 (35), 3.5mm h2w = 50 (40),
+     * USB/SPDIF = 80, speaker/nothing = 100 (101) — the bracketed values apply while
+     * Settings.Global "volum_tips_ce_flag" != "yes"; the gate is armed by
+     * Settings.Global "vendor.audio.hw.volume_lock" == "yes" OR "volum_tips_ce_flag" != "yes"
+     * (HiBy's out-of-box defaults). Key presses also pass through MediaSessionService, which
+     * re-targets the stream (ring/notification/voice-call "recently active" logic) and, with the
+     * screen off and nothing playing, drops the key outright ("Nothing is playing on the music
+     * stream. Skipping volume event"). None of that applies to setStreamVolume(), which HiBy's
+     * own setStreamVolumeIndex() then applies to the ACTIVE device as policy index 100 + HAL
+     * master volume (CS43198 "Plat Left/Right Playback Volume") — the same thing a slider does.
+     *
+     * So: step STREAM_MUSIC with setStreamVolume(current ± 1) — the exact slider path — and
+     * consume the key. The launcher / player HUDs are driven by VOLUME_CHANGED_ACTION, so they
+     * still pop. External (BT/USB) remotes keep the framework path (they need key repeat);
+     * injected keys (`input keyevent 24/25`) take this path so adb can verify it.
+     *
+     * Screen off: PhoneWindowManager runs BEFORE the a11y input filter and, while music is
+     * active, has already dispatched this key through MediaSessionService — stepping again here
+     * would double it, so only take over when that framework path would have dropped the key.
+     */
+    private fun handleVolumeKnob(event: android.view.KeyEvent): Boolean {
+        val dev = event.device
+        if (dev != null && dev.isExternal) return false
+        val am = getSystemService(android.media.AudioManager::class.java) ?: return false
+        val interactive = runCatching {
+            getSystemService(android.os.PowerManager::class.java)?.isInteractive ?: true
+        }.getOrDefault(true)
+        if (!interactive && am.isMusicActive) return false
+        if (event.action != android.view.KeyEvent.ACTION_DOWN) return true   // the UP of a pair we own
+        val stream = android.media.AudioManager.STREAM_MUSIC
+        val max = am.getStreamMaxVolume(stream)
+        val cur = am.getStreamVolume(stream)
+        val step = if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP) 1 else -1
+        val target = (cur + step).coerceIn(0, max)
+        // FLAG_SHOW_UI only when the user opted back into HiBy's fullscreen dialog (it is what
+        // that dialog keys on); our own HUD listens to VOLUME_CHANGED_ACTION instead.
+        val showHiby = runCatching {
+            android.provider.Settings.Global.getInt(contentResolver, "hiby_volume_dialog_enable", 0) == 1
+        }.getOrDefault(false)
+        val flags = if (showHiby) android.media.AudioManager.FLAG_SHOW_UI else 0
+        return runCatching { am.setStreamVolume(stream, target, flags); true }
+            .onFailure { Log.w(TAG, "knob: setStreamVolume($target/$max) failed", it) }
+            .getOrDefault(false)
+    }
+
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
         if (event == null) return false
         if (fnLockSwallows(event.keyCode)) return true
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ||
+            event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
+            if (handleVolumeKnob(event)) return true
+        }
         if (event.keyCode == android.view.KeyEvent.KEYCODE_POWER) {
             if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                 if (event.repeatCount == 0 || powerDownTimestamp == 0L) {

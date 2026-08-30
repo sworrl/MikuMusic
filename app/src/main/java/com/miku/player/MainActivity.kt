@@ -41,8 +41,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -58,6 +56,9 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.input.pointer.pointerInput
+import com.miku.player.ui.VERTICAL_GESTURE_EDGES
+import com.miku.player.ui.detectVerticalDragGesturesEdgeSafe
+import com.miku.player.ui.edgeSafePointerInput
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -2467,9 +2468,14 @@ fun expandNotificationShade(ctx: Context) {
     Box(
         Modifier.fillMaxWidth()
             .clipToBounds()
-            .pointerInput(Unit) {
+            // Pull the header down to open the Miku shade. Edge-safe: a pull that starts in the
+            // window's top 24dp IS the system's own top-edge shade gesture (the a11y nav layer
+            // handles it) — reacting here too double-fired the shade. Only pulls that begin below
+            // that band, on the header body, are ours.
+            .edgeSafePointerInput(Unit) { guard ->
                 var totalY = 0f
-                detectVerticalDragGestures(
+                detectVerticalDragGesturesEdgeSafe(
+                    guard,
                     onDragStart = { totalY = 0f },
                     onDragEnd = {
                         if (totalY > 15f) {
@@ -3055,8 +3061,13 @@ private fun <T> AlphabetFastScroller(
             .width(48.dp) // Wide touch target for leather cases!
             .padding(end = 4.dp, top = 8.dp, bottom = 8.dp)
             .onSizeChanged { containerHeight = it.height.coerceAtLeast(1) }
-            .pointerInput(items) {
-                detectVerticalDragGestures(
+            // Edge-safe on the TOP/BOTTOM bands only: a vertical drag that starts in the bottom
+            // 32dp is the system home swipe, not a jump to "Z". The rail deliberately keeps its
+            // full 48dp width including the right-edge band — a vertical rail drag can't be a
+            // (horizontal) back swipe, and leather cases need the fat target.
+            .edgeSafePointerInput(items, edges = VERTICAL_GESTURE_EDGES) { guard ->
+                detectVerticalDragGesturesEdgeSafe(
+                    guard,
                     onDragStart = { offset ->
                         isDragging = true
                         touchY = offset.y
@@ -5487,6 +5498,8 @@ enum class SettingsCategory(val title: String, val icon: String) {
                         item { com.miku.player.scrobble.ScrobbleSettingsCard(ctx) }
                         item { SettingsSection("Artist Photos") }
                         item { ArtistPhotoSettingsCard(ctx) }
+                        item { SettingsSection("Disc Images") }
+                        item { com.miku.player.discsplit.DiscSplitSettingsCard(ctx) }
                     }
                     SettingsCategory.DISPLAY -> {
                         item { SettingsSection("Idle Screen Pipeline") }
@@ -6883,9 +6896,14 @@ object TransportShapes {
                     Haptics.tick(ctx)
                     onBarClick()
                 }
-                .pointerInput(Unit) {
+                // Swipe up on the bar = open Now Playing. Edge-safe: the bar's lower edge sits
+                // inside the window's bottom 32dp (24dp clear space under it), so a swipe that
+                // begins there is the system HOME gesture — never our open. Also declines
+                // downward drags at slop instead of consuming them.
+                .edgeSafePointerInput(Unit) { guard ->
                     var totalY = 0f
-                    detectVerticalDragGestures(
+                    detectVerticalDragGesturesEdgeSafe(
+                        guard,
                         onDragStart = { totalY = 0f },
                         onDragEnd = {
                             if (totalY < -45f) {
@@ -6893,6 +6911,7 @@ object TransportShapes {
                                 onBarClick()
                             }
                         },
+                        accept = { overSlop -> overSlop < 0f },
                         onVerticalDrag = { change, dy ->
                             if (dy < 0) change.consume()
                             totalY += dy

@@ -188,8 +188,16 @@ object MikuVolumeManager {
         if (delta != 0) {
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             if (am != null) {
-                val dir = if (delta > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
-                am.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, 0)
+                // Step with setStreamVolume (the slider path), NOT adjustStreamVolume: HiBy's
+                // AudioService.adjustStreamVolume() carries an adjust-only, raise-only, per-jack
+                // "lock max" gate (balanced 40 / 3.5mm 50 / USB 80, armed by the vendor
+                // vendor.audio.hw.volume_lock / volum_tips_ce_flag globals) that silently swallows
+                // the step; setStreamVolume has no such gate and reaches the active output on every
+                // jack. See MikuNotificationShadeService.handleVolumeKnob for the full trace.
+                val max = am.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+                val cur = am.getStreamVolume(AudioManager.STREAM_MUSIC)
+                val target = (cur + (if (delta > 0) 1 else -1)).coerceIn(0, max)
+                am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
                 updateFromSystem(ctx)
             }
         } else {
