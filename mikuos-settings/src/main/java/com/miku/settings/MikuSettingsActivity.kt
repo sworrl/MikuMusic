@@ -1498,6 +1498,52 @@ fun WirelessScreen(ctx: Context) {
             }
         }
 
+        // Google Fi carrier workaround: without the Fi app (Tycho) the SIM's multi-IMSI never gets
+        // provisioned, so when the modem camps on Fi's Verizon leg (311/480) the active T-Mobile
+        // IMSI (310240) is rejected with cause 7 and data never attaches. Manually pinning the
+        // network to T-Mobile (310260) makes the identity match - but only works where T-Mobile
+        // has coverage, so this is a user-facing toggle, honest about the trade-off.
+        item {
+            Column(Modifier.mikuCard().padding(14.dp)) {
+                Text("GOOGLE FI DATA (NO FI APP)", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                val tm = remember { ctx.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager }
+                var manual by remember {
+                    mutableStateOf(try { tm?.networkSelectionMode == android.telephony.TelephonyManager.NETWORK_SELECTION_MODE_MANUAL } catch (_: Throwable) { false })
+                }
+                var opInfo by remember { mutableStateOf("") }
+                LaunchedEffect(manual) {
+                    while (true) {
+                        opInfo = try {
+                            val op = tm?.networkOperatorName ?: ""
+                            val reg = tm?.dataState
+                            "Camped: ${op.ifBlank { "searching…" }} · data ${if (reg == android.telephony.TelephonyManager.DATA_CONNECTED) "CONNECTED" else "not attached"}"
+                        } catch (_: Throwable) { "" }
+                        kotlinx.coroutines.delay(5000)
+                    }
+                }
+                Text(
+                    "Fi switches carriers via its app; without it, data only attaches on T-Mobile towers. " +
+                    "Force T-Mobile so the SIM identity matches - turn OFF if you lose signal (no T-Mobile coverage).",
+                    color = Color(0xB3FFFFFF), fontSize = 11.sp, lineHeight = 14.sp
+                )
+                if (opInfo.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(opInfo, color = Color(0xFF7BE8DF), fontSize = 11.sp) }
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text("Force T-Mobile network", color = Color.White, fontSize = 13.sp)
+                    Switch(checked = manual, onCheckedChange = { on ->
+                        manual = on
+                        Thread {
+                            try {
+                                if (on) tm?.setNetworkSelectionModeManual("310260", true)
+                                else tm?.setNetworkSelectionModeAutomatic()
+                            } catch (t: Throwable) { android.util.Log.w("MikuSettings", "network selection failed", t) }
+                        }.start()
+                    })
+                }
+            }
+        }
+
         item { Spacer(Modifier.height(24.dp)) }
     }
 }
