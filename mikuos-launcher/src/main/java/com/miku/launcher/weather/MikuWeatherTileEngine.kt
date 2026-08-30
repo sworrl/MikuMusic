@@ -52,7 +52,7 @@ object MikuWeatherTileEngine {
         val snapshot: WxSnapshot? = null,
         val location: WxLocation? = null,
         val manualLocation: WxLocation? = null,
-        val units: WxUnits = WxUnits.METRIC,
+        val units: WxUnits = WxUnits.IMPERIAL,   // default °F / mph / in (user-switchable in the tile sheet)
         val windyKey: String = "",
         val windyKeyFromBuild: Boolean = false,
         val isRefreshing: Boolean = false,
@@ -98,7 +98,7 @@ object MikuWeatherTileEngine {
 
     private fun loadPrefs(app: Context) {
         val p = prefs(app)
-        val units = runCatching { WxUnits.valueOf(p.getString(K_UNITS, WxUnits.METRIC.name) ?: WxUnits.METRIC.name) }.getOrDefault(WxUnits.METRIC)
+        val units = runCatching { WxUnits.valueOf(p.getString(K_UNITS, WxUnits.IMPERIAL.name) ?: WxUnits.IMPERIAL.name) }.getOrDefault(WxUnits.IMPERIAL)
         val storedKey = p.getString(K_WINDY, null)
         val buildKey = BuildConfig.MIKU_WINDY_KEY
         val key = if (!storedKey.isNullOrBlank()) storedKey else buildKey
