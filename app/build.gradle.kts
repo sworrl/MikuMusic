@@ -14,8 +14,8 @@ android {
         applicationId = "com.miku.player"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2254
-        versionName = "2.0.254"
+        versionCode = 2255
+        versionName = "2.0.255"
 
         // Last.fm API credentials — read from local.properties (gitignored, never committed) so
         // the key/secret never live in source. Register a free app at
@@ -50,6 +50,17 @@ android {
         buildConfigField("String", "MIKU_VPN_ENDPOINT", "\"${localProps.getProperty("miku.vpn.endpoint", "")}\"")
         buildConfigField("String", "MIKU_VPN_ASSIGNED_IP", "\"${localProps.getProperty("miku.vpn.assigned.ip", "")}\"")
         buildConfigField("String", "MIKU_VPN_ROUTES", "\"${localProps.getProperty("miku.vpn.routes", "")}\"")
+
+        // Remote entitlement (allow/disallow kill-switch, com.miku.player.entitlement). BOTH the
+        // Worker URL and the shared HMAC-SHA256 secret must be set or the feature is completely
+        // inert (no network, no verdicts, always ALLOWED). The secret must equal the Worker's
+        // ENTITLEMENT_HMAC_SECRET (tools/entitlement-worker/README.md). Example:
+        //   miku.entitlement.url=https://mikusan.falcontechnix.com
+        //   miku.entitlement.hmac=<openssl rand -hex 32>
+        //   miku.entitlement.contact=Justin@FalconTechnix.com
+        buildConfigField("String", "MIKU_ENTITLEMENT_URL", "\"${localProps.getProperty("miku.entitlement.url", "")}\"")
+        buildConfigField("String", "MIKU_ENTITLEMENT_HMAC", "\"${localProps.getProperty("miku.entitlement.hmac", "")}\"")
+        buildConfigField("String", "MIKU_ENTITLEMENT_CONTACT", "\"${localProps.getProperty("miku.entitlement.contact", "")}\"")
 
         externalNativeBuild {
             cmake {

@@ -233,6 +233,10 @@ object PlayerHolder {
                 }
             }
             override fun onMediaItemTransition(mediaItem: androidx.media3.common.MediaItem?, reason: Int) {
+                // Taste engine (taste/TasteHooks): logs the PREVIOUS track's listen (how much was
+                // heard, skip, session) and lets Miku Radio refill. Must run BEFORE the qualifier
+                // reset on the next line — it reads the previous track's fraction from it.
+                runCatching { com.miku.player.taste.TasteHooks.onMediaItemTransition(app, p, mediaItem, reason) }
                 mediaItem?.mediaId?.toLongOrNull()?.let { MikuPlayQualifier.onTrackStart(it); MikuPlayQualifier.publish(app, it) }
                 WidgetUpdateExecutor.push(app)
                 MikuTrackHud.publish(app, p, "transition:$reason")
@@ -277,6 +281,15 @@ object PlayerHolder {
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 android.util.Log.d("MikuPlayer", "onPlaybackStateChanged: state=$playbackState")
+                runCatching { com.miku.player.taste.TasteHooks.onPlaybackStateChanged(app, p, playbackState) }   // taste: last item played out
+            }
+            // Taste engine: smart shuffle re-orders (only when its toggle is on) and Miku Radio
+            // notices when an explicit play elsewhere replaces its queue.
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
+                runCatching { com.miku.player.taste.TasteHooks.onShuffleModeEnabledChanged(app, p, shuffleModeEnabled) }
+            }
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                runCatching { com.miku.player.taste.TasteHooks.onTimelineChanged(app, p) }
             }
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 android.util.Log.e("MikuPlayer", "onPlayerError: ${error.errorCodeName} (${error.errorCode})", error)
@@ -332,7 +345,9 @@ object PlayerHolder {
                 WidgetUpdateExecutor.push(app)
             }
         }
-        LastFmScrobbler.attach(app, p)
+        // Per-listen stats DB + Last.fm scrobbling: one self-registering hook (its own Player.Listener
+        // + 1 s tick) — see com.miku.player.stats.ListenSessionTracker.
+        com.miku.player.stats.ListenSessionTracker.attach(app, p)
         // Redundant hardware gate (see MainActivity.isSupportedDevice) — deliberately different
         // fields/logic so patching just the Activity's check doesn't also unlock playback here.
         // Also screens out emulators/VMs (goldfish/ranchu kernel, generic build fingerprints) —
@@ -428,6 +443,6 @@ object PlayerHolder {
         controllerFuture = null
         session?.release(); session = null
         player?.release(); player = null
-        LastFmScrobbler.reset() // so a later ensure() re-attaches its Player.Listener to the NEW player instance
+        com.miku.player.stats.ListenSessionTracker.reset() // closes the open listen + so a later ensure() re-attaches to the NEW player instance
     }
 }

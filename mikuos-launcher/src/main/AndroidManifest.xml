@@ -76,6 +76,10 @@
             </intent-filter>
         </activity>
 
+        <!-- USB audio host (DAC-out) watcher: was started by the launcher but never declared -> "Unable to start service ... not found" on every launch. -->
+
+        <service android:name=".usb.MikuUsbAudioHostService" android:exported="false" />
+
         <service
             android:name=".MikuLiveWallpaperService"
             android:exported="true"

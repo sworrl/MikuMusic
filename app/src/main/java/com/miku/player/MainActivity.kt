@@ -124,6 +124,9 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.Image
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.layout.ContentScale
+import com.miku.player.artistart.ArtistPhotoCreditButton
+import com.miku.player.artistart.ArtistPhotoImage
+import com.miku.player.artistart.ArtistPhotoSettingsCard
 
 private val MikuColors = darkColorScheme(
     primary = MikuTeal, onPrimary = Color(0xFF00201D), secondary = MikuPink,
@@ -397,6 +400,14 @@ class MainActivity : ComponentActivity() {
             setContent { MaterialTheme(colorScheme = MikuColors, typography = MikuTypography) { UnsupportedDeviceScreen() } }
             return
         }
+        // Remote entitlement layer on top of the local hardware gate (com.miku.player.entitlement).
+        // Inert unless BuildConfig.MIKU_ENTITLEMENT_* is baked in AND the Settings toggle is on;
+        // fail-open on every error; `blocked` only after a signed 3×/72h disallow chain.
+        com.miku.player.entitlement.EntitlementManager.onAppStart(this)
+        if (try { com.miku.player.entitlement.EntitlementManager.decision(this).blocked } catch (_: Throwable) { false }) {
+            setContent { MaterialTheme(colorScheme = MikuColors, typography = MikuTypography) { com.miku.player.entitlement.EntitlementBlockedScreen(onUnblocked = { recreate() }) } }
+            return
+        }
         if (intent?.getBooleanExtra(UpdateManager.EXTRA_JUST_UPDATED, false) == true) {
             UpdateOverlay.mode.value = UpdateOverlayMode.RESUMING
         }
@@ -408,6 +419,8 @@ class MainActivity : ComponentActivity() {
         } catch (e: Throwable) {
             android.util.Log.e("MainActivity", "Failed to start MikuApiServer", e)
         }
+        // BLE phone remote (remote/): only re-arms if the user left its Settings toggle on.
+        try { com.miku.player.remote.MikuRemoteGattService.startIfEnabled(this) } catch (_: Throwable) {}
         val updateFilter = android.content.IntentFilter(UpdateManager.ACTION_UPDATE_STARTING)
         if (android.os.Build.VERSION.SDK_INT >= 33) {
             registerReceiver(updateStartingReceiver, updateFilter, android.content.Context.RECEIVER_EXPORTED)
@@ -603,6 +616,10 @@ class MainActivity : ComponentActivity() {
     // Hardware transport keys & gesture chords (M500 side buttons / headset)
     override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent?): Boolean {
         IdleController.poke(this)
+        if (AlarmRingService.interceptMediaKey(this, keyCode)) return true   // ringing alarm owns the side buttons: play/pause = snooze, next/prev = dismiss
+        // Unsupported-device / entitlement-blocked screens return from onCreate before `player`
+        // exists — a side transport key there must not throw UninitializedPropertyAccessException.
+        if (!::player.isInitialized) return super.onKeyDown(keyCode, event)
         if (com.miku.player.volume.MikuVolumeManager.handleKeyDown(keyCode, this)) {
             return true
         }
@@ -1263,6 +1280,9 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 onArtistClick = openArtistByName,
                 onAlbumClick = openAlbumByName
             )
+            // Miku Radio station sheet (taste/ForYouShelf.kt) — hosted here so it can open from
+            // any screen's long-press menu / radio button, not just Home.
+            com.miku.player.taste.StationHost()
         }
         Column(
             Modifier
@@ -2490,25 +2510,9 @@ fun expandNotificationShade(ctx: Context) {
                 Spacer(Modifier.width(6.dp))
             }
 
-            // Standalone Miku Music brand header
-            Row(
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                androidx.compose.foundation.Image(
-                    painter = androidx.compose.ui.res.painterResource(MikuArt.chibiHearts),
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(Modifier.width(5.dp))
-                Text(
-                    "Miku Music",
-                    color = ac.accent,
-                    fontSize = brandFontSize,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont,
-                    maxLines = 1
-                )
-            }
+            // Standalone Miku Music brand header — the shared mark (ui/MikuTopBar.kt), same glyph +
+            // wordmark that signs Now Playing and every settings page.
+            com.miku.player.ui.MikuBrandMark(tint = ac.accent, fontSize = brandFontSize, glyphSize = 24.dp)
             Spacer(Modifier.weight(1f))
 
             // Instant RANDOM — always one tap away from anything in the library.
@@ -2920,6 +2924,12 @@ modifier = Modifier.clickable { onPlay(likedTracks, 0) }
                 }
             }
         }
+
+        // 2.5. "For You" — local taste engine shelf (taste/ForYouShelf.kt): heavy rotation,
+        // forgotten favourites, good-right-now (time of day), discover-in-your-library, plus the
+        // Miku Radio entry point and the taste-profile card. Every row is derived from real local
+        // signals and stays locked ("Listen more to unlock") until there is enough of them.
+        item { com.miku.player.taste.ForYouShelf(tracks = tracks, onPlay = onPlay, onOpenArtist = onOpenArtist) }
 
         // 3. Recently Played Section
         if (recentlyPlayed.isNotEmpty()) {
@@ -3437,10 +3447,13 @@ fun MikuEmptyState(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Box(Modifier.size(48.dp)) {
-                                if (reprTrack != null) {
-                                    AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(50)), trackPath = reprTrack.path)
-                                } else {
-                                    CircleArt()
+                                // Real artist photo when one is known (see artistart/); album art / placeholder otherwise.
+                                ArtistPhotoImage(artist = a, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(50))) {
+                                    if (reprTrack != null) {
+                                        AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(50)), trackPath = reprTrack.path)
+                                    } else {
+                                        CircleArt()
+                                    }
                                 }
                                 // Circular Glanceable Quality Symbol Overlay (over bottom-end of avatar)
                                 AudioQualityCrestOverlay(
@@ -3701,14 +3714,17 @@ private fun ArtistSortSettingsModal(
             ) {
                 // Background Cover Artwork — marked as the haze blur SOURCE so the text panel
                 // below can show a real frosted-glass view of it instead of a flat dark scrim.
-                if (reprTrack != null) {
-                    AlbumArtImage(
-                        trackId = reprTrack.id,
-                        modifier = Modifier.fillMaxSize().haze(hazeState),
-                        trackPath = reprTrack.path
-                    )
-                } else {
-                    Box(Modifier.fillMaxSize().haze(hazeState).background(Color(0xFF0C2B2E)))
+                // Real artist photo when one is known (see artistart/); the album art below otherwise.
+                ArtistPhotoImage(artist = a, modifier = Modifier.fillMaxSize().haze(hazeState)) {
+                    if (reprTrack != null) {
+                        AlbumArtImage(
+                            trackId = reprTrack.id,
+                            modifier = Modifier.fillMaxSize().haze(hazeState),
+                            trackPath = reprTrack.path
+                        )
+                    } else {
+                        Box(Modifier.fillMaxSize().haze(hazeState).background(Color(0xFF0C2B2E)))
+                    }
                 }
 
                 // Light top scrim only, for status-bar legibility — the text block below now
@@ -3718,6 +3734,8 @@ private fun ArtistSortSettingsModal(
                         Brush.verticalGradient(listOf(Color(0x66041416), Color.Transparent))
                     )
                 )
+                // "ⓘ" photo credit — renders nothing unless a real artist photo is in use.
+                ArtistPhotoCreditButton(a, Modifier.align(Alignment.TopEnd).padding(top = 10.dp, end = 10.dp))
 
                 // Artist Header Text & Actions — real frosted glass over the blurred art behind it.
                 Column(
@@ -3786,6 +3804,11 @@ private fun ArtistSortSettingsModal(
                         ) {
                             Icon(Icons.Default.Shuffle, "Shuffle", tint = MikuTealBright, modifier = Modifier.size(18.dp))
                         }
+
+                        Spacer(Modifier.width(10.dp))
+
+                        // Miku Radio seeded from this artist (taste/StationEngine).
+                        com.miku.player.taste.StationSeedButton(seed = { com.miku.player.taste.StationEngine.Seed.FromArtist(a.name, a.tracks) }, size = 36.dp)
 
                         Spacer(Modifier.width(10.dp))
 
@@ -4167,6 +4190,18 @@ private fun ArtistSortSettingsModal(
 
                         Spacer(Modifier.width(10.dp))
 
+                        // Miku Radio seeded from this album (taste/StationEngine).
+                        com.miku.player.taste.StationSeedButton(
+                            seed = {
+                                com.miku.player.taste.StationEngine.Seed.FromAlbum(
+                                    title, sortedTracks.firstOrNull()?.let { it.albumArtist.ifBlank { it.artist } } ?: "", sortedTracks
+                                )
+                            },
+                            size = 38.dp
+                        )
+
+                        Spacer(Modifier.width(10.dp))
+
                         // Play Next Album
                         Box(
                             modifier = Modifier
@@ -4199,6 +4234,12 @@ private fun ArtistSortSettingsModal(
                             Icon(Icons.Default.PlaylistAdd, "Add Album to Queue", tint = MikuPink, modifier = Modifier.size(20.dp))
                         }
                     }
+
+                    // Booklet / physical-media art viewer entry — renders nothing unless real art
+                    // (cover/back/inlay/disc/booklet scans or a PDF) exists on disk for this album.
+                    com.miku.player.booklet.AlbumBookletButton(
+                        tracks = sortedTracks, albumTitle = title, qualityTag = albumQualityBreakdown.summaryTag
+                    )
                 }
             }
         }
@@ -4866,6 +4907,11 @@ fun AudioQualitySpecLine(
                 }
             }
 
+            // Miku Radio seeded from this song (taste/StationEngine) — builds a self-refilling
+            // queue of similar tracks; the sheet it opens shows the seed, discovery slider, why-this.
+            Spacer(Modifier.height(10.dp))
+            com.miku.player.taste.StationFromTrackButton(t) { onDismiss() }
+
             Spacer(Modifier.height(16.dp))
             if (t.trackNumber > 0) MetricRow("Track #", "#${t.trackNumber}", MikuTealBright)
             MetricRow("Format", t.mime.substringAfterLast('/').uppercase().ifBlank { "—" }, formatColor(t.mime))
@@ -5407,8 +5453,40 @@ enum class SettingsCategory(val title: String, val icon: String) {
                                 checked = autoViz
                             ) { autoViz = it; PlayerPreferences.saveAutoViz(ctx, it) }
                         }
+                        // ---- Now Playing look (ui/NowPlayingLook.kt, visualizer/) ----
+                        item { SettingsSection("Now Playing") }
+                        item {
+                            com.miku.player.ui.NowPlayingLook.load(ctx)
+                            SettingsToggleRow(
+                                title = "Album-art dynamic color",
+                                subtitle = "Tint the Now Playing background, wavy bar and keys from the cover art (off = Miku teal)",
+                                checked = com.miku.player.ui.NowPlayingLook.dynamicColor
+                            ) { com.miku.player.ui.NowPlayingLook.setDynamicColor(ctx, it) }
+                        }
+                        item {
+                            SettingsToggleRow(
+                                title = "Wavy play bar",
+                                subtitle = "Seek bar rides the live output waveform (off = plain embossed scrubber)",
+                                checked = com.miku.player.ui.NowPlayingLook.wavyBar
+                            ) { com.miku.player.ui.NowPlayingLook.setWavyBar(ctx, it) }
+                        }
+                        item {
+                            var shaderEngine by remember { mutableStateOf(PlayerPreferences.loadVizEngine(ctx) == "shader") }
+                            SettingsToggleRow(
+                                title = "Miku Shaders visualizer engine",
+                                subtitle = if (ProjectMNative.available) "GLES2 GLSL presets (light, ~5 MB) instead of projectM (native, ~185 MB). Swipe the stage to change presets."
+                                    else "projectM native engine is unavailable on this build — Miku Shaders is always used",
+                                checked = shaderEngine || !ProjectMNative.available
+                            ) { shaderEngine = it; PlayerPreferences.saveVizEngine(ctx, if (it) "shader" else "projectm") }
+                        }
+                        item { SettingsSection("Phone Remote") }
+                        item { com.miku.player.remote.MikuRemoteSettingsCard(ctx) }
+                        item { SettingsSection("Listening Stats") }
+                        item { com.miku.player.stats.ListeningStatsSettingsCard(ctx) }
                         item { SettingsSection("Last.fm") }
-                        item { LastFmCard(ctx) }
+                        item { com.miku.player.scrobble.ScrobbleSettingsCard(ctx) }
+                        item { SettingsSection("Artist Photos") }
+                        item { ArtistPhotoSettingsCard(ctx) }
                     }
                     SettingsCategory.DISPLAY -> {
                         item { SettingsSection("Idle Screen Pipeline") }
@@ -5445,7 +5523,7 @@ enum class SettingsCategory(val title: String, val icon: String) {
                     }
                     SettingsCategory.ALARMS -> {
                         item { SettingsSection("Alarms") }
-                        item { AlarmsCard(ctx, tracks) }
+                        item { AlarmsSettingsContent(ctx, tracks) }
                     }
                     SettingsCategory.ABOUT -> {
                         item { SettingsSection("About") }

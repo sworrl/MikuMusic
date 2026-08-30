@@ -75,6 +75,17 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import kotlin.math.roundToInt
+import androidx.compose.ui.graphics.graphicsLayer
+import com.miku.player.ui.GlassTransportDeck
+import com.miku.player.ui.MikuBrandMark
+import com.miku.player.ui.NowPlayingLook
+import com.miku.player.ui.TrackFactsStrip
+import com.miku.player.ui.WavyScrubber
+import com.miku.player.ui.onAccentColor
+import com.miku.player.ui.rememberAnimatedPalette
+import com.miku.player.visualizer.MikuShaderVisualizerView
+import com.miku.player.visualizer.ShaderPreset
+import com.miku.player.visualizer.VizEngine
 
 data class ArtPalette(
     val color1: Color = MikuTeal,
@@ -184,6 +195,7 @@ fun NowPlayingScreen(
 ) {
     val ctx = LocalContext.current
     androidx.activity.compose.BackHandler(onBack = onClose)
+    NowPlayingLook.load(ctx)
     // Instant art: the cached thumb shows the same frame the screen opens, then the lossless
     // hi-res decode swaps in underneath — never a blank wait.
     val art by produceState<ImageBitmap?>(initialValue = AlbumArtCache.getHi(track.id), track.id) {
@@ -197,6 +209,14 @@ fun NowPlayingScreen(
     var currentPresetIndex by remember { mutableStateOf(PlayerPreferences.loadProjectMPreset(ctx)) }
     val presets = ProjectMPreset.entries
     val currentPreset = presets[currentPresetIndex.coerceIn(0, presets.size - 1)]
+
+    // ---- Visualizer engine: native projectM or the GLES2 "Miku Shaders" (visualizer/) ----
+    var engine by remember { mutableStateOf(VizEngine.fromKey(PlayerPreferences.loadVizEngine(ctx))) }
+    var shaderPresetIdx by remember { mutableStateOf(PlayerPreferences.loadShaderPreset(ctx)) }
+    val shaderPresets = ShaderPreset.entries
+    val shaderPreset = shaderPresets[shaderPresetIdx.coerceIn(0, shaderPresets.size - 1)]
+    // projectM only when the user chose it AND the native lib actually loaded; else the shader engine.
+    val effectiveEngine = if (engine == VizEngine.PROJECTM && ProjectMNative.available) VizEngine.PROJECTM else VizEngine.SHADER
 
     var autoViz by remember { mutableStateOf(PlayerPreferences.loadAutoViz(ctx)) }
     LaunchedEffect(track.id) { if (autoViz) showViz = true }   // re-arm on track change if user toggled it off
@@ -259,17 +279,54 @@ fun NowPlayingScreen(
     var showConnectModal by remember { mutableStateOf(false) }
     var pinControls by remember { mutableStateOf(false) }
     var presetToast by remember { mutableStateOf("") }
+    var factsExpanded by remember { mutableStateOf(PlayerPreferences.loadTrackFactsExpanded(ctx)) }
     val scope = rememberCoroutineScope()
     fun showPresetName(prefix: String) {
         presetToast = prefix
         scope.launch { delay(280); presetToast = ProjectMNative.presetName().ifBlank { prefix } }
     }
+    // Preset stepping is engine-aware: projectM walks its .milk playlist on the GL thread, the
+    // shader engine just rotates the GLSL preset list (and remembers it).
+    fun nextPreset() {
+        if (effectiveEngine == VizEngine.SHADER) {
+            shaderPresetIdx = (shaderPresetIdx + 1) % shaderPresets.size
+            PlayerPreferences.saveShaderPreset(ctx, shaderPresetIdx)
+            presetToast = shaderPresets[shaderPresetIdx].title
+        } else { ProjectMNative.requestNext(); showPresetName("Next ▸") }
+    }
+    fun prevPreset() {
+        if (effectiveEngine == VizEngine.SHADER) {
+            shaderPresetIdx = (shaderPresetIdx - 1 + shaderPresets.size) % shaderPresets.size
+            PlayerPreferences.saveShaderPreset(ctx, shaderPresetIdx)
+            presetToast = shaderPresets[shaderPresetIdx].title
+        } else { ProjectMNative.requestPrev(); showPresetName("◂ Prev") }
+    }
+    fun toggleEngine() {
+        val next = if (engine == VizEngine.PROJECTM) VizEngine.SHADER else VizEngine.PROJECTM
+        engine = next
+        PlayerPreferences.saveVizEngine(ctx, next.key)
+        presetToast = if (next == VizEngine.PROJECTM && !ProjectMNative.available) "projectM unavailable · Miku Shaders" else next.title
+    }
     LaunchedEffect(presetToast) { if (presetToast.isNotEmpty()) { delay(2000); presetToast = "" } }
     LaunchedEffect(showOverlayControls, pinControls) { if (showOverlayControls && !pinControls) { delay(4500); showOverlayControls = false } }
-    val scrollState = rememberScrollState()
 
     var dragOffsetY by remember { mutableStateOf(0f) }
     val animatedOffsetY by animateFloatAsState(targetValue = dragOffsetY, label = "dragOffsetY")
+
+    // Next-up peek: the single item after the current one (the full list lives in the queue overlay).
+    val nextUp = remember(track.id, player.currentMediaItemIndex, player.mediaItemCount, shuffle) {
+        runCatching {
+            val i = player.nextMediaItemIndex
+            if (i < 0 || i >= player.mediaItemCount) null else {
+                val mi = player.getMediaItemAt(i)
+                val id = mi.mediaId.toLongOrNull()
+                val tr = if (id != null) tracks.find { it.id == id } else null
+                val title = mi.mediaMetadata.title?.toString().orEmpty().ifBlank { tr?.title ?: "Unknown Title" }
+                val artist = mi.mediaMetadata.artist?.toString().orEmpty().ifBlank { tr?.artist ?: "" }
+                Triple(id, "$title${if (artist.isNotBlank()) "  ·  $artist" else ""}", tr?.path ?: "")
+            }
+        }.getOrNull()
+    }
 
     Box(
         Modifier
@@ -293,9 +350,14 @@ fun NowPlayingScreen(
                 )
             }
     ) {
-        val palette = remember(art) { extractArtPalette(art) }
+        val rawPalette = remember(art) { extractArtPalette(art) }
         // Feed the app-wide dynamic theme from the SAME hi-res art this screen decoded.
-        LaunchedEffect(palette, track.id) { MikuArtTheme.push(track.id, palette) }
+        LaunchedEffect(rawPalette, track.id) { MikuArtTheme.push(track.id, rawPalette) }
+        // Every surface below reads THIS: art-extracted when "album-art dynamic color" is on
+        // (Miku identity palette when off), gliding between tracks instead of hard-cutting.
+        val palette = rememberAnimatedPalette(rawPalette, NowPlayingLook.dynamicColor)
+        val accent = palette.color1
+        val accent2 = palette.color3
 
         // Branded 3-color dynamic blended background extracted directly from album artwork
         art?.let {
@@ -329,20 +391,32 @@ fun NowPlayingScreen(
             Modifier
                 .fillMaxSize()
                 .background(Ground)
-                .pointerInput(Unit) {
+                .pointerInput(effectiveEngine) {
                     detectTapGestures(
                         onTap = { showOverlayControls = !showOverlayControls },
-                        onDoubleTap = { ProjectMNative.requestNext(); showPresetName("Next ▸") }
+                        onDoubleTap = { nextPreset() }
                     )
                 }
+                // Swipe left/right anywhere on the stage = next/previous preset (both engines).
+                .pointerInput(effectiveEngine) {
+                    var dx = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { dx = 0f },
+                        onDragEnd = { if (dx < -70f) { Haptics.tick(ctx); nextPreset() } else if (dx > 70f) { Haptics.tick(ctx); prevPreset() }; dx = 0f },
+                        onDragCancel = { dx = 0f }
+                    ) { change, amount -> change.consume(); dx += amount }
+                }
         ) {
-            ProjectMVisualizerView(
+            StageVisualizer(
+                engine = effectiveEngine,
                 sessionId = player.audioSessionId,
-                preset = currentPreset,
+                pmPreset = currentPreset,
+                shPreset = shaderPreset,
+                palette = palette,
                 modifier = Modifier.fillMaxSize()
             )
 
-            // Pretty transient preset-name toast (real .milk name).
+            // Pretty transient preset-name toast (real .milk name / GLSL preset title / engine).
             androidx.compose.animation.AnimatedVisibility(
                 visible = presetToast.isNotEmpty(),
                 enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically { -it / 2 },
@@ -351,7 +425,7 @@ fun NowPlayingScreen(
             ) {
                 Row(
                     Modifier.clip(RoundedCornerShape(24.dp))
-                        .background(Brush.horizontalGradient(listOf(MikuTeal.copy(alpha = .92f), MikuPink.copy(alpha = .92f))))
+                        .background(Brush.horizontalGradient(listOf(accent.copy(alpha = .92f), accent2.copy(alpha = .92f))))
                         .padding(horizontal = 18.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -361,7 +435,7 @@ fun NowPlayingScreen(
                 }
             }
 
-            // Top-right floating chips: pin + exit (always available, tiny, glassy — minimal vis blocking).
+            // Top-right floating chips: pin + engine + exit (always available, tiny, glassy — minimal vis blocking).
             androidx.compose.animation.AnimatedVisibility(
                 visible = showOverlayControls || pinControls,
                 enter = androidx.compose.animation.fadeIn(),
@@ -371,6 +445,9 @@ fun NowPlayingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     GlassIcon(if (pinControls) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                         "Pin controls", if (pinControls) MikuGold else Color.White) { pinControls = !pinControls }
+                    Spacer(Modifier.width(8.dp))
+                    GlassIcon(Icons.Default.AutoAwesome, "Visualizer engine: ${effectiveEngine.title}",
+                        if (effectiveEngine == VizEngine.SHADER) accent2 else MikuGold) { toggleEngine() }
                     Spacer(Modifier.width(8.dp))
                     GlassIcon(Icons.Default.FullscreenExit, "Exit fullscreen", MikuTealBright) { isFullscreenVisualizer = false }
                 }
@@ -393,32 +470,42 @@ fun NowPlayingScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(track.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(track.artist + "   ·   " + presetToast.ifBlank { ProjectMNative.presetName() }.ifBlank { "visualizer" },
-                                color = MikuTeal.copy(alpha = .9f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val vizName = if (effectiveEngine == VizEngine.SHADER) shaderPreset.title
+                                else presetToast.ifBlank { ProjectMNative.presetName() }.ifBlank { "visualizer" }
+                            Text(track.artist + "   ·   " + vizName,
+                                color = accent.copy(alpha = .9f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         NowPlayingHeart(track, size = 50.dp)
                     }
                     Spacer(Modifier.height(8.dp))
-                    EmbossedScrubber(
-                        pos = pos, dur = dur, playing = isPlaying,
-                        onSeekPreview = { dragging = true; pos = it },
-                        onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
-                    )
+                    if (NowPlayingLook.wavyBar) {
+                        WavyScrubber(
+                            pos = pos, dur = dur, playing = isPlaying, accent = accent, accent2 = accent2, sessionId = player.audioSessionId,
+                            onSeekPreview = { dragging = true; pos = it },
+                            onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
+                        )
+                    } else {
+                        EmbossedScrubber(
+                            pos = pos, dur = dur, playing = isPlaying,
+                            onSeekPreview = { dragging = true; pos = it },
+                            onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
+                        )
+                    }
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-                        HapticIconButton(onClick = { ProjectMNative.requestPrev(); showPresetName("◂ Prev") }) {
+                        HapticIconButton(onClick = { prevPreset() }) {
                             Icon(Icons.Default.GraphicEq, "Prev preset", tint = MikuGold, modifier = Modifier.size(22.dp))
                         }
                         HapticIconButton(onClick = { player.seekToPreviousMediaItem() }) {
-                            Icon(Icons.Default.SkipPrevious, "Prev", tint = MikuTeal, modifier = Modifier.size(34.dp))
+                            Icon(Icons.Default.SkipPrevious, "Prev", tint = accent, modifier = Modifier.size(34.dp))
                         }
                         HapticIconButton(onClick = { if (player.isPlaying) player.pause() else player.play() },
-                            face = MikuTeal, modifier = Modifier.size(width = 78.dp, height = 58.dp)) {
-                            PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 34.dp)
+                            face = accent, modifier = Modifier.size(width = 78.dp, height = 58.dp)) {
+                            PlayPauseGlyph(isPlaying, tint = onAccentColor(accent), size = 34.dp)
                         }
                         HapticIconButton(onClick = { player.seekToNextMediaItem() }) {
-                            Icon(Icons.Default.SkipNext, "Next", tint = MikuTeal, modifier = Modifier.size(34.dp))
+                            Icon(Icons.Default.SkipNext, "Next", tint = accent, modifier = Modifier.size(34.dp))
                         }
-                        HapticIconButton(onClick = { ProjectMNative.requestNext(); showPresetName("Next ▸") }) {
+                        HapticIconButton(onClick = { nextPreset() }) {
                             Icon(Icons.Default.GraphicEq, "Next preset", tint = MikuGold, modifier = Modifier.size(22.dp))
                         }
                     }
@@ -436,46 +523,51 @@ fun NowPlayingScreen(
             // 24dp clear under the transport keys — the system gesture pill lives there.
             .padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 24.dp)
     ) {
-        // Top Nav Bar.
+        // Top Nav Bar — the shared Miku Music brand mark (ui/MikuTopBar.kt) signs the screen.
         Row(verticalAlignment = Alignment.CenterVertically) {
             HapticIconButton(onClick = onClose, flat = true) {
-                Icon(Icons.Default.KeyboardArrowDown, "Close", tint = palette.color1, modifier = Modifier.size(32.dp))
+                Icon(Icons.Default.KeyboardArrowDown, "Close", tint = accent, modifier = Modifier.size(32.dp))
             }
             Spacer(Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("MIKU MUSIC PLAYER", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.5.sp, fontFamily = AudiowideFont)
-                Text(track.album.ifBlank { "Miku Player" }, color = Color(0xFFE8F4F2), fontSize = 13.sp, fontWeight = FontWeight.Medium, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                MikuBrandMark(tint = accent, fontSize = 11.sp, glyphSize = 18.dp, letterSpacing = 1.2.sp)
+                Text(track.album.ifBlank { "Now Playing" }, color = Color(0xFFE8F4F2), fontSize = 12.sp, fontWeight = FontWeight.Medium, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.weight(1f))
             HapticIconButton(onClick = { InstantRandom.start(ctx) }, flat = true) {
                 Icon(
                     Icons.Default.Casino, "Random — play anything",
-                    tint = if (InstantRandom.active) palette.color3 else palette.color1,
+                    tint = if (InstantRandom.active) accent2 else accent,
                     modifier = Modifier.size(24.dp)
                 )
             }
             Spacer(Modifier.width(2.dp))
             HapticIconButton(onClick = { showConnectModal = !showConnectModal }, flat = true) {
-                Icon(Icons.Default.Tv, "Miku Connect (TV & Remote)", tint = if (showConnectModal) palette.color3 else palette.color1, modifier = Modifier.size(24.dp))
+                Icon(Icons.Default.Tv, "Miku Connect (TV & Remote)", tint = if (showConnectModal) accent2 else accent, modifier = Modifier.size(24.dp))
             }
             Spacer(Modifier.width(4.dp))
             HapticIconButton(onClick = { showQueue = !showQueue }, flat = true) {
-                Icon(Icons.Default.QueueMusic, "Up Next Queue", tint = if (showQueue) palette.color3 else palette.color1, modifier = Modifier.size(26.dp))
+                Icon(Icons.Default.QueueMusic, "Up Next Queue", tint = if (showQueue) accent2 else accent, modifier = Modifier.size(26.dp))
             }
             Spacer(Modifier.width(4.dp))
-            HapticIconButton(onClick = onTape, flat = true) { TapeIcon(tint = palette.color3, modifier = Modifier.size(26.dp)) }
+            HapticIconButton(onClick = onTape, flat = true) { TapeIcon(tint = accent2, modifier = Modifier.size(26.dp)) }
         }
 
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(8.dp))
 
-        // Stage & Track Info Container — stage gets the lion's share (~59/41): the info card only
-        // needs room for title / artist / album / badges, everything else is visualizer.
+        // Stage & Track Info Container — stage gets the lion's share (~59/41) normally; when the
+        // Track Facts ledger is open the info card grows (animated weight) and the stage shrinks.
+        val infoWeight by animateFloatAsState(if (factsExpanded) 2.6f else 1f, tween(320, easing = FastOutSlowInEasing), label = "infoWeight")
+        // Parallax drive for the art stage: the swipe-to-skip drag nudges the art sideways and the
+        // pull-down-to-close offset nudges it vertically; both spring back.
+        var totalDragX by remember { mutableStateOf(0f) }
+        val parallaxX by animateFloatAsState(totalDragX * 0.35f, spring(dampingRatio = 0.75f, stiffness = 300f), label = "parallaxX")
         Column(
             Modifier
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            // Stage (Art / ProjectM Visualizer) — larger split
+            // Stage (Art / Visualizer)
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -486,8 +578,8 @@ fun NowPlayingScreen(
                         1.2.dp,
                         Brush.horizontalGradient(
                             listOf(
-                                palette.color1.copy(alpha = 0.55f),
-                                palette.color3.copy(alpha = 0.45f)
+                                accent.copy(alpha = 0.55f),
+                                accent2.copy(alpha = 0.45f)
                             )
                         ),
                         RoundedCornerShape(22.dp)
@@ -495,31 +587,41 @@ fun NowPlayingScreen(
                 contentAlignment = Alignment.Center
             ) {
                 if (showViz) {
-                    ProjectMVisualizerView(
+                    StageVisualizer(
+                        engine = effectiveEngine,
                         sessionId = player.audioSessionId,
-                        preset = currentPreset,
+                        pmPreset = currentPreset,
+                        shPreset = shaderPreset,
+                        palette = palette,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else if (art != null) {
                     androidx.compose.foundation.Image(
-                        art!!, "Album art", Modifier.fillMaxSize(), contentScale = ContentScale.Fit
+                        art!!, "Album art",
+                        Modifier.fillMaxSize().graphicsLayer {
+                            // Slight over-scale so the parallax shift never exposes the card edge.
+                            scaleX = 1.08f; scaleY = 1.08f
+                            translationX = parallaxX
+                            translationY = animatedOffsetY * 0.12f
+                        },
+                        contentScale = ContentScale.Crop
                     )
                 } else {
-                    Icon(Icons.Default.Album, null, tint = palette.color1.copy(alpha = .5f), modifier = Modifier.size(100.dp))
+                    Icon(Icons.Default.Album, null, tint = accent.copy(alpha = .5f), modifier = Modifier.size(100.dp))
                 }
 
                 // Interactive Gestures on Stage (Visualizer or Album Art)
                 if (showViz) {
                     Box(
-                        Modifier.matchParentSize().pointerInput(Unit) {
+                        Modifier.matchParentSize().pointerInput(effectiveEngine) {
                             detectTapGestures(
                                 onTap = { isFullscreenVisualizer = true },
+                                onDoubleTap = { nextPreset() },
                                 onLongPress = { showViz = false }
                             )
                         }
                     )
                 } else {
-                    var totalDragX by remember { mutableStateOf(0f) }
                     Box(
                         Modifier.matchParentSize()
                             .padding(horizontal = 32.dp)
@@ -558,13 +660,13 @@ fun NowPlayingScreen(
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
 
             // Track Info Card: 100% Full Album Art with Text Overlain & Vignette — compact split
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .weight(1f)
+                    .weight(infoWeight)
                     .drawBehind {
                         val rr = CornerRadius(22.dp.toPx(), 22.dp.toPx())
                         drawRoundRect(Color(0x66000000), topLeft = Offset(0f, 4.dp.toPx()), size = size, cornerRadius = rr)
@@ -574,8 +676,8 @@ fun NowPlayingScreen(
                         1.5.dp,
                         Brush.horizontalGradient(
                             listOf(
-                                palette.color1.copy(alpha = 0.85f),
-                                palette.color3.copy(alpha = 0.75f)
+                                accent.copy(alpha = 0.85f),
+                                accent2.copy(alpha = 0.75f)
                             )
                         ),
                         RoundedCornerShape(22.dp)
@@ -599,7 +701,7 @@ fun NowPlayingScreen(
                         Icon(
                             Icons.Default.Album,
                             null,
-                            tint = palette.color1.copy(alpha = 0.4f),
+                            tint = accent.copy(alpha = 0.4f),
                             modifier = Modifier.size(90.dp)
                         )
                     }
@@ -671,7 +773,7 @@ fun NowPlayingScreen(
                         Spacer(Modifier.height(1.dp))
                         Text(
                             text = track.album.ifBlank { track.artist },
-                            color = palette.color1,
+                            color = accent,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.SemiBold,
                             fontFamily = Baloo2Font,
@@ -686,6 +788,16 @@ fun NowPlayingScreen(
                         )
                     }
 
+                    // Data-verbose strip: real file / decoder / route / DAC facts (ui/TrackFactsStrip.kt).
+                    TrackFactsStrip(
+                        track = track,
+                        player = player,
+                        expanded = factsExpanded,
+                        accent = accent2,
+                        onToggle = { factsExpanded = !factsExpanded; PlayerPreferences.saveTrackFactsExpanded(ctx, factsExpanded) },
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+
                     // Bottom Row: Audio Quality & Format Pills taking full width across the bottom of the card
                     androidx.compose.foundation.layout.FlowRow(
                         modifier = Modifier.fillMaxWidth(),
@@ -695,6 +807,7 @@ fun NowPlayingScreen(
                         Row { TechBadgeRow(ctx, track, fontSize = 10.5.sp, spacing = 4.dp, includeFormat = true) }
                         if (track.bitrateKbps > 0) DataChip("${track.bitrateKbps} kbps", bitrateColor(track.bitrateKbps))
                         DataChip(qualityTier(track), bitrateColor(track.bitrateKbps))
+                        releaseTag(track.album)?.let { DataChip(it, ReleaseTagColor) }
                         if (track.durationMs > 0) DataChip(fmtTime(track.durationMs), Color(0xFFD4ECE9))
                         if (track.sizeBytes > 0) DataChip("${"%.1f".format(track.sizeBytes / 1e6)} MB", Color(0xFFD4ECE9))
                     }
@@ -702,57 +815,80 @@ fun NowPlayingScreen(
             }
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        // Seek Bar — custom embossed, color-shifting physical control
-        EmbossedScrubber(
-            pos = pos, dur = dur, playing = isPlaying,
-            onSeekPreview = { dragging = true; pos = it },
-            onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
-        )
-        Row(Modifier.fillMaxWidth()) {
-            Text(fmtTime(pos), color = Muted, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
-            Spacer(Modifier.weight(1f))
-            Text(fmtTime(dur), color = Muted, fontSize = 15.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
-        }
-
         Spacer(Modifier.height(6.dp))
 
-        // Transport Controls with Shuffle & Repeat — one merged "hardware deck" assembly (see
-        // ControlAssembly) instead of five buttons floating independently edge-to-edge across the
-        // full width; still five fully distinct, individually-pressable buttons, just housed
-        // together like a real DAP's molded button cluster.
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            ControlAssembly(cornerRadius = 34.dp) {
-                HapticIconButton(onClick = {
-                    shuffle = !shuffle
-                    player.shuffleModeEnabled = shuffle
-                    PlayerPreferences.saveShuffle(ctx, shuffle)
-                }, flat = true, modifier = Modifier.size(38.dp)) {
-                    Icon(Icons.Default.Shuffle, "Shuffle", tint = if (shuffle) MikuPink else Muted, modifier = Modifier.size(20.dp))
-                }
-                HapticIconButton(onClick = { player.seekToPreviousMediaItem() }, keyShape = TransportShapes.prevWing, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.SkipPrevious, "Prev", tint = MikuTeal, modifier = Modifier.size(30.dp))
-                }
-                // The play key is the hero: larger than its neighbours and a little oblong-wide.
-                HapticIconButton(onClick = { if (player.isPlaying) player.pause() else player.play() },
-                    face = MikuTeal, keyShape = TransportShapes.hero, modifier = Modifier.size(width = 84.dp, height = 62.dp)) {
-                    PlayPauseGlyph(isPlaying, tint = Color(0xFF00201D), size = 36.dp)
-                }
-                HapticIconButton(onClick = { player.seekToNextMediaItem() }, keyShape = TransportShapes.nextWing, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.SkipNext, "Next", tint = MikuTeal, modifier = Modifier.size(30.dp))
-                }
-                HapticIconButton(onClick = {
-                    repeat = !repeat
-                    player.repeatMode = if (repeat) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
-                    PlayerPreferences.saveRepeat(ctx, repeat)
-                }, flat = true, modifier = Modifier.size(38.dp)) {
-                    Icon(Icons.Default.Repeat, "Repeat", tint = if (repeat) MikuPink else Muted, modifier = Modifier.size(20.dp))
+        // Seek Bar — wavy waveform ribbon (default) or the embossed physical scrubber.
+        if (NowPlayingLook.wavyBar) {
+            WavyScrubber(
+                pos = pos, dur = dur, playing = isPlaying, accent = accent, accent2 = accent2, sessionId = player.audioSessionId,
+                onSeekPreview = { dragging = true; pos = it },
+                onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
+            )
+        } else {
+            EmbossedScrubber(
+                pos = pos, dur = dur, playing = isPlaying,
+                onSeekPreview = { dragging = true; pos = it },
+                onSeekCommit = { player.seekTo(it); pos = it; dragging = false }
+            )
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(fmtTime(pos), color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
+            Spacer(Modifier.weight(1f))
+            // Queue peek: what's next, one tap from the full queue.
+            Row(
+                Modifier
+                    .weight(6f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { Haptics.tick(ctx); showQueue = true }
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(Icons.Default.QueueMusic, "Up next", tint = accent2, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(5.dp))
+                if (nextUp != null) {
+                    if (nextUp.first != null) {
+                        AlbumArtImage(nextUp.first!!, Modifier.size(18.dp).clip(RoundedCornerShape(4.dp)), trackPath = nextUp.third)
+                        Spacer(Modifier.width(5.dp))
+                    }
+                    Text(
+                        nextUp.second, color = Color(0xFFD4ECE9), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 1200, initialDelayMillis = 900)
+                    )
+                } else {
+                    Text("End of queue", color = Muted, fontSize = 10.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             }
+            Spacer(Modifier.weight(1f))
+            Text(fmtTime(dur), color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = OrbitronFont, letterSpacing = 0.5.sp)
         }
 
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(4.dp))
+
+        // Transport deck — molded ControlAssembly + 3D keys, palette-tinted hero play key in a
+        // bass-breathing glass halo, LED-lit shuffle/repeat (ui/TransportDeck.kt).
+        GlassTransportDeck(
+            isPlaying = isPlaying,
+            shuffle = shuffle,
+            repeat = repeat,
+            accent = accent,
+            accent2 = accent2,
+            onPlayPause = { if (player.isPlaying) player.pause() else player.play() },
+            onPrev = { player.seekToPreviousMediaItem() },
+            onNext = { player.seekToNextMediaItem() },
+            onShuffle = {
+                shuffle = !shuffle
+                player.shuffleModeEnabled = shuffle
+                PlayerPreferences.saveShuffle(ctx, shuffle)
+            },
+            onRepeat = {
+                repeat = !repeat
+                player.repeatMode = if (repeat) Player.REPEAT_MODE_ALL else Player.REPEAT_MODE_OFF
+                PlayerPreferences.saveRepeat(ctx, repeat)
+            }
+        )
+
+        Spacer(Modifier.height(6.dp))
     }
 
     // Fullsize Vertical Next-Up Track List Overlay (Top of entire screen, 60fps smooth animation)
@@ -978,6 +1114,29 @@ fun NowPlayingScreen(
             onClose = { showConnectModal = false }
         )
     }
+    }
+}
+
+/**
+ * The one place that decides which GPU engine draws the stage. projectM = the native Milkdrop
+ * engine (ProjectMVisualizer.kt, NDK); SHADER = the GLES2 GLSL presets (visualizer/). A future
+ * backend (projectM 4, a preset importer…) is one more branch here.
+ */
+@Composable
+private fun StageVisualizer(
+    engine: VizEngine,
+    sessionId: Int,
+    pmPreset: ProjectMPreset,
+    shPreset: ShaderPreset,
+    palette: ArtPalette,
+    modifier: Modifier = Modifier
+) {
+    when (engine) {
+        VizEngine.PROJECTM -> ProjectMVisualizerView(sessionId = sessionId, preset = pmPreset, modifier = modifier)
+        VizEngine.SHADER -> MikuShaderVisualizerView(
+            sessionId = sessionId, preset = shPreset,
+            accent = palette.color1, accent2 = palette.color3, modifier = modifier
+        )
     }
 }
 

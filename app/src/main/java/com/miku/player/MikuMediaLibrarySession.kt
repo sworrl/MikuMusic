@@ -455,6 +455,7 @@ class MikuLibraryCallback(context: Context) : MediaLibrarySession.Callback {
         controllerInfo: MediaSession.ControllerInfo,
         intent: Intent
     ): Boolean {
+        if (AlarmRingService.interceptMediaButtonIntent(appContext, intent)) return true   // ringing alarm: play/pause = snooze, next/prev = dismiss
         if (MikuPocketLockManager.keysLocked(appContext)) {
             Log.d(TAG, "onMediaButtonEvent ignored: Fn key lock engaged")
             return true

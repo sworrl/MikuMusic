@@ -27,7 +27,9 @@ object LocationLogger {
         nowMs: Long = System.currentTimeMillis(),
         title: String = "",
         artist: String = "",
-        album: String = ""
+        album: String = "",
+        /** Real per-track sample rate from the library DB (TrackTech); null = unknown, stored as 0. */
+        sampleRateHz: Int? = null
     ) {
         if (!MikuPowerGovernor.allowLocation) return   // power governor: no location work while screen-off / idle
         scope.launch {
@@ -79,8 +81,9 @@ object LocationLogger {
                         latitude = finalLat,
                         longitude = finalLon,
                         locationCity = finalCity,
-                        dacSampleRate = 192000,
-                        dacGain = "HIGH",
+                        // Real values only (was hardcoded 192000 / "HIGH"): 0 = unknown rate.
+                        dacSampleRate = sampleRateHz ?: (runCatching { TrackTech.cachedSampleRateFor(ctx, trackId) }.getOrNull() ?: 0),
+                        dacGain = runCatching { CirrusLogicManager.getGainMode(ctx).name }.getOrDefault("UNKNOWN"),
                         playbackDurationMs = 0L
                     )
                 )

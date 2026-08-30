@@ -412,7 +412,7 @@ class MikuLauncherActivity : ComponentActivity() {
 }
 
 /** Default quilt patch order (persisted user order is reconciled against this list). */
-val MikuQuiltBadgeIds = listOf("clock", "weather", "network", "nowplaying", "dac", "ingest", "library", "brain", "thermal", "volume", "battery", "control")
+val MikuQuiltBadgeIds = listOf("clock", "weather", "wxtile", "network", "nowplaying", "dac", "ingest", "library", "brain", "thermal", "volume", "battery", "control")
 
 @Composable
 fun MikuLauncherScreen() {
@@ -982,6 +982,11 @@ fun MikuLauncherScreen() {
                         city = weatherState.gps.city,
                         onClick = { isWeatherObservatoryOpen = true }
                     )
+                },
+                // Full-width Miku weather TILE (Open-Meteo + optional Windy, real AQI, 6h strip,
+                // 3-day row). Self-contained: owns its engine + detail sheet, no launcher state.
+                QuiltBadge("wxtile", "Weather tile") {
+                    com.miku.launcher.widget.MikuWeatherTile()
                 },
                 QuiltBadge("gps", "GPS") {
                     MikuCyberWeatherGpsBadge(

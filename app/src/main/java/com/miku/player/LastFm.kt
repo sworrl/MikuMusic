@@ -28,8 +28,10 @@ object LastFm {
     private const val API_ROOT = "https://ws.audioscrobbler.com/2.0/"
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** User-entered key/secret (Settings → Last.fm) win over the build-time local.properties
+     *  values — see com.miku.player.scrobble.LastFmCredentials. */
     val isConfigured: Boolean
-        get() = BuildConfig.LASTFM_API_KEY.isNotBlank() && BuildConfig.LASTFM_API_SECRET.isNotBlank()
+        get() = com.miku.player.scrobble.LastFmCredentials.isConfigured
 
     sealed class LoginResult {
         data class Success(val sessionKey: String, val username: String) : LoginResult()
@@ -46,7 +48,7 @@ object LastFm {
             "method" to "auth.getMobileSession",
             "username" to username.trim(),
             "password" to password,
-            "api_key" to BuildConfig.LASTFM_API_KEY
+            "api_key" to com.miku.player.scrobble.LastFmCredentials.apiKey()
         )
         try {
             val sig = sign(params)
@@ -73,7 +75,7 @@ object LastFm {
                     "method" to "track.updateNowPlaying",
                     "artist" to artist,
                     "track" to track,
-                    "api_key" to BuildConfig.LASTFM_API_KEY,
+                    "api_key" to com.miku.player.scrobble.LastFmCredentials.apiKey(),
                     "sk" to sk
                 )
                 if (!album.isNullOrBlank()) params["album"] = album
@@ -95,7 +97,7 @@ object LastFm {
                     "artist" to artist,
                     "track" to track,
                     "timestamp" to timestampSec.toString(),
-                    "api_key" to BuildConfig.LASTFM_API_KEY,
+                    "api_key" to com.miku.player.scrobble.LastFmCredentials.apiKey(),
                     "sk" to sk
                 )
                 if (!album.isNullOrBlank()) params["album"] = album
@@ -116,7 +118,7 @@ object LastFm {
                     "method" to if (loved) "track.love" else "track.unlove",
                     "artist" to artist,
                     "track" to track,
-                    "api_key" to BuildConfig.LASTFM_API_KEY,
+                    "api_key" to com.miku.player.scrobble.LastFmCredentials.apiKey(),
                     "sk" to sk
                 )
                 val sig = sign(params)
@@ -129,7 +131,7 @@ object LastFm {
      *  name+value with no separators, append the shared secret, MD5-hex the result. Must run
      *  BEFORE "format"/"api_sig" are added to the request — those two are excluded from signing. */
     private fun sign(params: Map<String, String>): String {
-        val base = params.toSortedMap().entries.joinToString("") { (k, v) -> k + v } + BuildConfig.LASTFM_API_SECRET
+        val base = params.toSortedMap().entries.joinToString("") { (k, v) -> k + v } + com.miku.player.scrobble.LastFmCredentials.apiSecret()
         val digest = MessageDigest.getInstance("MD5").digest(base.toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it) }
     }

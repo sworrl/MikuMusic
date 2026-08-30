@@ -96,6 +96,12 @@ object TrackTech {
     /** Sample rate in Hz, or null while unknown / not yet resolved. */
     fun sampleRateFor(ctx: Context, track: Track): Int? = techFor(ctx, track)?.sampleRateHz?.takeIf { it > 0 }
 
+    /** Cached (already-probed) sample rate by track id - no file I/O; null when never probed. */
+    fun cachedSampleRateFor(ctx: Context, trackId: Long): Int? {
+        ensureLoaded(ctx)
+        return cache[trackId]?.sampleRateHz?.takeIf { it > 0 }
+    }
+
     private fun techFor(ctx: Context, track: Track): Tech? {
         ensureLoaded(ctx)
         cache[track.id]?.let { return it }

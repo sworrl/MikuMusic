@@ -35,8 +35,8 @@ android {
         applicationId = "com.miku.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 34
-        versionName = "0.1.40"
+        versionCode = 36
+        versionName = "0.1.42"
 
         buildConfigField("String", "ARCO_HMAC_KEY_ID", "\"${arcoProp("ARCO_HMAC_KEY_ID")}\"")
         buildConfigField("String", "ARCO_HMAC_SECRET", "\"${arcoProp("ARCO_HMAC_SECRET")}\"")
@@ -54,6 +54,10 @@ android {
         buildConfigField("String", "MIKU_VPN_ENDPOINT", "\"${localProp("miku.vpn.endpoint")}\"")
         buildConfigField("String", "MIKU_VPN_ASSIGNED_IP", "\"${localProp("miku.vpn.assigned.ip")}\"")
         buildConfigField("String", "MIKU_VPN_ROUTES", "\"${localProp("miku.vpn.routes")}\"")
+
+        // Windy Point Forecast API key for the Miku weather tile (local.properties: miku.windy.key).
+        // Empty => Open-Meteo only; the user can also paste a key in the tile's detail sheet.
+        buildConfigField("String", "MIKU_WINDY_KEY", "\"${localProp("miku.windy.key")}\"")
     }
 
     val signingProps = Properties().apply {

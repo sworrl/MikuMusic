@@ -104,6 +104,7 @@ class MikuMediaButtonReceiver : BroadcastReceiver() {
     }
 
     private fun handleMediaKey(context: Context, keyCode: Int, keyEvent: KeyEvent? = null) {
+        if (AlarmRingService.interceptMediaKey(context, keyCode)) return   // ringing alarm owns the side buttons (even under pocket lock): play/pause = snooze, next/prev = dismiss
         if (MikuPocketLockManager.keysLocked(context)) return   // Fn pocket lock: keys are dead
         if (MikuHardwareGestureEngine.onKeyDown(keyCode, keyEvent, context)) {
             return

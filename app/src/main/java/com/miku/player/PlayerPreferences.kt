@@ -419,6 +419,23 @@ object PlayerPreferences {
     fun saveAutoViz(context: Context, enabled: Boolean) { prefs(context).edit().putBoolean("auto_viz", enabled).apply() }
     fun loadAutoViz(context: Context): Boolean = prefs(context).getBoolean("auto_viz", true)
 
+    // ---- Now Playing look (2026-08-29 redesign; see ui/NowPlayingLook.kt) ----
+    // Album-art dynamic color on the Now Playing screen (off = Miku teal identity palette).
+    fun saveDynamicColor(context: Context, on: Boolean) { prefs(context).edit().putBoolean("np_dynamic_color", on).apply() }
+    fun loadDynamicColor(context: Context): Boolean = prefs(context).getBoolean("np_dynamic_color", true)
+    // Wavy (waveform-driven) seek bar vs the plain embossed scrubber.
+    fun saveWavyBar(context: Context, on: Boolean) { prefs(context).edit().putBoolean("np_wavy_bar", on).apply() }
+    fun loadWavyBar(context: Context): Boolean = prefs(context).getBoolean("np_wavy_bar", true)
+    // Visualizer engine: "projectm" (native Milkdrop, heavy) or "shader" (GLES2 GLSL presets, light).
+    fun saveVizEngine(context: Context, engine: String) { prefs(context).edit().putString("viz_engine", engine).apply() }
+    fun loadVizEngine(context: Context): String = prefs(context).getString("viz_engine", "projectm") ?: "projectm"
+    // Last GLSL preset index for the shader engine.
+    fun saveShaderPreset(context: Context, idx: Int) { prefs(context).edit().putInt("viz_shader_preset", idx).apply() }
+    fun loadShaderPreset(context: Context): Int = prefs(context).getInt("viz_shader_preset", 0)
+    // Whether the data-verbose "Track Facts" strip was left open.
+    fun saveTrackFactsExpanded(context: Context, on: Boolean) { prefs(context).edit().putBoolean("np_track_facts", on).apply() }
+    fun loadTrackFactsExpanded(context: Context): Boolean = prefs(context).getBoolean("np_track_facts", false)
+
     // ---- Playlists (JSON: {"name":[trackId,...]}) ----
     private const val KEY_PLAYLISTS = "playlists_json"
 

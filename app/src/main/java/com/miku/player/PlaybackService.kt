@@ -67,6 +67,9 @@ class PlaybackService : MediaLibraryService() {
             try {
                 com.miku.player.api.MikuApiServer.stop(this)
             } catch (_: Throwable) {}
+            // Swipe-away with nothing playing also parks the BLE phone remote (its Settings
+            // toggle stays on, so it re-arms on next launch via startIfEnabled).
+            try { com.miku.player.remote.MikuRemoteGattService.stop(this) } catch (_: Throwable) {}
             PlayerHolder.release()
             stopSelf()
         }

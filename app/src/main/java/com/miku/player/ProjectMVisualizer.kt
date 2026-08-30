@@ -14,6 +14,8 @@ import kotlin.math.hypot
 
 object ProjectMNative {
     private var isLoaded = false
+    /** True when libprojectM-native loaded — the shader engine (visualizer/) is the fallback otherwise. */
+    val available: Boolean get() = isLoaded
 
     init {
         try {

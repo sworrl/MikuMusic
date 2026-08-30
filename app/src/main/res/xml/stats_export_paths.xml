@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Listening-stats CSV exports (StatsRepository.exportCsv) live in external files dir /stats. -->
+<paths>
+    <external-files-path name="stats" path="stats/" />
+    <files-path name="stats_internal" path="stats/" />
+</paths>

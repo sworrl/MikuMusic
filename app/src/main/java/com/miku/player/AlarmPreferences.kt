@@ -11,16 +11,14 @@ object AlarmPreferences {
 
     fun loadAlarms(context: Context): List<Alarm> {
         val raw = prefs(context).getString("alarms", null) ?: return emptyList()
-        return runCatching {
-            val arr = JSONArray(raw)
-            (0 until arr.length()).map { Alarm.fromJson(arr.getJSONObject(it)) }
-        }.getOrDefault(emptyList())
+        return runCatching { Alarm.listFromJson(raw) }.getOrDefault(emptyList())
     }
 
     fun saveAlarms(context: Context, alarms: List<Alarm>) {
         val arr = JSONArray()
         alarms.forEach { arr.put(it.toJson()) }
-        prefs(context).edit().putString("alarms", arr.toString()).apply()
+        val p = prefs(context)
+        p.edit().putString("alarms", arr.toString()).putLong("rev", p.getLong("rev", 0L) + 1).apply()
     }
 
     // Atomic-against-disk read-modify-write helpers — always start from a FRESH loadAlarms(), not
@@ -76,13 +74,29 @@ object AlarmPreferences {
 
     // --- Snooze bookkeeping: which alarm id (if any) currently has a pending snooze fire, so the
     // ring UI/service can tell "this firing is a snooze" apart from "this is the real alarm."
-    fun saveActiveSnooze(context: Context, alarmId: Int?) {
+    fun saveActiveSnooze(context: Context, alarmId: Int?, untilMs: Long = 0L) {
         prefs(context).edit().apply {
-            if (alarmId == null) remove("snooze_active_id") else putInt("snooze_active_id", alarmId)
+            if (alarmId == null) { remove("snooze_active_id"); remove("snooze_until_ms") }
+            else { putInt("snooze_active_id", alarmId); putLong("snooze_until_ms", untilMs) }
         }.apply()
     }
     fun loadActiveSnooze(context: Context): Int? {
         val p = prefs(context)
         return if (p.contains("snooze_active_id")) p.getInt("snooze_active_id", -1).takeIf { it >= 0 } else null
     }
+    /** "Upcoming alarm" low-priority notification (only while an alarm is within 24 h) — user toggle. */
+    fun loadUpcomingNotificationEnabled(context: Context): Boolean = prefs(context).getBoolean("upcoming_notif", true)
+    fun saveUpcomingNotificationEnabled(context: Context, on: Boolean) { prefs(context).edit().putBoolean("upcoming_notif", on).apply() }
+
+    /** Wall-clock instant the active snooze re-fires at (0 = no snooze pending). */
+    fun loadSnoozeUntil(context: Context): Long = prefs(context).getLong("snooze_until_ms", 0L)
+
+    /** Alarms list revision counter — bumped on every write so Compose UI can cheaply observe
+     *  changes made by AlarmRingService (one-shot auto-disable, snooze bookkeeping) while open. */
+    fun revision(context: Context): Long = prefs(context).getLong("rev", 0L)
+
+    fun registerListener(context: Context, l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) =
+        prefs(context).registerOnSharedPreferenceChangeListener(l)
+    fun unregisterListener(context: Context, l: android.content.SharedPreferences.OnSharedPreferenceChangeListener) =
+        prefs(context).unregisterOnSharedPreferenceChangeListener(l)
 }

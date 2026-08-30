@@ -138,6 +138,7 @@ fun MikuSettingsScreen(onBack: () -> Unit) {
     var isAppsModalOpen by remember { mutableStateOf(false) }
     var isGmsModalOpen by remember { mutableStateOf(false) }
     var isSecurityModalOpen by remember { mutableStateOf(false) }
+    var isLicenseModalOpen by remember { mutableStateOf(false) }
 
     val chibiReactions = listOf(
         "🎵 Hi Master!",
@@ -269,6 +270,15 @@ fun MikuSettingsScreen(onBack: () -> Unit) {
                 badge = "GMS Controls",
                 accentColor = Color(0xFF4285F4),
                 onClick = { isGmsModalOpen = true }
+            ),
+            SettingsCategoryItem(
+                id = "license",
+                title = "License & Entitlement",
+                subtitle = "Remote allow/disallow status, signed verdicts, device ID & owner override",
+                icon = Icons.Default.VerifiedUser,
+                badge = if (com.miku.player.entitlement.EntitlementConfig.isConfigured) "Signed" else "Not configured",
+                accentColor = Color(0xFFFFD740),
+                onClick = { isLicenseModalOpen = true }
             ),
             SettingsCategoryItem(
                 id = "dev_options",
@@ -521,6 +531,9 @@ fun MikuSettingsScreen(onBack: () -> Unit) {
         }
         if (isSecurityModalOpen) {
             MikuSecuritySettingsModal(onDismissRequest = { isSecurityModalOpen = false })
+        }
+        if (isLicenseModalOpen) {
+            com.miku.player.entitlement.MikuLicenseModal(onDismissRequest = { isLicenseModalOpen = false })
         }
         if (isBrainModalOpen) {
             MikuBrainModal(onDismissRequest = { isBrainModalOpen = false })

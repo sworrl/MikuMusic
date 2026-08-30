@@ -213,6 +213,27 @@ fun MikuKawaiiWeatherBadge(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Honest empty state: before the first successful fetch the WeatherCondition defaults are
+    // placeholders (72°F / "Clear Sky"), never show them as if they were real.
+    if (weather.lastUpdatedTime == 0L) {
+        Row(
+            modifier
+                .width(236.dp)
+                .clip(RoundedCornerShape(24.dp))
+                .background(Color(0xFF0B1A1F))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("☁", fontSize = 22.sp, color = Color(0xFF39C5BB))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("Weather", color = Color(0xFF39C5BB), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text("No data yet — tap to fetch", color = Color(0xB3FFFFFF), fontSize = 11.sp)
+            }
+        }
+        return
+    }
     val sky = remember(weather.code, weather.isDay) { skyFor(weather.code, weather.isDay) }
     val backdrop = remember(sky, weather.solarFraction, weather.isDay) { backdropFor(sky, weather.solarFraction, weather.isDay) }
     val shape = RoundedCornerShape(24.dp)

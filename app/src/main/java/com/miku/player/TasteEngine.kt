@@ -101,4 +101,34 @@ object TasteEngine {
         score > 0f -> "Slight affinity"
         else -> "No signal yet"
     }
+
+    // ---- Full local model (taste/ package) ------------------------------------------------------
+    // The functions above are the cheap, live, hearts-only view. The taste/ package layers the
+    // rest of the on-device signal on top — completed plays, skips, completion, recency, session
+    // co-occurrence, time-of-day — into a single explainable affinity (TasteModel), the "For You"
+    // shelf (TasteShelves / ForYouShelf), Miku Radio station mode (StationEngine) and smart shuffle
+    // (SmartShuffle). Player events reach it through ONE hook object (TasteHooks, called from
+    // PlayerHolder's Player.Listener). These bridges keep TasteEngine the single entry point.
+
+    /** Model affinity 0..1 for a track from the last built snapshot (0 until one exists). Cheap:
+     *  a map lookup; the snapshot itself is built off-thread by [modelSnapshot]. */
+    fun modelAffinity(id: Long): Float = com.miku.player.taste.TasteModel.peek()?.affinity(id) ?: 0f
+
+    /** Best available affinity: the full model when a snapshot exists, else the hearts-only view. */
+    fun bestAffinity(track: Track, ctx: Context? = null): Float {
+        val snap = com.miku.player.taste.TasteModel.peek() ?: return trackAffinity(track, ctx)
+        return maxOf(snap.affinity(track.id), trackAffinity(track, ctx) * 0.6f)
+    }
+
+    /** Human "why this?" line for a track ("" when there is no signal — never invented). */
+    fun whyThis(id: Long): String = com.miku.player.taste.TasteModel.whyThis(com.miku.player.taste.TasteModel.peek()?.scored(id))
+
+    /** Time-of-day fit 0..1 for the current day-part (0 without enough listens to say). */
+    fun timeFit(id: Long): Float = com.miku.player.taste.TasteModel.peek()?.timeFit(id) ?: 0f
+
+    /** Build/refresh the model snapshot for [tracks] off the main thread. */
+    suspend fun modelSnapshot(ctx: Context, tracks: List<Track>) = com.miku.player.taste.TasteModel.snapshot(ctx, tracks)
+
+    /** Mark the model stale (a listen landed, a heart changed) so the next reader rebuilds. */
+    fun invalidateModel() = com.miku.player.taste.TasteModel.invalidate()
 }

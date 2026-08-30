@@ -69,6 +69,30 @@ fun MikuWeatherObservatoryModal(
     val weather = weatherState.weather
     val gps = weatherState.gps
 
+    // Honest empty state: the WeatherCondition defaults (72°F / "Clear Sky" / AQI 30) are placeholders
+    // until the first successful fetch - never render them as observations.
+    if (weather.lastUpdatedTime == 0L) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onDismissRequest,
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { MikuWeatherService.refreshWeather(ctx) }) {
+                    androidx.compose.material3.Text(if (weatherState.isLoading) "Fetching…" else "Fetch now")
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = onDismissRequest) { androidx.compose.material3.Text("Close") }
+            },
+            title = { androidx.compose.material3.Text("No weather data yet") },
+            text = {
+                androidx.compose.material3.Text(
+                    weatherState.error?.let { "Last attempt failed: $it" }
+                        ?: "Nothing has been fetched from the weather service on this boot yet."
+                )
+            }
+        )
+        return
+    }
+
     var historyRecords by remember { mutableStateOf<List<MikuMetricDatabase.WeatherRecord>>(emptyList()) }
     var selectedTab by remember { mutableIntStateOf(0) }
     var showLocationPicker by remember { mutableStateOf(false) }

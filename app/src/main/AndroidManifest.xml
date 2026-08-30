@@ -60,6 +60,10 @@
          screen off / app backgrounded (confirmed live this wasn't happening as a plain Thread) —
          "dataSync" is the correct foregroundServiceType for background file-indexing work. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- MikuRemoteGattService (remote/): BLE GATT peripheral so a phone's browser can drive playback.
+         "connectedDevice" is the foregroundServiceType for a Bluetooth peripheral session; the
+         BLUETOOTH_ADVERTISE/CONNECT runtime grants above satisfy its API-34 prerequisite. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Alarm Mode: exact, Doze-exempt wake-ups via AlarmManager.setAlarmClock. USE_EXACT_ALARM is
@@ -304,6 +308,13 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
+        <!-- Phone-as-Bluetooth-remote: BLE GATT server advertised ONLY while the Settings toggle
+             is on (default off). Companion page: tools/remote-pwa (Web Bluetooth, no phone app). -->
+        <service
+            android:name=".remote.MikuRemoteGattService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
         <service
             android:name=".launcher.MikuLiveWallpaperService"
             android:label="Miku Cyber Hologram Live Wallpaper"
@@ -361,6 +372,28 @@
             </intent-filter>
         </receiver>
 
+        <!-- Settings → Listening stats (per-listen stats DB: totals, top-10s, hours, CSV export). -->
+        <activity
+            android:name=".stats.ListeningStatsActivity"
+            android:exported="false"
+            android:label="Listening Stats"
+            android:theme="@style/Theme.MikuLauncher"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
+        <!-- Listening-stats CSV export (StatsRepository.exportCsv): share-sheet grant for files
+             under Android/data/com.miku.player/files/stats/. Separate authority from the HUD art
+             provider so its cache-path exposure stays untouched. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.miku.player.statsexport"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/stats_export_paths" />
+        </provider>
+
         <!-- Now-playing HUD art for MikuOS SystemUI (MikuTrackHud): read-granted per broadcast. -->
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -390,6 +423,11 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Clock-time alarms are armed as absolute instants: a zone/clock change moves them, so re-arm. -->
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <!-- Belt-and-braces after an app update (idempotent). -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 
@@ -403,6 +441,9 @@
             android:exported="false"
             android:launchMode="singleTop"
             android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:taskAffinity=""
             android:excludeFromRecents="true"
             android:theme="@style/Theme.MikuPlayer" />
 
@@ -439,6 +480,16 @@
             android:showOnLockScreen="true"
             android:excludeFromRecents="true"
             android:theme="@style/Theme.MikuPlayer" />
+
+        <!-- Skeuomorphic booklet / physical-media art viewer (booklet/). The ONLY screen allowed to
+             rotate: booklet scans are usually wide, so it follows the sensor while the rest of the
+             app stays portrait. configChanges keeps the open fold/zoom state across rotation. -->
+        <activity
+            android:name=".booklet.BookletViewerActivity"
+            android:exported="false"
+            android:screenOrientation="fullSensor"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.MikuLauncher" />
 
     
         <meta-data android:name="androidx.car.app.minCarApiLevel" android:value="1"/>
