@@ -101,6 +101,7 @@ class MikuTrackHud(
         val top = runCatching { MikuTaskStack.topTask(ctx)?.second }.getOrNull()
         val cls = top?.className ?: ""
         if (top?.packageName == ctx.packageName) return true            // shade / recents / power menu
+        if (top?.packageName == "com.miku.player") return true          // Miku Music itself is showing it already
         if (cls.contains("Lockscreen", true) || cls.contains("Aod", true)) return true
         return false
     }

@@ -455,6 +455,10 @@ class MikuLibraryCallback(context: Context) : MediaLibrarySession.Callback {
         controllerInfo: MediaSession.ControllerInfo,
         intent: Intent
     ): Boolean {
+        if (MikuPocketLockManager.keysLocked(appContext)) {
+            Log.d(TAG, "onMediaButtonEvent ignored: Fn key lock engaged")
+            return true
+        }
         val p = PlayerHolder.ensure(appContext)
         @Suppress("DEPRECATION")
         val keyEvent = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)

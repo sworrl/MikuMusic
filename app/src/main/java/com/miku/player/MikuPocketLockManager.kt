@@ -35,6 +35,15 @@ object MikuPocketLockManager {
     const val PREF_ALLOW_VOLUME_WHEEL = "m500_fn_allow_volume_wheel" // 0 = off, 1 = on
     const val PREF_LOCK_POWER_BUTTON = "m500_fn_lock_power_button"   // 1 = on, 0 = off
 
+    /** True while the Fn switch is engaged in a mode that locks the physical transport keys. */
+    fun keysLocked(ctx: Context): Boolean {
+        val cr = ctx.contentResolver
+        val locked = try { Settings.Global.getInt(cr, SETTING_FN_STATUS, 0) == 1 } catch (_: Throwable) { false }
+        if (!locked) return false
+        val mode = try { Settings.Global.getString(cr, SETTING_FN_SETTINGS) } catch (_: Throwable) { null } ?: "touch_and_key_lock"
+        return mode != "touch_lock"
+    }
+
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var isInitialized = false
     private var lastHandledStatus = -1
@@ -143,12 +152,11 @@ object MikuPocketLockManager {
                     }
                 }
 
-                // 3. Block physical Power Button (/dev/input/event0)
-                if (lockPower) {
-                    RootShell.execFast("chmod 000 /dev/input/event0")
-                } else {
-                    RootShell.execFast("chmod 660 /dev/input/event0")
-                }
+                // 3. Block physical Power Button - root-free: the power key is its own input
+                //    device ("qpnp_pon", /dev/input/event0), so it can be disabled through
+                //    InputManager without touching gpio-keys-hiby (which carries the Fn switch
+                //    we need for unlock). The old chmod needed root and silently no-op'd.
+                MikuInputLock.setPower(ctx, enabled = !lockPower)
 
                 // 4. Volume wheel rotary encoder (/dev/input/event2)
                 if (!allowVolume && fnMode != "touch_lock") {

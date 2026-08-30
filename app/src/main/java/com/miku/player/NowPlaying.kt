@@ -396,7 +396,7 @@ fun NowPlayingScreen(
                             Text(track.artist + "   ·   " + presetToast.ifBlank { ProjectMNative.presetName() }.ifBlank { "visualizer" },
                                 color = MikuTeal.copy(alpha = .9f), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        NowPlayingHeart(track)
+                        NowPlayingHeart(track, size = 50.dp)
                     }
                     Spacer(Modifier.height(8.dp))
                     EmbossedScrubber(
@@ -646,7 +646,7 @@ fun NowPlayingScreen(
                                 .basicMarquee(iterations = Int.MAX_VALUE, repeatDelayMillis = 0, initialDelayMillis = 0)
                         )
                         Spacer(Modifier.width(8.dp))
-                        NowPlayingHeart(track, size = 34.dp)
+                        NowPlayingHeart(track, size = 40.dp)
                     }
 
                     // Middle Section: Artist & Album with Year (occupies middle of card)
@@ -1437,11 +1437,21 @@ fun TieredRainbowHeart(
                 drawPath(insetShadowPath, Color(0x95000000))
                 drawContext.canvas.restore()
 
-                // Satin dark metallic fill
+                // Soft teal halo so the un-liked heart still reads as a heart against the
+                // dark card (the old #1B2F33-on-#040D12 deboss was near-invisible until tapped).
+                drawCircle(
+                    brush = Brush.radialGradient(
+                        listOf(Color(0xFF39C5BB).copy(alpha = 0.22f), Color.Transparent),
+                        center = Offset(w * 0.5f, h * 0.48f),
+                        radius = w * 0.72f
+                    )
+                )
+
+                // Satin metallic fill - lifted a few stops so it separates from the background
                 val debossFill = Brush.verticalGradient(
                     listOf(
-                        Color(0xFF1B2F33),
-                        Color(0xFF0F1D20)
+                        Color(0xFF2E4F55),
+                        Color(0xFF16292E)
                     )
                 )
                 drawPath(p, debossFill)
@@ -1450,13 +1460,13 @@ fun TieredRainbowHeart(
                 val bottomChamfer = Brush.verticalGradient(
                     listOf(
                         Color.Transparent,
-                        Color.White.copy(alpha = 0.35f)
+                        Color.White.copy(alpha = 0.45f)
                     )
                 )
-                drawPath(p, bottomChamfer, style = Stroke(width = 1.8f))
+                drawPath(p, bottomChamfer, style = Stroke(width = 2.0f))
 
-                // Crisp inner metallic edge
-                drawPath(p, Color(0xFF426863).copy(alpha = 0.85f), style = Stroke(width = 1.3f))
+                // Crisp Miku-teal outline - the main visibility cue
+                drawPath(p, Color(0xFF39C5BB).copy(alpha = 0.95f), style = Stroke(width = 2.8f))
             }
         }
         // Cumulative heart-score badge — appears once a track has more than one heart (played

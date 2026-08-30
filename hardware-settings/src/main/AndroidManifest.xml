@@ -12,6 +12,9 @@
          The M500 has no ALS. No image is stored or transmitted. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <!-- Fn pocket lock (FnLockDaemon): root-free input-device disable + screen blank -->
+    <uses-permission android:name="android.permission.DISABLE_INPUT_DEVICE" />
+    <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />

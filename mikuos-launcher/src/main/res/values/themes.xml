@@ -28,6 +28,8 @@
         <item name="android:windowDisablePreview">true</item>
         <item name="android:windowAnimationStyle">@style/MikuLockscreenCurtainAnim</item>
         <item name="android:windowSplashScreenAnimationDuration">0</item>
+        <item name="android:windowSplashScreenBackground">#040D12</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
     </style>
 

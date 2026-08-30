@@ -960,8 +960,14 @@ fun MikuKawaiiLockscreenScreen(
                                     .border(1.2.dp, if (localLikedState) Color(0xFFFF2277) else MikuNeonPink, CircleShape),
                                 contentAlignment = Alignment.Center
                             ) {
+                                // artwork is a fresh ByteArray/Uri object on EVERY controller poll (each
+                                // progress tick), so Coil saw a new model and re-decoded -> visible
+                                // flicker in time with the progress bar. Pin the model per track.
+                                val artTrackKey = "${nowPlaying.mediaId}|${nowPlaying.title}|${nowPlaying.artist}|${nowPlaying.album}"
+                                val stableArt = remember(artTrackKey) { mutableStateOf(nowPlaying.artwork) }
+                                if (stableArt.value == null && nowPlaying.artwork != null) stableArt.value = nowPlaying.artwork
                                 AsyncImage(
-                                    model = nowPlaying.artwork ?: R.drawable.miku_cover,
+                                    model = stableArt.value ?: R.drawable.miku_cover,
                                     contentDescription = null,
                                     contentScale = ContentScale.Crop,
                                     modifier = Modifier.size(34.dp).clip(CircleShape)

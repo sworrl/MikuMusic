@@ -1139,21 +1139,23 @@ fun FnSwitchScreen(ctx: Context) {
     val scope = rememberCoroutineScope()
     val cr = ctx.contentResolver
     
+    // IDs MUST match MikuPocketLockManager / FnLockSettingsActivity in Miku Music - the lock
+    // manager is what actually acts on fn_settings. (The old list here used different IDs plus
+    // three modes - speaker mute / display flip / recorder - that nothing implemented, so the
+    // real value "touch_and_key_lock" matched nothing and the screen mislabelled the mode.)
     val fnOptions = listOf(
-        "screen_and_keys" to ("🔒 Screen & Keys Lock (Default)" to "Completely locks touchscreen, volume knob & physical side buttons to prevent accidental pocket presses"),
-        "touch_lock" to ("📱 Touch Screen Lock Only" to "Disables touchscreen while keeping physical side transport buttons and volume knob active"),
-        "key_lock" to ("⌨️ Physical Keys Lock Only" to "Disables physical side buttons and rotary knob while touchscreen remains unlocked"),
-        "speaker_mute" to ("🔇 Instant Speaker Mute" to "Instantly mutes the internal loudspeaker when flipped"),
-        "flip_vertical" to ("🔄 180° Display Flip" to "Flips screen upside down for inverted pocket cable routing"),
-        "sound_record" to ("🎙️ Voice Audio Recorder" to "Instantly starts high-resolution voice memo recording")
+        "touch_and_key_lock" to ("🔒 Screen & Keys Lock (Default)" to "Locks the touchscreen, side transport buttons and power button together to prevent pocket presses. Volume wheel stays live unless disabled below in Miku Music."),
+        "touch_lock" to ("📱 Touch Screen Lock Only" to "Disables the touchscreen while keeping physical side transport buttons and volume knob active"),
+        "key_lock" to ("⌨️ Physical Keys Lock Only" to "Disables the physical side buttons while the touchscreen stays unlocked")
     )
 
     var currentMode by remember {
         mutableStateOf(
             try {
-                val mode = Settings.Global.getString(cr, "fn_settings") ?: "screen_and_keys"
-                if (mode.isBlank()) "screen_and_keys" else mode
-            } catch (_: Throwable) { "screen_and_keys" }
+                val mode = Settings.Global.getString(cr, "fn_settings") ?: "touch_and_key_lock"
+                // legacy id written by an older build of this screen
+                if (mode.isBlank() || mode == "screen_and_keys") "touch_and_key_lock" else mode
+            } catch (_: Throwable) { "touch_and_key_lock" }
         )
     }
 

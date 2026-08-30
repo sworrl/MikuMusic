@@ -22,6 +22,7 @@ object MikuInputLock {
     const val DEV_TOUCH = "Goodix-CTP"
     const val DEV_WHEEL = "ring-keys"
     const val DEV_KEYS = "gpio-keys-hiby"
+    const val DEV_POWER = "qpnp_pon"      // power button (/dev/input/event0), KEY_POWER only
 
     private fun im(ctx: Context): InputManager? =
         ctx.getSystemService(Context.INPUT_SERVICE) as? InputManager
@@ -65,9 +66,10 @@ object MikuInputLock {
     fun setTouch(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_TOUCH, enabled)
     fun setKeys(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_KEYS, enabled)
     fun setWheel(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_WHEEL, enabled)
+    fun setPower(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_POWER, enabled)
 
     /** Unlock everything (used on boot / unlock). */
     fun enableAll(ctx: Context) {
-        setTouch(ctx, true); setKeys(ctx, true); setWheel(ctx, true)
+        setTouch(ctx, true); setKeys(ctx, true); setWheel(ctx, true); setPower(ctx, true)
     }
 }

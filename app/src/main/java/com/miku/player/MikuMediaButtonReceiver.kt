@@ -104,6 +104,7 @@ class MikuMediaButtonReceiver : BroadcastReceiver() {
     }
 
     private fun handleMediaKey(context: Context, keyCode: Int, keyEvent: KeyEvent? = null) {
+        if (MikuPocketLockManager.keysLocked(context)) return   // Fn pocket lock: keys are dead
         if (MikuHardwareGestureEngine.onKeyDown(keyCode, keyEvent, context)) {
             return
         }

@@ -14,6 +14,11 @@
         <item name="android:windowBackground">#040D12</item>
         <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowAnimationStyle">@style/MikuKdeWindowAnim</item>
+        <!-- Kill the Android 12+ system splash (app icon on a blob). The app draws its own
+             cold-boot splash; the OS one just flashes an icon on every warm start. -->
+        <item name="android:windowSplashScreenBackground">#040D12</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
     </style>
 
     <!-- KDE-style window transitions: apps FLY AWAY when sent to home (swipe up / task

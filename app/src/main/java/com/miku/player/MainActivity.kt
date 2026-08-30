@@ -1373,10 +1373,14 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 modifier = Modifier.align(Alignment.BottomEnd).padding(end = 8.dp, bottom = 2.dp)
             )
         }
-        var showSplash by remember { mutableStateOf(!hasShownColdBootSplash) }
+        // Cold-BOOT splash: once per device boot, NOT once per process. Android trims the
+        // player as an "empty" cached process whenever no FGS is up (seen: am_kill ... empty),
+        // so a per-process flag replayed the whole splash every time the app was re-opened.
+        val splashCtx = androidx.compose.ui.platform.LocalContext.current
+        var showSplash by remember { mutableStateOf(shouldShowBootSplash(splashCtx)) }
         if (showSplash) {
             MikuAnimatedBootSplash(onFinished = {
-                hasShownColdBootSplash = true
+                markBootSplashShown(splashCtx)
                 showSplash = false
             })
         }
@@ -1386,6 +1390,24 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
 }
 
 private var hasShownColdBootSplash = false
+
+/** Wall-clock moment this boot started, to the nearest 5 min - stable across process restarts,
+ *  changes on every reboot. (boot_id under /proc is not readable from an app process.) */
+private fun bootEpochBucket(): Long =
+    (System.currentTimeMillis() - android.os.SystemClock.elapsedRealtime()) / 300_000L
+
+private fun shouldShowBootSplash(ctx: android.content.Context): Boolean {
+    if (hasShownColdBootSplash) return false
+    val p = ctx.getSharedPreferences("miku_boot_splash", android.content.Context.MODE_PRIVATE)
+    val last = p.getLong("boot_bucket", Long.MIN_VALUE)
+    return kotlin.math.abs(last - bootEpochBucket()) > 1   // >5-10 min apart = a different boot
+}
+
+private fun markBootSplashShown(ctx: android.content.Context) {
+    hasShownColdBootSplash = true
+    ctx.getSharedPreferences("miku_boot_splash", android.content.Context.MODE_PRIVATE)
+        .edit().putLong("boot_bucket", bootEpochBucket()).apply()
+}
 
 @Composable
 private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {

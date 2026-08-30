@@ -452,8 +452,31 @@ class MikuNotificationShadeService : AccessibilityService() {
      * Double-fire is harmless: the activity is singleInstance and [openPowerMenuActivity] has a
      * debounce.
      */
+    /**
+     * Fn pocket lock, key half (root-free). The Fn switch shares the gpio-keys input device with
+     * the transport buttons, so that device can't be disabled without losing the unlock event;
+     * instead swallow the keys here while fn_status=1. Covers every app while the screen is on
+     * (Miku Music additionally ignores media buttons itself, which also covers screen-off).
+     */
+    private fun fnLockSwallows(keyCode: Int): Boolean {
+        val cr = contentResolver
+        val locked = runCatching { android.provider.Settings.Global.getInt(cr, "fn_status", 0) == 1 }.getOrDefault(false)
+        if (!locked) return false
+        val mode = runCatching { android.provider.Settings.Global.getString(cr, "fn_settings") }.getOrNull() ?: "touch_and_key_lock"
+        if (mode == "touch_lock") return false                       // keys deliberately live
+        return when (keyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_NEXT, android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE, android.view.KeyEvent.KEYCODE_HEADSETHOOK -> true
+            android.view.KeyEvent.KEYCODE_VOLUME_UP, android.view.KeyEvent.KEYCODE_VOLUME_DOWN ->
+                runCatching { android.provider.Settings.Global.getInt(cr, "m500_fn_allow_volume_wheel", 0) != 1 }.getOrDefault(true)
+            else -> false
+        }
+    }
+
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
         if (event == null) return false
+        if (fnLockSwallows(event.keyCode)) return true
         if (event.keyCode == android.view.KeyEvent.KEYCODE_POWER) {
             if (event.action == android.view.KeyEvent.ACTION_DOWN) {
                 if (event.repeatCount == 0 || powerDownTimestamp == 0L) {

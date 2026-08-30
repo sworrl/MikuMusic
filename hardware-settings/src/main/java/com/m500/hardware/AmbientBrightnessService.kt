@@ -105,6 +105,8 @@ class AmbientBrightnessService : Service() {
             addAction(Intent.ACTION_USER_PRESENT)
         }
         registerReceiver(screenReceiver, filter)
+        // This is the always-alive hardware daemon process - host the Fn pocket-lock watcher too.
+        FnLockDaemon.start(this)
         Log.i(TAG, "ambient brightness service started")
     }
 
