@@ -141,7 +141,25 @@ class AlarmRingService : Service() {
         if (viaFgs && rings.isNotEmpty()) (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID_BASE)
     }
 
+    /** MikuOS runs with theater_mode_on=1 (charger-flap plug wakes strobed the screen; HiBy's
+     *  framework ignores config_unplugTurnsOnScreen). Theater mode also blocks the alarm's
+     *  ACQUIRE_CAUSES_WAKEUP path, so clear it for the duration of a ring and restore after. */
+    private var theaterWasOn = false
+    private fun suspendTheaterMode() {
+        try {
+            theaterWasOn = android.provider.Settings.Global.getInt(contentResolver, "theater_mode_on", 0) == 1
+            if (theaterWasOn) android.provider.Settings.Global.putInt(contentResolver, "theater_mode_on", 0)
+        } catch (_: Throwable) {}
+    }
+    private fun restoreTheaterMode() {
+        try {
+            if (theaterWasOn) android.provider.Settings.Global.putInt(contentResolver, "theater_mode_on", 1)
+            theaterWasOn = false
+        } catch (_: Throwable) {}
+    }
+
     private fun startRinging(alarm: Alarm?, preview: Boolean) {
+        suspendTheaterMode()
         if (alarm == null) {
             AlarmWakeHandoff.release()
             // The placeholder notification is only ever superseded by a REAL per-alarm notification
@@ -429,6 +447,7 @@ class AlarmRingService : Service() {
     private fun notifId(alarmId: Int) = NOTIF_ID_BASE + alarmId
 
     override fun onDestroy() {
+        restoreTheaterMode()
         rings.values.forEach {
             it.fadeHandler.removeCallbacksAndMessages(null)
             it.autoDismissHandler.removeCallbacksAndMessages(null)
