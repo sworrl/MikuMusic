@@ -93,20 +93,28 @@ object ListenSessionTracker {
     // ------------------------------------------------------------------ lifecycle
 
     fun attach(context: Context, player: ExoPlayer) {
+        if (com.miku.player.MikuDbg.off(context, "stats")) return
         if (attached) return
         attached = true
         val app = context.applicationContext
         appCtx = app
         playerRef = player
-        player.addListener(listener)
-        mainH.removeCallbacks(tick)
-        mainH.postDelayed(tick, TICK_MS)
-        io.execute {
-            runCatching { ListenStatsDb.get(app).recoverOpenListens() }.onFailure { Log.w(TAG, "recover failed", it) }
-            runCatching { ScrobbleManager.init(app) }.onFailure { Log.w(TAG, "scrobble init failed", it) }
+        // Defer EVERYTHING to a fresh main-loop message. attach() is reached from
+        // PlayerHolder.ensure inside a composable remember{}; registering the listener and
+        // starting a session synchronously here ran on the SAME frame as MainActivity's initial
+        // composition and collided with the Compose snapshot ("Unsupported concurrent change
+        // during composition" crash-loop, 2026-09-10). Posting guarantees the current composition
+        // has committed first.
+        mainH.post {
+            player.addListener(listener)
+            mainH.removeCallbacks(tick)
+            mainH.postDelayed(tick, TICK_MS)
+            io.execute {
+                runCatching { ListenStatsDb.get(app).recoverOpenListens() }.onFailure { Log.w(TAG, "recover failed", it) }
+                runCatching { ScrobbleManager.init(app) }.onFailure { Log.w(TAG, "scrobble init failed", it) }
+            }
+            if (player.isPlaying) player.currentMediaItem?.let { startSession(player, it) }
         }
-        // The player may already hold a playing item (re-attach after release) — pick it up.
-        if (player.isPlaying) player.currentMediaItem?.let { startSession(player, it) }
     }
 
     /** From PlayerHolder.release(): close the current listen and forget the player. */

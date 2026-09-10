@@ -473,6 +473,7 @@ class MainActivity : ComponentActivity() {
             android.provider.Settings.Global.putInt(cr, "device_provisioned", 1)
         } catch (_: Throwable) {}
 
+        MikuDbg.install(this)
         try { MikuPocketLockManager.init(this) } catch (t: Throwable) { android.util.Log.e("MainActivity", "MikuPocketLockManager.init failed", t) }
         try { com.miku.player.volume.MikuVolumeManager.init(this) } catch (t: Throwable) { android.util.Log.e("MainActivity", "MikuVolumeManager.init failed", t) }
         try { com.miku.player.screentime.MikuSmartScreenTimeEngine.init(this) } catch (t: Throwable) { android.util.Log.e("MainActivity", "MikuSmartScreenTimeEngine.init failed", t) }
@@ -2632,7 +2633,7 @@ private fun tabColor(t: Tab): Color = when (t) {
     // Self-healing resolution (LikeStore.resolveLiked) — a liked track's MediaStore _id can drift
     // across a rescan; a plain id-membership filter would silently drop it from every "liked"
     // shelf with no explanation. See its doc comment for the confirmed real-world failure mode.
-    val likedTracks = remember(likedIds, tracks) { LikeStore.resolveLiked(ctx, tracks) }
+    val likedTracks = remember(likedIds, tracks) { LikeStore.resolveLiked(ctx, tracks, heal = true) }
 
     // Was a synchronous `remember(tracks, likedIds) { ... }` — generateDailyHighlight does two
     // SharedPreferences reads PER TRACK (play count + last-played) across the whole library to

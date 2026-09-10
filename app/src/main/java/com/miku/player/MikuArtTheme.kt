@@ -60,6 +60,7 @@ object MikuArtTheme {
     /** Resolve + publish the palette for a track id even when no UI is up (background playback,
      *  PLAY_RANDOM from the launcher). Cheap: in-memory index lookup + the cached thumb. */
     fun updateForTrackId(ctx: Context, trackId: Long) {
+        if (MikuDbg.off(ctx, "arttheme")) return
         val app = ctx.applicationContext
         if (trackId == this.trackId) return
         if (!MikuPowerGovernor.allowBackgroundWork) return   // deferred until the screen is back

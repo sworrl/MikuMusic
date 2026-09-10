@@ -85,6 +85,7 @@ fun ForYouShelf(
     onOpenArtist: (String) -> Unit = {}
 ) {
     val ctx = LocalContext.current
+    if (com.miku.player.MikuDbg.off(ctx, "taste_ui")) return
     val likedIds = LikeStore.liked.toList()
     var result by remember { mutableStateOf<TasteShelves.Result?>(null) }
     var showProfile by remember { mutableStateOf(false) }

@@ -26,6 +26,7 @@ object TasteHooks {
     @Volatile private var curStartedAt = 0L
 
     fun onMediaItemTransition(app: Context, player: ExoPlayer, mediaItem: MediaItem?, reason: Int) {
+        if (com.miku.player.MikuDbg.off(app, "taste")) return
         val newId = mediaItem?.mediaId?.toLongOrNull() ?: -1L
         val prevId = curId
         val now = System.currentTimeMillis()
@@ -40,6 +41,7 @@ object TasteHooks {
     }
 
     fun onPlaybackStateChanged(app: Context, player: ExoPlayer, state: Int) {
+        if (com.miku.player.MikuDbg.off(app, "taste")) return
         if (state != Player.STATE_ENDED) return
         val prevId = curId
         if (prevId > 0L) {

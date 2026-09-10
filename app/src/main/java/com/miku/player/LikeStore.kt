@@ -25,16 +25,32 @@ import androidx.compose.runtime.mutableStateListOf
  */
 object LikeStore {
     val liked = mutableStateListOf<Long>()
+
+    /** All SnapshotStateList mutations must happen on the MAIN thread and NEVER during
+     *  composition. A state list mutated from a binder/IO thread while a composable pass also
+     *  touched it crashes the Recomposer ("Unsupported concurrent change during composition" -
+     *  crash-looped the app 2026-09-10 when resolveLiked's self-heal ran inside remember{}). */
+    private fun mutateOnMain(block: () -> Unit) {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) block()
+        else android.os.Handler(android.os.Looper.getMainLooper()).post(block)
+    }
     val likedAlbums = mutableStateListOf<String>()   // canonicalAlbumKey values
     val likedArtists = mutableStateListOf<String>()  // canonicalArtistKey values
     @Volatile private var loaded = false
 
     fun init(ctx: Context) {
         if (loaded) return
-        liked.addAll(PlayerPreferences.loadLikedTracks(ctx))
-        likedAlbums.addAll(PlayerPreferences.loadLikedAlbums(ctx))
-        likedArtists.addAll(PlayerPreferences.loadLikedArtists(ctx))
         loaded = true
+        // init is reached from binder threads too (media session custom commands) - the state
+        // lists may only ever be mutated on main (see mutateOnMain).
+        val t = PlayerPreferences.loadLikedTracks(ctx)
+        val al = PlayerPreferences.loadLikedAlbums(ctx)
+        val ar = PlayerPreferences.loadLikedArtists(ctx)
+        mutateOnMain {
+            for (id in t) if (!liked.contains(id)) liked.add(id)
+            for (k in al) if (!likedAlbums.contains(k)) likedAlbums.add(k)
+            for (k in ar) if (!likedArtists.contains(k)) likedArtists.add(k)
+        }
     }
 
     fun isArtistLiked(artist: String, ctx: Context? = null): Boolean =
@@ -65,7 +81,7 @@ object LikeStore {
         PlayerPreferences.appendHeartEvent(ctx, track.id, System.currentTimeMillis(), (fraction * 100f).toInt(), qualified)
         val n = PlayerPreferences.getHeartCount(ctx, track.id) + 1
         PlayerPreferences.setHeartCount(ctx, track.id, n)         // also flips the boolean liked set
-        if (!liked.contains(track.id)) liked.add(track.id)
+        mutateOnMain { if (!liked.contains(track.id)) liked.add(track.id) }
         PlayerPreferences.saveLikedTrackMeta(ctx, track.id, track.title, track.artist)
         MikuPlayQualifier.markHearted(track.id)
         PulsarLight.indicateHearted(ctx)
@@ -96,7 +112,7 @@ object LikeStore {
     fun clearHearts(ctx: Context, track: Track) {
         PlayerPreferences.setHeartCount(ctx, track.id, 0)          // flips liked off
         PlayerPreferences.clearHeartEvents(ctx, track.id)
-        liked.remove(track.id)
+        mutateOnMain { liked.remove(track.id) }
         PlayerPreferences.removeLikedTrackMeta(ctx, track.id)
         broadcastLike(ctx, track.id, false, 0)
         if (track.artist.isNotBlank() && track.title.isNotBlank()) {
@@ -120,7 +136,8 @@ object LikeStore {
      *  Last.fm's "loved tracks" (see LastFm.setLoved), which this one can't do without a title/
      *  artist to send. */
     fun toggle(ctx: Context, id: Long): Boolean {
-        val nowLiked = if (liked.contains(id)) { liked.remove(id); false } else { liked.add(id); true }
+        val nowLiked = !liked.contains(id)
+        mutateOnMain { if (nowLiked) { if (!liked.contains(id)) liked.add(id) } else liked.remove(id) }
         PlayerPreferences.saveLikedTrack(ctx, id, nowLiked)
         // Keep the heart score consistent with the boolean: turning it on seeds at least one heart,
         // turning it off zeroes the score. (Earning extra hearts goes through heart() per play.)
@@ -168,26 +185,45 @@ object LikeStore {
      *  match against the saved metadata and re-persisting the corrected id. Without this, an
      *  orphaned like just silently vanishes from every "Liked Songs" view with no explanation —
      *  confirmed this is a real, not theoretical, failure mode on this app's rescan-heavy library. */
-    fun resolveLiked(ctx: Context, tracks: List<Track>): List<Track> {
+    private data class Heal(val oldId: Long, val newId: Long, val title: String, val artist: String)
+
+    /**
+     * @param heal ONLY the canonical caller (MainActivity's liked shelf, whose [tracks] includes
+     * disc-image virtual tracks) may pass true. The media session resolves against a DIFFERENT
+     * track list (FastLibraryStore/MediaStore fallback, no virtual tracks) - when both healed,
+     * likes ping-ponged between the two id spaces forever: liked churned every frame ->
+     * recomposition/GC storm -> ANR or snapshot crash (the 2026-09-10 launch loop).
+     */
+    fun resolveLiked(ctx: Context, tracks: List<Track>, heal: Boolean = false): List<Track> {
         val ids = PlayerPreferences.loadLikedTracks(ctx)
         if (ids.isEmpty()) return emptyList()
         val byId = tracks.associateBy { it.id }
         val meta by lazy { PlayerPreferences.loadLikedTrackMeta(ctx) }
         val result = ArrayList<Track>(ids.size)
+        val heals = ArrayList<Heal>()
         for (id in ids) {
             val direct = byId[id]
             if (direct != null) { result.add(direct); continue }
             val (title, artist) = meta[id] ?: continue
             val recovered = tracks.find { it.title == title && it.artist == artist } ?: continue
             result.add(recovered)
-            // Self-heal: fold the like onto the track's real current id so future lookups hit the
-            // fast path directly, and carry the metadata forward under the new id.
-            PlayerPreferences.saveLikedTrack(ctx, id, false)
-            PlayerPreferences.removeLikedTrackMeta(ctx, id)
-            PlayerPreferences.saveLikedTrack(ctx, recovered.id, true)
-            PlayerPreferences.saveLikedTrackMeta(ctx, recovered.id, title, artist)
-            if (!liked.contains(recovered.id)) liked.add(recovered.id)
-            liked.remove(id)
+            heals.add(Heal(id, recovered.id, title, artist))
+        }
+        // Self-heal: fold likes onto the tracks' real current ids - but NEVER inline. This function
+        // is called from remember{} during composition (MainActivity liked shelf) AND from binder
+        // threads (media session); mutating the state list here was the 2026-09-10 crash-loop.
+        // All heals apply as a normal main-thread event after the current frame.
+        if (heal && heals.isNotEmpty()) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                for (h in heals) {
+                    PlayerPreferences.saveLikedTrack(ctx, h.oldId, false)
+                    PlayerPreferences.removeLikedTrackMeta(ctx, h.oldId)
+                    PlayerPreferences.saveLikedTrack(ctx, h.newId, true)
+                    PlayerPreferences.saveLikedTrackMeta(ctx, h.newId, h.title, h.artist)
+                    if (!liked.contains(h.newId)) liked.add(h.newId)
+                    liked.remove(h.oldId)
+                }
+            }
         }
         return result
     }
