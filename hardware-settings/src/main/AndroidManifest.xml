@@ -13,6 +13,9 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Fn pocket lock (FnLockDaemon): root-free input-device disable + screen blank -->
+    <!-- CellRadioSaver: setRadioPower + service-state reads -->
+    <uses-permission android:name="android.permission.MODIFY_PHONE_STATE" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.DISABLE_INPUT_DEVICE" />
     <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

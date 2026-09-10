@@ -1529,6 +1529,20 @@ fun WirelessScreen(ctx: Context) {
                 )
                 if (opInfo.isNotBlank()) { Spacer(Modifier.height(4.dp)); Text(opInfo, color = Color(0xFF7BE8DF), fontSize = 11.sp) }
                 Spacer(Modifier.height(8.dp))
+                var radioSaver by remember {
+                    mutableStateOf(try { Settings.Global.getInt(ctx.contentResolver, "m500_cell_radio_saver", 1) == 1 } catch (_: Throwable) { true })
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Radio saver", color = Color.White, fontSize = 13.sp)
+                        Text("Cell radio off after 10 min with no signal while on Wi-Fi; back on the moment Wi-Fi drops", color = Color(0x80FFFFFF), fontSize = 10.sp, lineHeight = 12.sp)
+                    }
+                    Switch(checked = radioSaver, onCheckedChange = { on ->
+                        radioSaver = on
+                        try { Settings.Global.putInt(ctx.contentResolver, "m500_cell_radio_saver", if (on) 1 else 0) } catch (_: Throwable) {}
+                    })
+                }
+                Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Force T-Mobile network", color = Color.White, fontSize = 13.sp)
                     Switch(checked = manual, onCheckedChange = { on ->

@@ -107,6 +107,8 @@ class AmbientBrightnessService : Service() {
         registerReceiver(screenReceiver, filter)
         // This is the always-alive hardware daemon process - host the Fn pocket-lock watcher too.
         FnLockDaemon.start(this)
+        // ...and the cell radio saver (data-only Fi SIM hunts for network forever off T-Mobile).
+        CellRadioSaver.start(this)
         Log.i(TAG, "ambient brightness service started")
     }
 
