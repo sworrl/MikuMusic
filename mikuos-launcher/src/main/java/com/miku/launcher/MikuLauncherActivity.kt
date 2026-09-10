@@ -1702,6 +1702,12 @@ fun MikuLauncherScreen() {
                 onDismissRequest = { isWeatherObservatoryOpen = false }
             )
         }
+        // Live GPS (5 s HIGH_ACCURACY) only while the tactical map is on screen - see
+        // MikuWeatherService.acquireLiveGps (background-forever GPS was the big idle drain).
+        androidx.compose.runtime.DisposableEffect(isGpsModalOpen) {
+            if (isGpsModalOpen) com.miku.launcher.weather.MikuWeatherService.acquireLiveGps(ctx)
+            onDispose { if (isGpsModalOpen) com.miku.launcher.weather.MikuWeatherService.releaseLiveGps(ctx) }
+        }
         com.miku.launcher.ui.MikuModalHost(visible = isGpsModalOpen, onDismiss = { isGpsModalOpen = false }) {
             com.miku.launcher.gps.MikuGpsTacticalMapModal(
                 onDismissRequest = { isGpsModalOpen = false }

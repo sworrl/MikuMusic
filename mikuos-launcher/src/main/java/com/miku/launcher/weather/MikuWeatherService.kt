@@ -243,33 +243,53 @@ object MikuWeatherService {
                     refreshWeather(ctx)
                 }
 
-                // 2. Continuous real GPS telemetry listener
-                withContext(Dispatchers.Main) {
-                    val listener = object : LocationListener {
-                        override fun onLocationChanged(loc: Location) {
-                            scope.launch {
-                                updateLocation(ctx, loc)
-                            }
-                        }
-                        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-                        override fun onProviderEnabled(provider: String) {}
-                        override fun onProviderDisabled(provider: String) {}
-                    }
-
-                    try {
-                        if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                            lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, listener)
-                        }
-                        if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-                            lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 10000L, 10f, listener)
-                        }
-                    } catch (t: Throwable) {
-                        Log.w(TAG, "Location listener request failed: ${t.message}")
-                    }
-                }
+                // NOTE: deliberately NO permanent listener here. This used to register a
+                // background HIGH_ACCURACY GPS listener (5 s / 5 m) for the launcher's whole life -
+                // the GPS receiver ran 24/7 and was THE massive idle battery drain (found 2026-09-09).
+                // Live GPS telemetry is ref-counted now (acquireLiveGps/releaseLiveGps) and runs only
+                // while the GPS tactical map is open.
             } catch (t: Throwable) {
                 Log.e(TAG, "Location tracking init failed", t)
             }
+        }
+    }
+
+    // ---- Live GPS telemetry, ref-counted: only while a UI that shows it is open ----
+    private var liveGpsListener: LocationListener? = null
+    private var liveGpsRefs = 0
+
+    fun acquireLiveGps(ctx: Context) {
+        scope.launch(Dispatchers.Main) {
+            liveGpsRefs++
+            if (liveGpsListener != null) return@launch
+            val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return@launch
+            val listener = object : LocationListener {
+                override fun onLocationChanged(loc: Location) { scope.launch { updateLocation(ctx, loc) } }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }
+            try {
+                if (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                    lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, 5000L, 5f, listener)
+                }
+                if (lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                    lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 10000L, 10f, listener)
+                }
+                liveGpsListener = listener
+                Log.i(TAG, "live GPS acquired (refs=" + liveGpsRefs + ")")
+            } catch (t: Throwable) { Log.w(TAG, "live GPS request failed: " + t.message) }
+        }
+    }
+
+    fun releaseLiveGps(ctx: Context) {
+        scope.launch(Dispatchers.Main) {
+            liveGpsRefs = (liveGpsRefs - 1).coerceAtLeast(0)
+            if (liveGpsRefs > 0) return@launch
+            val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+            liveGpsListener?.let { l -> runCatching { lm?.removeUpdates(l) } }
+            liveGpsListener = null
+            Log.i(TAG, "live GPS released")
         }
     }
 
