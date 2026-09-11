@@ -33,13 +33,21 @@ object ListenLocationSampler {
     @Volatile private var cachedAtElapsed = 0L
     @Volatile private var cachedNull = false   // remember "nothing available" too, so we don't re-poll every track
 
-    /** Cheap: returns the cached sample when fresh; otherwise does one getLastKnownLocation pass.
-     *  Safe to call from a background thread. */
-    fun sample(ctx: Context): Sample? {
+    /**
+     * Cheap: returns the cached sample when fresh; otherwise does one getLastKnownLocation pass.
+     * Safe to call from a background thread.
+     *
+     * [allowPoll] is [MikuPowerGovernor.allowLocation], read by the CALLER on the main thread.
+     * It used to be read here — but the governor's fields are Compose state and this runs on the
+     * listen-stats executor, and "no stats code touches a state object off the main thread" is now
+     * an absolute rule (see ListenSessionTracker's THREADING RULE). false = screen off / idle:
+     * reuse whatever we had, don't poll.
+     */
+    fun sample(ctx: Context, allowPoll: Boolean): Sample? {
         if (!StatsPreferences.isLocationEnabled(ctx)) return null
         val now = SystemClock.elapsedRealtime()
         if (cachedAtElapsed != 0L && now - cachedAtElapsed < CACHE_TTL_MS) return if (cachedNull) null else cached
-        if (!MikuPowerGovernor.allowLocation) return cached   // screen off/idle: reuse whatever we had, don't poll
+        if (!allowPoll) return cached
 
         val s = runCatching { probe(ctx) }.getOrNull()
         cached = s

@@ -54,44 +54,48 @@ object MikuWeatherService {
         val fuzzyLocation: String = ""
     )
 
+    // Every forecast point below is built field-by-field from a parsed Open-Meteo response. The
+    // defaults are deliberately un-renderable (NaN / -1 / em dash) so that a point constructed
+    // without real numbers can never pass itself off as a reading — these used to default to 72F /
+    // 70F / 5 mph / 8 mph / 75F / 55F / 10 mph / "Clear Sky" / "08/18", i.e. a plausible fake day.
     data class HourlyPrecipPoint(
-        val timeLabel: String = "Now",
-        val precipInches: Float = 0f,
-        val precipProbPct: Int = 0,
-        val weatherCode: Int = 0,
-        val tempF: Float = 72f,
-        val summary: String = "Clear",
-        val icon: String = "☀️"
+        val timeLabel: String = "—",
+        val precipInches: Float = Float.NaN,
+        val precipProbPct: Int = -1,
+        val weatherCode: Int = -1,
+        val tempF: Float = Float.NaN,
+        val summary: String = "—",
+        val icon: String = ""
     )
 
     data class HourlyMeteogramPoint(
-        val timeLabel: String = "12:00",
-        val dayLabel: String = "Today",
-        val tempF: Float = 72f,
-        val feelsLikeF: Float = 70f,
-        val precipInches: Float = 0f,
-        val precipProbPct: Int = 0,
-        val windSpeedMph: Float = 5f,
-        val windGustsMph: Float = 8f,
-        val windDirectionDeg: Int = 0,
-        val windDirectionCompass: String = "N",
-        val weatherCode: Int = 0,
-        val summary: String = "Clear",
-        val icon: String = "☀️",
+        val timeLabel: String = "—",
+        val dayLabel: String = "—",
+        val tempF: Float = Float.NaN,
+        val feelsLikeF: Float = Float.NaN,
+        val precipInches: Float = Float.NaN,
+        val precipProbPct: Int = -1,
+        val windSpeedMph: Float = Float.NaN,
+        val windGustsMph: Float = Float.NaN,
+        val windDirectionDeg: Int = -1,
+        val windDirectionCompass: String = "—",
+        val weatherCode: Int = -1,
+        val summary: String = "—",
+        val icon: String = "",
         val isDay: Boolean = true
     )
 
     data class DailyForecastPoint(
-        val dayName: String = "Today",
-        val dateFormatted: String = "08/18",
-        val maxTempF: Float = 75f,
-        val minTempF: Float = 55f,
-        val precipSumIn: Float = 0f,
-        val precipProbMax: Int = 0,
-        val maxWindSpeedMph: Float = 10f,
-        val weatherCode: Int = 0,
-        val summary: String = "Clear Sky",
-        val icon: String = "☀️"
+        val dayName: String = "—",
+        val dateFormatted: String = "—",
+        val maxTempF: Float = Float.NaN,
+        val minTempF: Float = Float.NaN,
+        val precipSumIn: Float = Float.NaN,
+        val precipProbMax: Int = -1,
+        val maxWindSpeedMph: Float = Float.NaN,
+        val weatherCode: Int = -1,
+        val summary: String = "—",
+        val icon: String = ""
     )
 
     data class MoonPhaseInfo(

@@ -856,10 +856,37 @@ fun MikuDisplaySettingsModal(onDismissRequest: () -> Unit) {
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CyberInfoRow("Display Panel", "4.0\" IPS Retina (1080 x 540)")
-                            CyberInfoRow("Pixel Density", "300 PPI / 60 Hz")
+                            // Every row below is read from the OS. It used to be a hardcoded spec
+                            // sheet ("1080 x 540", "300 PPI / 60 Hz", "Vulkan & OpenGLES 3.2
+                            // Active") presented as this device's live display readout.
+                            val dm = remember { ctx.resources.displayMetrics }
+                            val refreshHz = remember {
+                                runCatching {
+                                    val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+                                    wm.defaultDisplay.refreshRate
+                                }.getOrNull()
+                            }
+                            val glEsVersion = remember {
+                                runCatching {
+                                    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+                                    val v = am.deviceConfigurationInfo.reqGlEsVersion
+                                    "${v shr 16}.${v and 0xFFFF}"
+                                }.getOrNull()
+                            }
+                            val hasVulkan = remember {
+                                ctx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_VULKAN_HARDWARE_VERSION)
+                            }
+                            CyberInfoRow("Resolution", "${dm.widthPixels} x ${dm.heightPixels} px")
+                            CyberInfoRow(
+                                "Pixel Density",
+                                "${dm.densityDpi} dpi" + (refreshHz?.let { " / ${"%.0f".format(it)} Hz" } ?: " / — Hz")
+                            )
                             CyberInfoRow("Theme Mode", "Cyber Hatsune Miku Dark Mode")
-                            CyberInfoRow("Hardware Acceleration", "Vulkan & OpenGLES 3.2 Active")
+                            CyberInfoRow(
+                                "Graphics Support",
+                                (glEsVersion?.let { "OpenGL ES $it" } ?: "OpenGL ES —") +
+                                    (if (hasVulkan) " · Vulkan" else " · no Vulkan")
+                            )
                         }
                     }
                 }
@@ -1133,7 +1160,11 @@ fun MikuBluetoothSettingsModal(onDismissRequest: () -> Unit) {
                                                 Spacer(Modifier.width(10.dp))
                                                 Column(Modifier.weight(1f)) {
                                                     Text(devItem.name, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                                    Text("${devItem.address} · Signal ${devItem.rssi} dBm", color = MikuTextSecondary, fontSize = 9.5.sp)
+                                                    Text(
+                                                        "${devItem.address} · Signal " + (devItem.rssi?.let { "$it dBm" } ?: "—"),
+                                                        color = MikuTextSecondary,
+                                                        fontSize = 9.5.sp
+                                                    )
                                                 }
                                                 Button(
                                                     onClick = { com.miku.player.bluetooth.MikuBluetoothController.pairDevice(devItem.device) },

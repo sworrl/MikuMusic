@@ -49,17 +49,31 @@ object CirrusLogicManager {
         WIRED_AND_USB("wired_usb", "Wired DAC + USB-C External DAC", "Mirrors real-time audio across internal CS43198 DAC and external Type-C DAC")
     }
 
-    /** Live sysfs readout. "—" = that node could not be read; isHardwareSynced = at least one node read. */
+    /**
+     * Live DAC readout. Every field is nullable: null = that node/property could not be read, and
+     * the UI must render it as "—" (see [kernelFilterText] and friends). [isSysfsReadable] is true
+     * only when at least one node actually came back — it is NOT a claim that the kernel state and
+     * the app's settings agree, which is what the old `isHardwareSynced` (hardcoded true, with
+     * per-node "typical" values standing in for unreadable nodes) pretended to report.
+     */
     data class HardwareAuditState(
-        val kernelFilter: String = "—",
-        val kernelGain: String = "—",
-        val kernelHighPower: String = "—",
-        val kernelDre: String = "—",
-        val kernelTurbo: String = "—",
-        val kernelOutput: String = "—",
-        val kernelBalance: String = "—",
-        val isHardwareSynced: Boolean = false
-    )
+        val kernelFilter: String? = null,
+        val kernelGain: String? = null,
+        val kernelHighPower: String? = null,
+        val kernelDre: String? = null,
+        val kernelTurbo: String? = null,
+        val kernelOutput: String? = null,
+        val kernelBalance: String? = null,
+        val isSysfsReadable: Boolean = false
+    ) {
+        val kernelFilterText: String get() = kernelFilter ?: "—"
+        val kernelGainText: String get() = kernelGain ?: "—"
+        val kernelHighPowerText: String get() = kernelHighPower ?: "—"
+        val kernelDreText: String get() = kernelDre ?: "—"
+        val kernelTurboText: String get() = kernelTurbo ?: "—"
+        val kernelOutputText: String get() = kernelOutput ?: "—"
+        val kernelBalanceText: String get() = kernelBalance ?: "—"
+    }
 
     fun init(ctx: Context) {
         RootShell.execFast("chmod 666 $SYSFS_BASE/*")
@@ -105,6 +119,12 @@ object CirrusLogicManager {
             "setprop vendor.audio.hiby.hw.digital_filter ${filter.id}; " +
             "setprop vendor.audio.hiby.digital_filter ${filter.id}"
         )
+
+        // Same problem the gain path had: the su line above never runs on MikuOS, so the Settings
+        // row (which [getDigitalFilter] reads back and the UI shows) changed while the DAC did not.
+        // The HAL parameter is the route that actually lands.
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.digital_filter", filter.id)
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.digital_filter", filter.id)
     }
 
     fun getGainMode(ctx: Context): GainMode {
@@ -277,6 +297,10 @@ object CirrusLogicManager {
         val sysfsStr = if (enabled) "dremode_enable" else "dremode_disable"
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dre", v) }
         RootShell.execFast("echo $sysfsStr > $SYSFS_BASE/dre_mode; settings put global vendor.audio.hiby.hw.dre $v; setprop vendor.audio.hiby.hw.dre $v")
+        // Root-free route that actually applies (the su line above is a no-op on MikuOS), so the
+        // toggle's state matches the DAC instead of only matching a Settings row.
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.dre", v.toString())
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.dre_mode", sysfsStr)
     }
 
     fun isHighPowerEnabled(ctx: Context): Boolean {
@@ -292,6 +316,8 @@ object CirrusLogicManager {
         val sysfsStr = if (enabled) "hpower_enable" else "hpower_disable"
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.high_power", v) }
         RootShell.execFast("echo $sysfsStr > $SYSFS_BASE/high_power_mode; settings put global vendor.audio.hiby.hw.high_power $v; setprop vendor.audio.hiby.hw.high_power $v")
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.high_power", v.toString())
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.high_power_mode", sysfsStr)
     }
 
     fun getDsdGainCompensate(ctx: Context): Boolean {
@@ -304,26 +330,38 @@ object CirrusLogicManager {
         val v = if (enabled) 1 else 0
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dsd_gain_comp", v) }
         RootShell.execFast("settings put global vendor.audio.hiby.hw.dsd_gain_comp $v; setprop vendor.audio.hiby.hw.dsd_gain_comp $v")
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.dsd_gain_comp", v.toString())
     }
 
+    /** Read a system property root-free (platform-signed app, android.os.SystemProperties). */
+    private fun sysProp(key: String): String? = runCatching {
+        val c = Class.forName("android.os.SystemProperties")
+        (c.getMethod("get", String::class.java, String::class.java).invoke(null, key, "") as String)
+            .trim().takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
+    /**
+     * Reads whatever the DAC actually exposes right now. Nodes that cannot be read come back null
+     * (rendered "—"); nothing is substituted. The turbo property is read through SystemProperties
+     * rather than a `getprop` shell-out, which needed su and therefore always failed on MikuOS.
+     */
     fun getLiveHardwareAudit(): HardwareAuditState {
         val filter = readSysfs("digital_filter")
         val gain = readSysfs("gain")
         val hp = readSysfs("high_power_mode")
         val dre = readSysfs("dre_mode")
-        val turbo = RootShell.execOut("getprop vendor.audio.hiby.hw.audio_turbo")?.trim()?.takeIf { it.isNotEmpty() }
+        val turbo = sysProp("vendor.audio.hiby.hw.audio_turbo")
         val out = readSysfs("out_mode")
         val bal = readSysfs("lr_balance")
-        // Unreadable nodes stay "—" (was a per-node "typical" default presented as the live value).
         return HardwareAuditState(
-            kernelFilter = filter ?: "—",
-            kernelGain = gain ?: "—",
-            kernelHighPower = hp ?: "—",
-            kernelDre = dre ?: "—",
-            kernelTurbo = turbo ?: "—",
-            kernelOutput = out ?: "—",
-            kernelBalance = bal ?: "—",
-            isHardwareSynced = listOf(filter, gain, hp, dre, out, bal).any { it != null }
+            kernelFilter = filter,
+            kernelGain = gain,
+            kernelHighPower = hp,
+            kernelDre = dre,
+            kernelTurbo = turbo,
+            kernelOutput = out,
+            kernelBalance = bal,
+            isSysfsReadable = listOf(filter, gain, hp, dre, out, bal).any { it != null }
         )
     }
 }

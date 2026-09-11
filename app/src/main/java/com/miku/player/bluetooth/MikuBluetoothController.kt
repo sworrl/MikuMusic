@@ -34,7 +34,8 @@ data class MikuBtDevice(
     val bondState: Int,
     val isConnected: Boolean,
     val isConnecting: Boolean = false,
-    val rssi: Int = 0,
+    /** Last reported signal strength in dBm, or null when the scan reported none (never a stand-in). */
+    val rssi: Int? = null,
     val deviceType: DeviceType = DeviceType.AUDIO_HEADSET
 )
 
@@ -568,11 +569,14 @@ object MikuBluetoothController {
                 bondState = bondState,
                 isConnected = false,
                 isConnecting = _connectingAddress.value == dev.address,
-                rssi = if (rssi == Short.MIN_VALUE.toInt()) -70 else rssi,
+                // No RSSI reported stays null. It used to become a fabricated -70 dBm, which the
+                // settings list then printed as this device's measured signal strength.
+                rssi = rssi.takeIf { it != Short.MIN_VALUE.toInt() && it in -127..0 },
                 deviceType = resolveDeviceType(dev)
             )
             discoveredMap[dev.address] = item
-            _discoveredDevices.value = discoveredMap.values.sortedByDescending { it.rssi }
+            // Devices with no reported RSSI sort last instead of sorting as if they were at -70.
+            _discoveredDevices.value = discoveredMap.values.sortedByDescending { it.rssi ?: Int.MIN_VALUE }
         } catch (t: Throwable) {
             Log.e(TAG, "handleDeviceFound error: ${t.message}")
         }

@@ -368,7 +368,12 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                             )
                             Spacer(Modifier.width(5.dp))
                             Text(
-                                if (fmState.isPowerOn) "FM STEREO • ${fmState.rssi} dBµV" else "STANDBY",
+                                // Stereo comes from the tuner's own flag, and RSSI only when the HAL
+                                // actually reported one. The old label said "FM STEREO" whenever the
+                                // tuner was powered and printed rssi even while it was still 0.
+                                if (!fmState.isPowerOn) "STANDBY"
+                                else (if (fmState.isStereo) "FM STEREO" else "FM MONO") +
+                                    " • " + (if (fmState.rssi > 0) "${fmState.rssi} dBµV" else "RSSI —"),
                                 color = if (fmState.isPowerOn) MikuCyan else Color.Gray,
                                 fontSize = 8.5.sp,
                                 fontWeight = FontWeight.Bold,

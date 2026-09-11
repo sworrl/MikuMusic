@@ -52,6 +52,8 @@ fun PulsarSettingsScreen(onBack: () -> Unit) {
     var pulsarBrightness by remember { mutableStateOf((PulsarLight.getBrightness(ctx) / 255f).coerceIn(0f, 1f)) }
     var pulsarOn by remember { mutableStateOf(PlayerPreferences.loadPulsarEnabled(ctx)) }
     var bpmSyncOn by remember { mutableStateOf(PulsarLight.isBpmSyncEnabled(ctx)) }
+    // Real probe of the LED sysfs nodes — decides whether this screen may claim it drives hardware.
+    val ledWritable = remember { PulsarLight.isHardwareWritable() }
 
     Box(
         Modifier
@@ -153,8 +155,9 @@ fun PulsarSettingsScreen(onBack: () -> Unit) {
                                     fontFamily = AudiowideFont
                                 )
                                 Text(
-                                    "Controls the physical RGB LED lightbar built into the M500 chassis.",
-                                    color = MikuTextSecondary,
+                                    if (ledWritable) "Controls the physical RGB LED lightbar built into the M500 chassis."
+                                    else "This unit's LED nodes are not writable by the player, so these controls only save a preference — the chassis light does not change.",
+                                    color = if (ledWritable) MikuTextSecondary else Color(0xFFFFB300),
                                     fontSize = 10.5.sp
                                 )
                             }

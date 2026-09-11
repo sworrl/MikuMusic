@@ -187,16 +187,30 @@ fun MikuBrainModal(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
+                                        // Real counts, and an explicit "no probe yet" state. The old
+                                        // label read "100% NOMINAL" off allBonesHealthy, which
+                                        // defaults to true before the watchdog has probed anything,
+                                        // so an empty registry rendered as a perfect score.
+                                        val probed = telemetry.bones.values.filter { it.probed }
+                                        val probedBones = probed.size
+                                        val faultedBones = probed.count {
+                                            it.state == MikuBrain.BoneState.ERROR || it.state == MikuBrain.BoneState.STALLED
+                                        }
+                                        val watchdogOk = probedBones > 0 && faultedBones == 0
                                         Box(
                                             Modifier
                                                 .size(7.dp)
                                                 .clip(CircleShape)
-                                                .background(if (telemetry.allBonesHealthy) Color(0xFF00FF7F) else Color(0xFFFF5252))
+                                                .background(if (watchdogOk) Color(0xFF00FF7F) else Color(0xFFFF5252))
                                         )
                                         Spacer(Modifier.width(6.dp))
                                         Text(
-                                            if (telemetry.allBonesHealthy) "AUTONOMOUS WATCHDOG: 100% NOMINAL" else "WATCHDOG: SUBSYSTEM ANOMALY",
-                                            color = if (telemetry.allBonesHealthy) Color(0xFF00FF7F) else Color(0xFFFF5252),
+                                            when {
+                                                probedBones == 0 -> "WATCHDOG: NO PROBE YET"
+                                                faultedBones == 0 -> "WATCHDOG: $probedBones/$probedBones SUBSYSTEMS OK"
+                                                else -> "WATCHDOG: $faultedBones OF $probedBones SUBSYSTEMS FAULTED"
+                                            },
+                                            color = if (watchdogOk) Color(0xFF00FF7F) else Color(0xFFFF5252),
                                             fontSize = 10.5.sp,
                                             fontWeight = FontWeight.Bold,
                                             fontFamily = AudiowideFont
@@ -212,8 +226,12 @@ fun MikuBrainModal(
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    if (telemetry.isUiUnderLoad) "⚡ UI TOUCH INTERACTION ACTIVE: Background I/O automatically yielding to ensure uncompromised 60 FPS fluidity."
-                                    else "🟢 UI IDLE: 100% CPU clock bandwidth dynamically allocated to Audio DAC & Ingress pipelines.",
+                                    // Describe the observed condition only. The idle branch used to
+                                    // claim "100% CPU clock bandwidth dynamically allocated", a
+                                    // figure nothing here measures; the load branch claimed a 60 FPS
+                                    // result that is likewise never sampled.
+                                    if (telemetry.isUiUnderLoad) "⚡ UI TOUCH INTERACTION ACTIVE: background I/O is being asked to yield to the UI thread."
+                                    else "🟢 UI IDLE: no recent touch activity, so background I/O runs without yielding.",
                                     color = if (telemetry.isUiUnderLoad) MikuNeonPink else Color.White,
                                     fontSize = 9.5.sp,
                                     fontWeight = FontWeight.Medium
@@ -248,9 +266,9 @@ fun MikuBrainModal(
                             val audit = MikuBrain.run { com.miku.player.CirrusLogicManager.getLiveHardwareAudit() }
                             MikuBrain.heartbeat(
                                 MikuBrain.BoneType.HARDWARE_IO,
-                                if (audit.isHardwareSynced) MikuBrain.BoneState.ACTIVE else MikuBrain.BoneState.ERROR,
-                                if (audit.isHardwareSynced) "DAC sysfs readable · filter ${audit.kernelFilter} · gain ${audit.kernelGain}" else "DAC sysfs not readable",
-                                if (audit.isHardwareSynced) 1 else 0
+                                if (audit.isSysfsReadable) MikuBrain.BoneState.ACTIVE else MikuBrain.BoneState.ERROR,
+                                if (audit.isSysfsReadable) "DAC sysfs readable · filter ${audit.kernelFilterText} · gain ${audit.kernelGainText}" else "DAC sysfs not readable",
+                                if (audit.isSysfsReadable) 1 else 0
                             )
                             val playing = runCatching { com.miku.player.PlayerHolder.player?.isPlaying == true }.getOrDefault(false)
                             MikuBrain.heartbeat(MikuBrain.BoneType.AUDIO_DSP, if (playing) MikuBrain.BoneState.ACTIVE else MikuBrain.BoneState.IDLE, if (playing) "Player is playing" else "Player idle", if (playing) 1 else 0)
@@ -334,7 +352,14 @@ private fun BoneCard(
         Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Active Tasks: ${health.activeTasks}", color = MikuCyan, fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold)
-            Text("Heartbeat: ${elapsedSec}s ago (${health.lastMessage})", color = Color.Gray, fontSize = 8.sp)
+            // A bone that has never heart-beaten has no elapsed time to report — its
+            // lastHeartbeatMs is just when the registry row was created, not a heartbeat.
+            Text(
+                if (health.probed) "Heartbeat: ${elapsedSec}s ago (${health.lastMessage})"
+                else "Heartbeat: never (${health.lastMessage})",
+                color = Color.Gray,
+                fontSize = 8.sp
+            )
         }
     }
 }

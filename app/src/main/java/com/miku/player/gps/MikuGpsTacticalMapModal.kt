@@ -251,8 +251,21 @@ fun MikuGpsTacticalMapModal(
                                     fontFamily = AudiowideFont,
                                     letterSpacing = 0.8.sp
                                 )
+                                // Name the fix source the service actually used. isLocked is also
+                                // true for a manual override, a restored last-known fix and an IP
+                                // geolocation, so the old unconditional "SATELLITE 3D FIX" /
+                                // "ACQUIRING SATELLITE CONSTELLATION..." claimed a GNSS fix (and a
+                                // satellite search) that may never have happened.
+                                val fixLabel = when {
+                                    !gps.isLocked -> "NO FIX"
+                                    gps.provider.equals("gps", true) -> "GNSS SATELLITE FIX"
+                                    gps.provider.equals("fused", true) -> "FUSED FIX (GNSS / NETWORK)"
+                                    gps.provider.equals("network", true) -> "NETWORK FIX (NO SATELLITES)"
+                                    gps.provider.isBlank() -> "FIX SOURCE UNKNOWN"
+                                    else -> "FIX: ${gps.provider.uppercase()}"
+                                }
                                 Text(
-                                    text = if (gps.isLocked) "50KM TOPO OFFLINE CACHE · SATELLITE 3D FIX" else "ACQUIRING SATELLITE CONSTELLATION...",
+                                    text = fixLabel,
                                     color = if (gps.isLocked) Color(0xFF00FFCC) else Color(0xFFFFB300),
                                     fontSize = 7.5.sp,
                                     fontWeight = FontWeight.Bold,
@@ -347,7 +360,9 @@ fun MikuGpsTacticalMapModal(
                             fontFamily = OrbitronFont
                         )
                         Text(
-                            text = if (gps.accuracyM > 0) "ACCURACY: ±${"%.1f".format(gps.accuracyM)}M" else "SEARCHING FIX",
+                            // No reported accuracy = say so. "SEARCHING FIX" claimed an in-progress
+                            // satellite search that nothing here actually observes.
+                            text = if (gps.accuracyM > 0) "ACCURACY: ±${"%.1f".format(gps.accuracyM)}M" else "ACCURACY: —",
                             color = if (gps.accuracyM in 0.1f..15f) Color(0xFF00FFCC) else Color(0xFFFFB300),
                             fontSize = 7.5.sp,
                             fontWeight = FontWeight.Bold,

@@ -44,7 +44,11 @@ object MikuBrain {
         val state: BoneState = BoneState.IDLE,
         val lastHeartbeatMs: Long = SystemClock.elapsedRealtime(),
         val activeTasks: Int = 0,
-        val lastMessage: String = "Nominal"
+        /** Honest until a real heartbeat arrives — this used to default to "Nominal", which the
+         *  Brain modal rendered as a health verdict for bones that had never reported anything. */
+        val lastMessage: String = "Not probed yet",
+        /** True only once [heartbeat] has actually been called for this bone. */
+        val probed: Boolean = false
     )
 
     data class BrainTelemetry(
@@ -99,7 +103,8 @@ object MikuBrain {
             state = state,
             lastHeartbeatMs = now,
             activeTasks = activeTasks,
-            lastMessage = message
+            lastMessage = message,
+            probed = true
         )
     }
 
@@ -247,10 +252,10 @@ object MikuBrain {
                     // ========================================================
                     try {
                         val audit = CirrusLogicManager.getLiveHardwareAudit()
-                        val hwMsg = if (audit.isHardwareSynced) {
-                            "DAC sysfs readable · filter ${audit.kernelFilter} · gain ${audit.kernelGain} · out ${audit.kernelOutput}"
+                        val hwMsg = if (audit.isSysfsReadable) {
+                            "DAC sysfs readable · filter ${audit.kernelFilterText} · gain ${audit.kernelGainText} · out ${audit.kernelOutputText}"
                         } else "DAC sysfs not readable"
-                        heartbeat(BoneType.HARDWARE_IO, if (audit.isHardwareSynced) BoneState.ACTIVE else BoneState.ERROR, hwMsg, if (audit.isHardwareSynced) 1 else 0)
+                        heartbeat(BoneType.HARDWARE_IO, if (audit.isSysfsReadable) BoneState.ACTIVE else BoneState.ERROR, hwMsg, if (audit.isSysfsReadable) 1 else 0)
                     } catch (_: Throwable) {}
 
                     // ========================================================

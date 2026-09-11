@@ -280,18 +280,18 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                             )
                             Spacer(Modifier.height(6.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Filter: ${auditState.kernelFilter}", color = Color.White, fontSize = 10.sp)
-                                Text("Gain: ${auditState.kernelGain}", color = if (auditState.kernelGain.contains("high")) MikuNeonPink else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Text("Filter: ${auditState.kernelFilterText}", color = Color.White, fontSize = 10.sp)
+                                Text("Gain: ${auditState.kernelGainText}", color = if (auditState.kernelGain?.contains("high") == true) MikuNeonPink else Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.height(3.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("High Power: ${auditState.kernelHighPower}", color = MikuTextSecondary, fontSize = 9.5.sp)
-                                Text("DRE Mode: ${auditState.kernelDre}", color = MikuTextSecondary, fontSize = 9.5.sp)
+                                Text("High Power: ${auditState.kernelHighPowerText}", color = MikuTextSecondary, fontSize = 9.5.sp)
+                                Text("DRE Mode: ${auditState.kernelDreText}", color = MikuTextSecondary, fontSize = 9.5.sp)
                             }
                             Spacer(Modifier.height(3.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Text("Turbo: ${auditState.kernelTurbo}", color = MikuTextSecondary, fontSize = 9.5.sp)
-                                Text("Output: ${auditState.kernelOutput}", color = MikuCyan, fontSize = 9.5.sp)
+                                Text("Turbo: ${auditState.kernelTurboText}", color = MikuTextSecondary, fontSize = 9.5.sp)
+                                Text("Output: ${auditState.kernelOutputText}", color = MikuCyan, fontSize = 9.5.sp)
                             }
                         }
                     }

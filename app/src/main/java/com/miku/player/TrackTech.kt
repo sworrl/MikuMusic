@@ -3,6 +3,8 @@ package com.miku.player
 import android.content.Context
 import android.media.MediaExtractor
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,23 +22,51 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Per-track technical info (bit depth + sample rate) that MediaStore doesn't provide. FLAC/WAV
  * headers are parsed directly (a few hundred bytes of IO); everything else falls back to
- * MediaExtractor's track format. Results live in a Compose state map (badges appear as they
- * resolve) and persist to a JSON cache so each file is only ever inspected once. Lossy formats
- * resolve to 0/0 = no badge.
+ * MediaExtractor's track format. Results persist to a JSON cache so each file is only ever
+ * inspected once, and are mirrored into a Compose state map so badges appear as they resolve.
+ * Lossy formats resolve to 0/0 = no badge.
+ *
+ * THREADING (2026-09-11 crash fix — this object was the "Unsupported concurrent change during
+ * composition" crash-loop):
+ *  - [data] is the authoritative store. Plain concurrent map, readable and writable from ANY
+ *    thread, and the only thing [persist] serializes.
+ *  - [cache] is a Compose mirror whose ONLY purpose is to make a badge recompose when its entry
+ *    lands. It is written EXCLUSIVELY from a freshly posted main-looper message (see [publish]):
+ *    never off the main thread, and never nested inside a composition pass, because a posted
+ *    Handler message cannot run inside one.
+ *  Previously [cache] was the store, which meant composition itself wrote it (the lossy
+ *  `Tech(0, 0)` short-circuit below runs inside `remember { computeQualityBreakdown(...) }` and
+ *  inside badge composables) while the IO probe coroutine — and any background caller such as the
+ *  listen-stats executor or the BLE remote's binder thread — wrote the SAME SnapshotStateMap from
+ *  another thread. That is exactly the "modified by composition as well as being modified outside
+ *  composition" condition Recomposer.applyAndCheck throws on.
  */
 object TrackTech {
     data class Tech(val bits: Int, val sampleRateHz: Int)
 
+    private val data = ConcurrentHashMap<Long, Tech>()
     private val cache = mutableStateMapOf<Long, Tech>()
+    private val mainH = Handler(Looper.getMainLooper())
     private val inFlight = HashSet<Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val ioGate = Semaphore(2)   // never hammer the SD card
     private var cacheFile: File? = null
     @Volatile private var loaded = false
+
+    private fun isMain(): Boolean = Looper.myLooper() == Looper.getMainLooper()
+
+    /** Store a result. The authoritative map is written immediately (any thread); the Compose
+     *  mirror is written from a fresh main-looper message, so composition can neither race it nor
+     *  be the one writing it. */
+    private fun publish(id: Long, t: Tech) {
+        data[id] = t
+        mainH.post { cache[id] = t }
+    }
 
     private fun ensureLoaded(ctx: Context) {
         if (loaded) return
@@ -45,14 +75,20 @@ object TrackTech {
             // New filename/schema (bits+sampleRate per track, was bits-only) — old cache is just
             // silently left behind and rebuilt in the background like a first run, same as always.
             cacheFile = File(ctx.filesDir, "track_tech2.json")
+            val fromDisk = HashMap<Long, Tech>()
             runCatching {
                 val o = JSONObject(cacheFile!!.readText())
                 o.keys().forEach { k ->
                     val v = o.getJSONObject(k)
-                    cache[k.toLong()] = Tech(v.optInt("b", 0), v.optInt("sr", 0))
+                    fromDisk[k.toLong()] = Tech(v.optInt("b", 0), v.optInt("sr", 0))
                 }
             }
+            data.putAll(fromDisk)
             loaded = true
+            // One bulk mirror write on the main looper — NOT thousands of entries written from
+            // whichever background thread happened to be the first caller (that bulk off-thread
+            // write landing on top of the first composition was the crash's most reliable trigger).
+            if (fromDisk.isNotEmpty()) mainH.post { cache.putAll(fromDisk) }
         }
     }
 
@@ -86,7 +122,9 @@ object TrackTech {
         val f = cacheFile ?: return
         runCatching {
             val o = JSONObject()
-            cache.forEach { (k, v) -> o.put(k.toString(), JSONObject().put("b", v.bits).put("sr", v.sampleRateHz)) }
+            // Iterate the plain map: persist() runs on the IO probe coroutine, and a
+            // SnapshotStateMap must not be traversed from there.
+            for ((k, v) in data) o.put(k.toString(), JSONObject().put("b", v.bits).put("sr", v.sampleRateHz))
             f.writeText(o.toString())
         }
     }
@@ -99,24 +137,31 @@ object TrackTech {
     /** Cached (already-probed) sample rate by track id - no file I/O; null when never probed. */
     fun cachedSampleRateFor(ctx: Context, trackId: Long): Int? {
         ensureLoaded(ctx)
-        return cache[trackId]?.sampleRateHz?.takeIf { it > 0 }
+        if (isMain()) cache[trackId]   // snapshot read only, so a composable recomposes when it lands
+        return data[trackId]?.sampleRateHz?.takeIf { it > 0 }
     }
 
     private fun techFor(ctx: Context, track: Track): Tech? {
         ensureLoaded(ctx)
-        cache[track.id]?.let { return it }
+        // Touch the Compose mirror on the main thread ONLY to register the snapshot read: that is
+        // what wakes a badge when publish() later fills this id in. The value itself always comes
+        // from the plain map, so background callers never touch Compose state at all.
+        if (isMain()) cache[track.id]
+        data[track.id]?.let { return it }
         val lossless = track.mime.contains("flac", true) || track.mime.contains("wav", true) ||
             track.mime.contains("x-wav", true) || track.mime.contains("aiff", true) ||
             track.mime.contains("alac", true) || track.mime.contains("mp4", true) ||
             track.path.endsWith(".flac", true) || track.path.endsWith(".wav", true) ||
             track.path.endsWith(".aif", true) || track.path.endsWith(".aiff", true) ||
             track.path.endsWith(".m4a", true)
-        if (!lossless) { cache[track.id] = Tech(0, 0); return cache[track.id] }
+        // Lossy: answer immediately and remember it. The answer is returned from the local value,
+        // never read back out of the (asynchronously mirrored) Compose map.
+        if (!lossless) { val t = Tech(0, 0); publish(track.id, t); return t }
         synchronized(inFlight) { if (!inFlight.add(track.id)) return null }
         scope.launch {
             ioGate.withPermit {
                 val t = runCatching { probe(ctx, track) }.getOrNull() ?: Tech(0, 0)
-                cache[track.id] = t
+                publish(track.id, t)
                 synchronized(inFlight) { inFlight.remove(track.id) }
                 schedulePersist()
             }

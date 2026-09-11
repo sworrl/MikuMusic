@@ -345,7 +345,7 @@ object MikuWebRemoteHtml {
         </div>
         <div class="device-badge">
             <div class="device-dot"></div>
-            <span>HiBy M500 [DIRECT DTA]</span>
+            <span>HiBy M500</span>
         </div>
     </div>
 
@@ -357,13 +357,17 @@ object MikuWebRemoteHtml {
 
         <div class="details-pane">
             <div class="track-title" id="trackTitle">Connecting...</div>
-            <div class="track-artist" id="trackArtist">MikuOS High-Resolution Audio</div>
-            <div class="track-album" id="trackAlbum">Direct Audio Sink (Dual CS43198)</div>
+            <div class="track-artist" id="trackArtist">—</div>
+            <div class="track-album" id="trackAlbum"></div>
 
+            <!-- Badges start empty (em dash): the first /api/v1/status poll fills them with the
+                 device's real DAC rate, volume and battery. They used to ship hardcoded
+                 "24-BIT / 96kHz DTA", "VOL 85%" and "BAT 100%", which rendered as live readings
+                 on every page load before any data existed. -->
             <div class="badge-row">
-                <div class="tech-badge hires" id="rateBadge">24-BIT / 96kHz DTA</div>
-                <div class="tech-badge" id="volBadge">VOL 85%</div>
-                <div class="tech-badge" id="batteryBadge">BAT 100%</div>
+                <div class="tech-badge" id="rateBadge">—</div>
+                <div class="tech-badge" id="volBadge">VOL —</div>
+                <div class="tech-badge" id="batteryBadge">BAT —</div>
             </div>
 
             <div class="progress-bar-container">
@@ -474,11 +478,17 @@ object MikuWebRemoteHtml {
             document.getElementById('trackArtist').innerText = data.track.artist || "Unknown Artist";
             document.getElementById('trackAlbum').innerText = data.track.album || "";
 
+            // Rate badge: measured DAC rate only. No rate reported (0) = em dash, never the old
+            // 'Direct DTA' label, which claimed a direct route without having measured one. The
+            // 'hires' highlight is applied only when the measured rate actually is hi-res.
             const dacRate = data.hardware.dac_sample_rate_hz || 0;
-            const rateStr = dacRate > 0 ? (dacRate / 1000).toFixed(1) + ' kHz DTA' : 'Direct DTA';
-            document.getElementById('rateBadge').innerText = rateStr;
-            document.getElementById('volBadge').innerText = 'VOL ' + data.playback.volume_pct + '%';
-            document.getElementById('batteryBadge').innerText = 'BAT ' + data.hardware.battery_pct + '%';
+            const rateBadge = document.getElementById('rateBadge');
+            rateBadge.innerText = dacRate > 0 ? (dacRate / 1000).toFixed(1) + ' kHz DTA' : '—';
+            rateBadge.classList.toggle('hires', dacRate >= 88200);
+            const volPct = data.playback.volume_pct;
+            const batPct = data.hardware.battery_pct;
+            document.getElementById('volBadge').innerText = (typeof volPct === 'number' && volPct >= 0) ? 'VOL ' + volPct + '%' : 'VOL —';
+            document.getElementById('batteryBadge').innerText = (typeof batPct === 'number' && batPct >= 0) ? 'BAT ' + batPct + '%' : 'BAT —';
 
             isPlaying = data.playback.is_playing;
             document.getElementById('btnPlay').innerText = isPlaying ? '⏸' : '▶';

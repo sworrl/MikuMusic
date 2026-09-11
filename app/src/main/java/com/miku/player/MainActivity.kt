@@ -5810,6 +5810,9 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
     var brightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx)) }
     var bpmSync by remember { mutableStateOf(PulsarLight.isBpmSyncEnabled(ctx)) }
     var animSpeed by remember { mutableStateOf(PulsarLight.getAnimationSpeed(ctx)) }
+    // Real probe: are any LED sysfs nodes actually writable? The status chip below used to read a
+    // hardcoded "✨ ACTIVE" whether or not a single byte ever reached the diode.
+    val ledWritable = remember { PulsarLight.isHardwareWritable() }
 
     Column(
         Modifier
@@ -5821,10 +5824,23 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
     ) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("Pulsar Cyber RGB Engine", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-            Text("✨ ACTIVE", color = MikuTealBright, fontSize = 10.sp, fontWeight = FontWeight.Black)
+            Text(
+                if (ledWritable) "✨ LED NODE WRITABLE" else "LED NODE NOT WRITABLE",
+                color = if (ledWritable) MikuTealBright else Color(0xFFFFB300),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Black
+            )
         }
         Spacer(Modifier.height(6.dp))
         Text(mode.description, color = Muted, fontSize = 11.sp)
+        if (!ledWritable) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "These settings are saved, but this unit exposes no writable LED node to the player, so the chassis light will not change.",
+                color = Color(0xFFFFB300),
+                fontSize = 10.sp
+            )
+        }
 
         Spacer(Modifier.height(10.dp))
         // Mode Selector Chips
@@ -6001,16 +6017,21 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
             Text(if (isRooted) "🟢" else "🟡", fontSize = 14.sp)
             Spacer(Modifier.width(8.dp))
             Text(
-                if (isRooted) "Kernel Hardware Lock Active" else "Fallback In-App Touch Guard Active",
+                if (isRooted) "Root Shell Available" else "Platform Input Lock (No Root)",
                 color = if (isRooted) MikuTealBright else Color(0xFFFFD166),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
         }
         Spacer(Modifier.height(4.dp))
+        // Honest description of the mechanism that actually runs. The old copy claimed "Kernel
+        // Hardware Lock Active" with direct digitizer-node inhibition whenever a root shell merely
+        // existed, and told the user to enable root to get locking at all — on this build locking
+        // runs root-free through InputManager.disableInputDevice plus the HiBy framework's
+        // Settings.Global button_lock, which is the path that is actually verified to work.
         Text(
-            if (isRooted) "Direct Goodix digitizer inhibition (/sys/class/input/input3/inhibited) and hardware DAC safety enabled."
-            else "Standard mode. Enable Root Access in settings below to activate direct kernel digitizer locking.",
+            if (isRooted) "Root shell detected. Locking still runs root-free through InputManager.disableInputDevice and the HiBy framework's button_lock setting."
+            else "Locking runs root-free: InputManager.disableInputDevice (platform permission) plus the HiBy framework's button_lock setting. No root needed.",
             color = Muted,
             fontSize = 11.5.sp,
             lineHeight = 15.sp

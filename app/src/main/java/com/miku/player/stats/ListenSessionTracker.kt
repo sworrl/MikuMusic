@@ -43,6 +43,17 @@ import java.util.concurrent.Executors
  *
  * Scrobble rule (Last.fm's): track > 30 s, and played >= min(50% of duration, 4 min). Checked on
  * the tick; enqueued once per listen with the listen's start time as the timestamp.
+ *
+ * THREADING RULE (2026-09-11, the "Unsupported concurrent change during composition" crash-loop):
+ * nothing this object runs on [io] may touch a Compose state object, directly or transitively.
+ * The one place that did was the bit-depth / sample-rate lookup: TrackTech kept its results in a
+ * SnapshotStateMap, so calling TrackTech.bitsFor / sampleRateFor from [io] wrote Compose state
+ * from a background thread at the exact moment MainActivity's first composition was reading AND
+ * writing that same map (badges + `remember { computeQualityBreakdown(...) }`) — one state object
+ * written by composition and outside it, which is precisely what Recomposer.applyAndCheck throws
+ * on. TrackTech is now main-thread-confined internally, and this object additionally never calls
+ * it off the main thread: the tech values are sampled by [refreshTech] from the 1 s tick (main
+ * thread, outside composition) into plain volatile Ints that the io tasks read. Keep it that way.
  */
 object ListenSessionTracker {
     private const val TAG = "ListenTracker"
@@ -82,7 +93,12 @@ object ListenSessionTracker {
         var nowPlayingSent: Boolean = false
         var scrobbleQueued: Boolean = false
         var ticks: Int = 0
-        var track: Track? = null
+        @Volatile var track: Track? = null     // resolved on io, read by refreshTech on main
+        // Tech sampled on the MAIN thread only (see refreshTech) — the io tasks read these plain
+        // values instead of calling TrackTech, which owns Compose state.
+        @Volatile var techSampleRateHz: Int? = null
+        @Volatile var techBits: Int? = null
+        @Volatile var techResolved: Boolean = false
         val fraction: Float get() = if (durationMs > 0) (maxPosMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
     }
 
@@ -93,7 +109,13 @@ object ListenSessionTracker {
     // ------------------------------------------------------------------ lifecycle
 
     fun attach(context: Context, player: ExoPlayer) {
-        if (com.miku.player.MikuDbg.off(context, "stats")) return
+        // Kill switch kept for future bisects (`settings put global miku_dbg_off_stats 1`), but the
+        // 2026-09-10 crash-loop that forced it on is fixed (TrackTech snapshot-map race, see the
+        // THREADING RULE above) — so this subsystem is live again by default.
+        if (com.miku.player.MikuDbg.off(context, "stats")) {
+            Log.w(TAG, "stats disabled by miku_dbg_off_stats")
+            return
+        }
         if (attached) return
         attached = true
         val app = context.applicationContext
@@ -213,11 +235,17 @@ object ListenSessionTracker {
         val cal = Calendar.getInstance().apply { timeInMillis = s.startedAt }
         val dow = cal.get(Calendar.DAY_OF_WEEK)
         val hour = cal.get(Calendar.HOUR_OF_DAY)
+        // Power-governor gate read HERE (main thread): MikuPowerGovernor's fields are Compose state,
+        // and nothing on io may touch a state object — see the THREADING RULE on this object.
+        val allowLocationPoll = runCatching { com.miku.player.MikuPowerGovernor.allowLocation }.getOrDefault(false)
 
         io.execute {
             // Library lookup fills in whatever the MediaItem didn't carry (path, tags, duration).
             val t = resolveTrack(app, id)
             s.track = t
+            // Sample the tech as soon as the Track exists, on the MAIN thread, instead of waiting
+            // for the next tick — so even a short listen ends up with its bit depth / sample rate.
+            if (t != null) mainH.post { refreshTech(s) }
             if (t != null) {
                 if (s.title.isBlank()) s.title = t.title
                 if (s.artist.isBlank()) s.artist = t.artist
@@ -225,9 +253,13 @@ object ListenSessionTracker {
                 if (s.durationMs <= 0L && t.durationMs > 0L) s.durationMs = t.durationMs
             }
             val path = s.path ?: t?.path?.ifBlank { null }
-            val sr = t?.let { runCatching { TrackTech.sampleRateFor(app, it) }.getOrNull() }
-            val bits = t?.let { runCatching { TrackTech.bitsFor(app, it) }.getOrNull()?.takeIf { b -> b > 0 } }
-            val loc = runCatching { ListenLocationSampler.sample(app) }.getOrNull()
+            // NO TrackTech here — it owns Compose state (see the THREADING RULE). The row opens with
+            // whatever refreshTech has sampled on the main thread so far (usually nothing yet, since
+            // the track was only just resolved above); finishListen fills the real values in, which
+            // is what it already did for tracks whose probe completed mid-listen.
+            val sr = s.techSampleRateHz
+            val bits = s.techBits
+            val loc = runCatching { ListenLocationSampler.sample(app, allowLocationPoll) }.getOrNull()
             if (!statsOn) return@execute
             try {
                 val rowId = ListenStatsDb.get(app).openListen(
@@ -262,6 +294,9 @@ object ListenSessionTracker {
             if (s.artist.isBlank()) s.artist = m.artist?.toString()?.trim().orEmpty()
             if (s.album == null) s.album = m.albumTitle?.toString()?.trim()?.ifBlank { null }
         }
+        // Sample bit depth / sample rate on the main thread (never from io): TrackTech mirrors its
+        // results into a Compose state map, so this must stay on the composition's own thread.
+        refreshTech(s)
         // Mirror the heart qualifier (authoritative for "qualified" while it still tracks this id).
         if (MikuPlayQualifier.wasSkipped(s.trackId)) s.skipped = true
         if (MikuPlayQualifier.isQualified(s.trackId)) s.qualified = true
@@ -305,6 +340,8 @@ object ListenSessionTracker {
         // paths don't reset it; the transition path already did, hence the tick mirror above).
         if (MikuPlayQualifier.isQualified(s.trackId)) s.qualified = true
         if (MikuPlayQualifier.wasSkipped(s.trackId)) s.skipped = true
+        // Last main-thread chance to pick up a probe that finished since the previous tick.
+        refreshTech(s)
         val snap = snapshot(s)
         io.execute {
             if (!s.statsRow || s.rowId <= 0) return@execute
@@ -315,9 +352,9 @@ object ListenSessionTracker {
                     PlayerPreferences.getHeartEvents(app, s.trackId).count { (at, _, _) -> at in s.startedAt..endedAt }
                 }.getOrDefault(0)
                 val heartCount = runCatching { LikeStore.heartCount(app, s.trackId) }.getOrDefault(0)
-                val t = s.track
-                val sr = t?.let { runCatching { TrackTech.sampleRateFor(app, it) }.getOrNull() }
-                val bits = t?.let { runCatching { TrackTech.bitsFor(app, it) }.getOrNull()?.takeIf { b -> b > 0 } }
+                // Main-thread-sampled values only (refreshTech); never a TrackTech call from io.
+                val sr = s.techSampleRateHz
+                val bits = s.techBits
                 db.finishListen(
                     id = s.rowId, endedAt = endedAt, playedMs = snap.playedMs, fraction = snap.fraction,
                     qualified = snap.qualified, skipped = snap.skipped, seekCount = snap.seekCount,
@@ -346,6 +383,34 @@ object ListenSessionTracker {
         // at 3 ticks. Deep sleep with the player "playing" would otherwise over-count.
         if (delta > 0) s.playedMs += minOf(delta, TICK_MS * 3)
         s.lastPlayingElapsed = now
+    }
+
+    /**
+     * Sample TrackTech's bit depth / sample rate into the session's plain volatile fields.
+     *
+     * MAIN THREAD ONLY, and it asserts that rather than trusting its callers: TrackTech mirrors its
+     * results into a Compose SnapshotStateMap, so reaching it from the [io] executor is what put one
+     * state object in the hands of both composition and a background thread. A main-looper callback
+     * (the 1 s tick, a player callback) can never be nested inside a composition pass, so sampling
+     * here is safe; the io tasks then only ever read Ints.
+     *
+     * bitsFor returns null while the async probe is still running and 0 for "lossy, not applicable",
+     * so the first non-null answer is final and we stop asking.
+     */
+    private fun refreshTech(s: Session) {
+        if (s.techResolved) return
+        val app = appCtx ?: return
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            // Tripwire (silent unless miku_dbg_snaplog=1): a future caller that reaches this from a
+            // background thread gets named in logcat instead of reintroducing the crash.
+            com.miku.player.MikuDbg.expectMain(app, "ListenSessionTracker.refreshTech -> TrackTech")
+            return
+        }
+        val t = s.track ?: return
+        val bits = runCatching { TrackTech.bitsFor(app, t) }.getOrNull() ?: return
+        s.techResolved = true
+        s.techBits = bits.takeIf { it > 0 }
+        s.techSampleRateHz = runCatching { TrackTech.sampleRateFor(app, t) }.getOrNull()
     }
 
     private fun sendNowPlayingIfNeeded(s: Session) {

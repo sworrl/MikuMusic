@@ -124,6 +124,10 @@ fun MikuGmsManagerModal(
         }
     }
 
+    // The enable/disable path shells out to `pm` through su, which never runs on MikuOS (no root),
+    // and this screen used to report "Enabled $pkg" / "All Google Apps Enabled" unconditionally —
+    // a success message for a write that did nothing. Every message below is now derived from
+    // PackageManager re-read AFTER the attempt, so the screen states what the OS actually says.
     fun setPackageState(pkg: String, enable: Boolean) {
         isProcessing = true
         statusMessage = if (enable) "Enabling $pkg..." else "Disabling $pkg..."
@@ -133,10 +137,18 @@ fun MikuGmsManagerModal(
             } else {
                 RootShell.execFast("pm disable-user --user 0 $pkg || pm disable $pkg")
             }
+            // execFast is fire-and-forget; give a real `pm` (if one ever runs) time to land before
+            // reading the result back, so the verdict below reflects the OS, not a race.
+            kotlinx.coroutines.delay(400)
             refreshStates()
+            val actual = isPackageEnabled(ctx, pkg)
             withContext(Dispatchers.Main) {
                 isProcessing = false
-                statusMessage = if (enable) "Enabled $pkg" else "Disabled $pkg"
+                statusMessage = when {
+                    actual == enable && enable -> "Enabled $pkg"
+                    actual == enable -> "Disabled $pkg"
+                    else -> "Unchanged: $pkg is still ${if (actual) "enabled" else "disabled"} — the OS refused the change (no system privileges)"
+                }
             }
         }
     }
@@ -145,19 +157,26 @@ fun MikuGmsManagerModal(
         isProcessing = true
         statusMessage = if (enable) "Bulk enabling Google Ecosystem..." else "Bulk disabling Google Ecosystem..."
         scope.launch(Dispatchers.IO) {
-            for (target in GOOGLE_ECOSYSTEM_TARGETS) {
-                if (installedSet.contains(target.packageName)) {
-                    if (enable) {
-                        RootShell.execFast("pm enable ${target.packageName} && pm unhide ${target.packageName}")
-                    } else {
-                        RootShell.execFast("pm disable-user --user 0 ${target.packageName} || pm disable ${target.packageName}")
-                    }
+            val attempted = GOOGLE_ECOSYSTEM_TARGETS.filter { installedSet.contains(it.packageName) }
+            for (target in attempted) {
+                if (enable) {
+                    RootShell.execFast("pm enable ${target.packageName} && pm unhide ${target.packageName}")
+                } else {
+                    RootShell.execFast("pm disable-user --user 0 ${target.packageName} || pm disable ${target.packageName}")
                 }
             }
+            kotlinx.coroutines.delay(600)
             refreshStates()
+            val changed = attempted.count { isPackageEnabled(ctx, it.packageName) == enable }
             withContext(Dispatchers.Main) {
                 isProcessing = false
-                statusMessage = if (enable) "All Google Apps Enabled" else "All Google Apps Deactivated"
+                statusMessage = when {
+                    attempted.isEmpty() -> "No targeted Google packages are installed"
+                    changed == attempted.size && enable -> "All ${attempted.size} Google apps enabled"
+                    changed == attempted.size -> "All ${attempted.size} Google apps disabled"
+                    changed == 0 -> "Nothing changed — the OS refused all ${attempted.size} changes (no system privileges)"
+                    else -> "$changed of ${attempted.size} ${if (enable) "enabled" else "disabled"}; the rest were refused by the OS"
+                }
             }
         }
     }

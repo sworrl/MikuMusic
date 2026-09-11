@@ -75,6 +75,30 @@ object PulsarLight {
         OFF("off", "Off", "Pulsar indicator disabled")
     }
 
+    @Volatile private var ledWritableCache: Boolean? = null
+
+    /**
+     * Whether a Pulsar LED node this engine writes to actually exists AND is writable by this
+     * process right now. Every write below goes out through [RootShell] (su), which never runs on
+     * MikuOS, so when this returns false the controls only persist a preference — the physical
+     * diode does not change. UI must say so instead of implying the light responded.
+     *
+     * Checked against the real node paths under sys/class/leds; result cached after the first probe.
+     */
+    fun isHardwareWritable(): Boolean {
+        ledWritableCache?.let { return it }
+        val writable = runCatching {
+            listOf(
+                "$SYSFS_SGM/brightness",
+                "$SYSFS_SGM/rgb_val",
+                "$SYSFS_RED/brightness",
+                "$SYSFS_BLUE/brightness"
+            ).any { p -> java.io.File(p).let { it.exists() && it.canWrite() } }
+        }.getOrDefault(false)
+        ledWritableCache = writable
+        return writable
+    }
+
     fun getMode(ctx: Context): Mode {
         val sp = ctx.getSharedPreferences("m500_hardware_prefs", Context.MODE_PRIVATE)
         val id = sp.getString(PREFS_KEY_MODE, Mode.AUDIOPHILE_AUTO.id) ?: Mode.AUDIOPHILE_AUTO.id
