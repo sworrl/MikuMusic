@@ -69,7 +69,11 @@ class MikuNotificationShadeService : AccessibilityService() {
         const val EDGE_MAX_DP = 36f
         const val EDGE_VERTICAL_INTENT_PX = 20f
         const val EDGE_MAX_ANGLE_TAN = 1.428f      // tan(55°)
-        const val TOP_STRIP_DP = 20
+        // 40dp (was 20) so the shade pull is catchable from content-heavy 3rd-party apps like
+        // Spotify that draw right up to the top edge - a user's downward swipe rarely lands in a
+        // 20dp (33px) band there. Non-pull touches are replayed through to the app below
+        // (replayTouch on ACTION_UP), same as the side edge-back strips.
+        const val TOP_STRIP_DP = 40
         const val SHADE_PULL_DP = 24f
         const val PILL_ZONE_W_DP = 132
         const val PILL_ZONE_H_DP = 30

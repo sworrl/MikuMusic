@@ -117,12 +117,34 @@ fun rememberMikuStatusBarState(
     val bpmState by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
     val wg by com.miku.launcher.vpn.MikuWireGuardManager.status.collectAsState()
     var btConnected by remember { mutableStateOf(false) }
-    var batteryPct by remember { mutableIntStateOf(100) }
+    // Read the REAL battery immediately (was defaulting to a fake 100 that showed until the
+    // visibility-gated poll below first ran - "top bar stuck at 100%").
+    val initialBattery = remember {
+        try {
+            val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val lvl = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scl = i?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+            if (lvl >= 0 && scl > 0) lvl * 100 / scl else -1
+        } catch (_: Throwable) { -1 }
+    }
+    var batteryPct by remember { mutableIntStateOf(initialBattery.coerceAtLeast(0)) }
     var charging by remember { mutableStateOf(false) }
     var quality by remember { mutableStateOf("") }
     var batteryTempC by remember { mutableStateOf(0f) }
     LaunchedEffect(Unit) {
         while (true) {
+            // Battery first (cheap sticky read) so it is fresh the instant the bar is shown,
+            // then gate the heavier polls on visibility.
+            try {
+                val bi = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                if (bi != null) {
+                    val lvl = bi.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scl = bi.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+                    if (lvl >= 0 && scl > 0) batteryPct = lvl * 100 / scl
+                    val st0 = bi.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
+                    charging = st0 == BatteryManager.BATTERY_STATUS_CHARGING || st0 == BatteryManager.BATTERY_STATUS_FULL
+                }
+            } catch (_: Throwable) {}
             MikuPowerProfile.awaitVisible()
             btConnected = try {
                 val adapter = BluetoothAdapter.getDefaultAdapter()
