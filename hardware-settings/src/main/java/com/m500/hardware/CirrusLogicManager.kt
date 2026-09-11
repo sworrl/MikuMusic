@@ -9,7 +9,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Hardware controller for the HiBy M500's Dual Cirrus Logic CS43131 DAC
+ * Hardware controller for the HiBy M500's Dual Cirrus Logic CS43198 DAC
  * and audiophile subsystem via Direct Kernel Sysfs (`/sys/devices/platform/sa_sound_setting/`),
  * HAL System Properties, and Android Global Settings.
  */
@@ -35,16 +35,32 @@ object CirrusLogicManager {
         LINE_OUT("bal_lo", "Line Out (LO)", "Clean unamplified line-level bypass for external desktop amps")
     }
 
+    /**
+     * Raw kernel sysfs readings. A field is null when that node could NOT be read (missing node,
+     * SELinux denial, empty) — never substituted with a guess. [isHardwareSynced] is true only
+     * when every node was actually read; [readNodes] / [totalNodes] say how many were.
+     */
     data class HardwareAuditState(
-        val kernelFilter: String = "nos",
-        val kernelGain: String = "low",
-        val kernelHighPower: String = "hpower_disable",
-        val kernelDre: String = "dremode_enable",
-        val kernelTurbo: String = "0",
-        val kernelOutput: String = "bal_po",
-        val kernelBalance: String = "0",
-        val isHardwareSynced: Boolean = true
-    )
+        val kernelFilter: String? = null,
+        val kernelGain: String? = null,
+        val kernelHighPower: String? = null,
+        val kernelDre: String? = null,
+        val kernelTurbo: String? = null,
+        val kernelOutput: String? = null,
+        val kernelBalance: String? = null,
+        val readNodes: Int = 0,
+        val totalNodes: Int = 7
+    ) {
+        val isHardwareSynced: Boolean get() = readNodes == totalNodes
+        /** True when nothing at all could be read from the kernel — state is unknown. */
+        val isUnknown: Boolean get() = readNodes == 0
+    }
+
+    /** True when the DAC sysfs directory exists and at least one control node is readable. */
+    fun isSysfsReachable(): Boolean = try {
+        val dir = File(SYSFS_BASE)
+        dir.isDirectory && (dir.listFiles()?.any { it.canRead() } == true)
+    } catch (_: Throwable) { false }
 
     fun init(ctx: Context) {
         RootShell.execFast("chmod 666 $SYSFS_BASE/*")
@@ -76,7 +92,8 @@ object CirrusLogicManager {
         }
     }
 
-    fun getDigitalFilter(ctx: Context): DigitalFilter {
+    /** Kernel sysfs first, then the HiBy Settings.Global keys. Null = no real source says (never guessed). */
+    fun getDigitalFilter(ctx: Context): DigitalFilter? {
         val kernelVal = readSysfs("digital_filter")
         if (!kernelVal.isNullOrBlank()) {
             DigitalFilter.values().firstOrNull { it.id == kernelVal.lowercase() }?.let { return it }
@@ -86,7 +103,7 @@ object CirrusLogicManager {
             ?: Settings.Global.getString(cr, "vendor.audio.hiby.digital_filter")
             ?: Settings.Global.getString(cr, "hw.digital_filter")
             ?: ""
-        return DigitalFilter.values().firstOrNull { it.id == raw.trim().lowercase() } ?: DigitalFilter.NOS
+        return DigitalFilter.values().firstOrNull { it.id == raw.trim().lowercase() }
     }
 
     suspend fun setDigitalFilter(ctx: Context, filter: DigitalFilter) = withContext(Dispatchers.IO) {
@@ -106,7 +123,8 @@ object CirrusLogicManager {
         Log.i(TAG, "Applied Cirrus Logic filter: ${filter.id}")
     }
 
-    fun getGainMode(ctx: Context): GainMode {
+    /** Kernel sysfs first, then the HiBy Settings.Global keys. Null = no real source says (never guessed). */
+    fun getGainMode(ctx: Context): GainMode? {
         val kernelVal = readSysfs("gain")
         if (!kernelVal.isNullOrBlank()) {
             if (kernelVal.contains("high")) return GainMode.HIGH
@@ -115,7 +133,11 @@ object CirrusLogicManager {
         val cr = ctx.contentResolver
         val g = Settings.Global.getString(cr, "vendor.audio.hiby.hw.gain")
             ?: Settings.Global.getString(cr, "vendor.audio.hiby.gain") ?: ""
-        return if (g.contains("high")) GainMode.HIGH else GainMode.LOW
+        return when {
+            g.contains("high") -> GainMode.HIGH
+            g.contains("low") -> GainMode.LOW
+            else -> null
+        }
     }
 
     suspend fun setGainMode(ctx: Context, gain: GainMode) = withContext(Dispatchers.IO) {
@@ -222,14 +244,15 @@ object CirrusLogicManager {
         Log.i(TAG, "Applied Turbo Mode: $strVal")
     }
 
-    fun getDsdGainCompensate(ctx: Context): Int {
+    /** Kernel sysfs first, then the HiBy Settings.Global keys. Null = not set anywhere (never guessed). */
+    fun getDsdGainCompensate(ctx: Context): Int? {
         val kernelVal = readSysfs("dsd_compensate") ?: readSysfs("dac_dsd_gain")
         if (!kernelVal.isNullOrBlank()) {
             kernelVal.toIntOrNull()?.let { return it }
         }
         val cr = ctx.contentResolver
-        return Settings.Global.getInt(cr, "vendor.audio.hiby.hw.dac_dsd_gain",
-            Settings.Global.getInt(cr, "vendor.audio.hiby.dsd_compensate", 6))
+        return Settings.Global.getString(cr, "vendor.audio.hiby.hw.dac_dsd_gain")?.trim()?.toIntOrNull()
+            ?: Settings.Global.getString(cr, "vendor.audio.hiby.dsd_compensate")?.trim()?.toIntOrNull()
     }
 
     suspend fun setDsdGainCompensate(ctx: Context, db: Int) = withContext(Dispatchers.IO) {
@@ -250,14 +273,15 @@ object CirrusLogicManager {
         Log.i(TAG, "Applied DSD Gain Compensation: ${safe}dB")
     }
 
-    fun getOutputMode(ctx: Context): OutputMode {
+    /** Kernel sysfs first, then the HiBy Settings.Global keys. Null = no real source says (never guessed). */
+    fun getOutputMode(ctx: Context): OutputMode? {
         val kernelVal = readSysfs("bal_po_lo_switch") ?: readSysfs("po_lo_switch")
         if (!kernelVal.isNullOrBlank()) {
             return if (kernelVal.contains("lo")) OutputMode.LINE_OUT else OutputMode.HEADPHONE_OUT
         }
         val cr = ctx.contentResolver
         val raw = Settings.Global.getString(cr, "vendor.audio.hiby.hw.bal_po_lo_switch")
-            ?: Settings.Global.getString(cr, "vendor.audio.hiby.bal_po_lo_switch") ?: ""
+            ?: Settings.Global.getString(cr, "vendor.audio.hiby.bal_po_lo_switch") ?: return null
         return if (raw.contains("lo")) OutputMode.LINE_OUT else OutputMode.HEADPHONE_OUT
     }
 
@@ -305,15 +329,20 @@ object CirrusLogicManager {
         Log.i(TAG, "Applied L/R Balance: $safe")
     }
 
-    /** Reads the live hardware state directly from kernel sysfs for truthful verification in the UI */
+    /**
+     * Reads the live hardware state directly from kernel sysfs for truthful verification in the UI.
+     * Nodes that cannot be read stay null (previously they were silently replaced by defaults and
+     * the result was always flagged "synced" — a fabricated audit).
+     */
     fun getLiveHardwareAudit(): HardwareAuditState {
-        val kFilter = readSysfs("digital_filter") ?: "nos"
-        val kGain = readSysfs("gain") ?: "low"
-        val kHp = readSysfs("high_power_mode") ?: "hpower_disable"
-        val kDre = readSysfs("dre_mode") ?: "dremode_enable"
-        val kTurbo = readSysfs("turbo") ?: "0"
-        val kOutput = readSysfs("bal_po_lo_switch") ?: "bal_po"
-        val kBal = readSysfs("lrbalance") ?: "0"
+        val kFilter = readSysfs("digital_filter")
+        val kGain = readSysfs("gain")
+        val kHp = readSysfs("high_power_mode")
+        val kDre = readSysfs("dre_mode")
+        val kTurbo = readSysfs("turbo")
+        val kOutput = readSysfs("bal_po_lo_switch") ?: readSysfs("po_lo_switch")
+        val kBal = readSysfs("lrbalance")
+        val read = listOf(kFilter, kGain, kHp, kDre, kTurbo, kOutput, kBal).count { it != null }
 
         return HardwareAuditState(
             kernelFilter = kFilter,
@@ -323,7 +352,8 @@ object CirrusLogicManager {
             kernelTurbo = kTurbo,
             kernelOutput = kOutput,
             kernelBalance = kBal,
-            isHardwareSynced = true
+            readNodes = read,
+            totalNodes = 7
         )
     }
 }

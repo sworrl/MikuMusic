@@ -12,10 +12,23 @@ object UsbDacManager {
     private const val KEY_SAMPLE_RATE = "usb_dac_sample_rate"
     private const val KEY_BIT_DEPTH = "usb_dac_bit_depth"
 
+    /**
+     * REAL state: the USB gadget composition (`sys.usb.config` / `sys.usb.state`) actually contains
+     * the uac2 function. The saved preference is only consulted when the property cannot be read,
+     * so the toggle/tile can no longer claim "USB DAC: ON" after a reboot or a failed setprop.
+     */
     fun isActive(ctx: Context): Boolean {
+        val state = sysProp("sys.usb.state") ?: sysProp("sys.usb.config")
+        if (state != null) return state.split(',').any { it.trim().equals("uac2", ignoreCase = true) }
         val sp = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         return sp.getBoolean(KEY_DAC_MODE, false)
     }
+
+    /** Read-only system property via SystemProperties (no root needed). Null when unreadable/blank. */
+    fun sysProp(key: String): String? = try {
+        (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            .invoke(null, key) as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (_: Throwable) { null }
 
     fun getSampleRate(ctx: Context): Int {
         val sp = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

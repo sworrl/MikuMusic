@@ -33,7 +33,8 @@ data class MikuBtDevice(
     val bondState: Int,
     val isConnected: Boolean,
     val isConnecting: Boolean = false,
-    val rssi: Int = 0,
+    /** Real dBm from the scan result; null when the stack reported no RSSI (never a made-up value). */
+    val rssi: Int? = null,
     val deviceType: DeviceType = DeviceType.AUDIO_HEADSET
 )
 
@@ -566,11 +567,11 @@ object MikuBluetoothController {
                 bondState = bondState,
                 isConnected = false,
                 isConnecting = _connectingAddress.value == dev.address,
-                rssi = if (rssi == Short.MIN_VALUE.toInt()) -70 else rssi,
+                rssi = if (rssi == Short.MIN_VALUE.toInt()) null else rssi,
                 deviceType = resolveDeviceType(dev)
             )
             discoveredMap[dev.address] = item
-            _discoveredDevices.value = discoveredMap.values.sortedByDescending { it.rssi }
+            _discoveredDevices.value = discoveredMap.values.sortedByDescending { it.rssi ?: Int.MIN_VALUE }
         } catch (t: Throwable) {
             Log.e(TAG, "handleDeviceFound error: ${t.message}")
         }

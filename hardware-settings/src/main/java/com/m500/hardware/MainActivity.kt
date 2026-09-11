@@ -51,15 +51,18 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
 
     var isRooted by remember { mutableStateOf(false) }
+    // null = not probed yet; true/false = real result of reading the DAC sysfs directory
+    var sysfsReachable by remember { mutableStateOf<Boolean?>(null) }
 
-    // Cirrus Logic CS43198 DAC States
-    var csFilter by remember { mutableStateOf(CirrusLogicManager.DigitalFilter.NOS) }
-    var csGain by remember { mutableStateOf(CirrusLogicManager.GainMode.LOW) }
-    var csDre by remember { mutableStateOf(false) }
-    var csTurbo by remember { mutableStateOf(false) }
-    var csDsdComp by remember { mutableStateOf(6) }
-    var csOutput by remember { mutableStateOf(CirrusLogicManager.OutputMode.HEADPHONE_OUT) }
-    var csBalance by remember { mutableStateOf(0f) }
+    // Cirrus Logic CS43198 DAC States — null until READ from sysfs / Settings.Global. Nothing is
+    // pre-selected from a local default (the old NOS / LOW / +6 dB defaults were shown as if real).
+    var csFilter by remember { mutableStateOf<CirrusLogicManager.DigitalFilter?>(null) }
+    var csGain by remember { mutableStateOf<CirrusLogicManager.GainMode?>(null) }
+    var csDre by remember { mutableStateOf<Boolean?>(null) }
+    var csTurbo by remember { mutableStateOf<Boolean?>(null) }
+    var csDsdComp by remember { mutableStateOf<Int?>(null) }
+    var csOutput by remember { mutableStateOf<CirrusLogicManager.OutputMode?>(null) }
+    var csBalance by remember { mutableStateOf<Float?>(null) }
 
     // Fn Switch & Pocket Lock
     var fnMode by remember {
@@ -104,6 +107,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
             } catch (e: Throwable) {
                 Log.e("PulsarTest", "Error testing setSystemProperty", e)
             }
+            sysfsReachable = CirrusLogicManager.isSysfsReachable()
             csFilter = CirrusLogicManager.getDigitalFilter(ctx)
             csGain = CirrusLogicManager.getGainMode(ctx)
             csDre = CirrusLogicManager.isDreEnabled(ctx)
@@ -152,20 +156,29 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         .border(1.dp, HwMikuTeal.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
                         .padding(16.dp)
                 ) {
+                    // Status reflects what was ACTUALLY probed: the DAC sysfs directory and the
+                    // process's privilege. No unconditional "online / active" claims.
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🟢", fontSize = 16.sp)
+                        Text(when (sysfsReachable) { true -> "🟢"; false -> "🟡"; null -> "⚪" }, fontSize = 16.sp)
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            if (isRooted) "Dual CS43198 DAC & System HAL Active (Privileged)"
-                            else "Dual CS43198 DAC & Audio HAL Active (Standard Mode)",
-                            color = HwMikuTeal,
+                            when (sysfsReachable) {
+                                null -> "Probing DAC control path…"
+                                true -> if (isRooted) "CS43198 DAC sysfs reachable (privileged)" else "CS43198 DAC sysfs reachable"
+                                false -> "DAC sysfs not readable — Settings.Global fallback"
+                            },
+                            color = if (sysfsReachable == true) HwMikuTeal else HwMuted,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Direct Cirrus Logic CS43198 DAC filter registers, analog gain stages, SGM31324 RGB lighting, and UAC2 bit-perfect audio engine online.",
+                        when (sysfsReachable) {
+                            true -> "Filter, gain, DRE, output and balance are read from and written to ${CirrusLogicManager.SYSFS_BASE}. Controls below show the value the kernel reports; \"unknown\" means neither the kernel nor Settings.Global answered."
+                            false -> "${CirrusLogicManager.SYSFS_BASE} is not readable by this process; controls show the last value persisted in Settings.Global (vendor.audio.hiby.*) and writes go through the shell path. \"unknown\" means no value has been set."
+                            null -> "Reading kernel DAC nodes and HiBy audio settings…"
+                        },
                         color = HwMuted,
                         fontSize = 12.sp,
                         lineHeight = 16.sp
@@ -265,8 +278,8 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
 
                     HwSettingsToggleRow(
                         title = "Dynamic Range Enhancement (DRE)",
-                        subtitle = "Dynamically boosts SNR to 130dB+ for inaudible noise floor",
-                        checked = csDre
+                        subtitle = if (csDre == null) "Reading state…" else "Dynamically boosts SNR to 130dB+ for inaudible noise floor",
+                        checked = csDre == true
                     ) { enabled ->
                         csDre = enabled
                         scope.launch { CirrusLogicManager.setDreEnabled(ctx, enabled) }
@@ -274,15 +287,15 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
 
                     HwSettingsToggleRow(
                         title = "Audio Turbo High Power",
-                        subtitle = "Increases current rails for demanding dynamic peaks",
-                        checked = csTurbo
+                        subtitle = if (csTurbo == null) "Reading state…" else "Increases current rails for demanding dynamic peaks",
+                        checked = csTurbo == true
                     ) { enabled ->
                         csTurbo = enabled
                         scope.launch { CirrusLogicManager.setHighPowerEnabled(ctx, enabled) }
                     }
 
                     Spacer(Modifier.height(10.dp))
-                    Text("DSD GAIN COMPENSATION", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(if (csDsdComp == null) "DSD GAIN COMPENSATION (not set)" else "DSD GAIN COMPENSATION", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(0 to "0 dB (Direct)", 6 to "+6 dB (SACD Standard)").forEach { (db, label) ->
@@ -304,9 +317,11 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                     }
 
                     Spacer(Modifier.height(14.dp))
-                    Text("HARDWARE L/R BALANCE (${if (csBalance.toInt() == 0) "Center" else if (csBalance > 0) "+${csBalance.toInt()} R" else "${csBalance.toInt()} L"})", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    val bal = csBalance
+                    Text("HARDWARE L/R BALANCE (${when { bal == null -> "unknown"; bal.toInt() == 0 -> "Center"; bal > 0 -> "+${bal.toInt()} R"; else -> "${bal.toInt()} L" }})", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Slider(
-                        value = csBalance,
+                        value = bal ?: 0f,
+                        enabled = bal != null,
                         onValueChange = {
                             csBalance = it
                             scope.launch { CirrusLogicManager.setBalance(ctx, it.toInt()) }
@@ -437,8 +452,8 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         .padding(14.dp)
                 ) {
                     HwSettingsToggleRow(
-                        title = "UAC2 Bit-Perfect USB DAC Mode",
-                        subtitle = "Transforms the M500 into an asynchronous USB DAC for PC/Mac",
+                        title = "UAC2 USB DAC Mode",
+                        subtitle = if (usbDacActive) "uac2 is in the live USB gadget config (sys.usb.state)" else "Exposes the M500 as a USB Audio Class 2 DAC to a PC/Mac",
                         checked = usbDacActive
                     ) { enabled ->
                         usbDacActive = enabled

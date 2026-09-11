@@ -33,7 +33,8 @@ data class MikuBtDevice(
     val bondState: Int,
     val isConnected: Boolean,
     val isConnecting: Boolean = false,
-    val rssi: Int = 0,
+    /** Real dBm from the scan result; null when the stack reported no RSSI (never a made-up value). */
+    val rssi: Int? = null,
     val deviceType: DeviceType = DeviceType.AUDIO_HEADSET
 )
 
@@ -566,11 +567,11 @@ object MikuBluetoothController {
                 bondState = bondState,
                 isConnected = false,
                 isConnecting = _connectingAddress.value == dev.address,
-                rssi = if (rssi == Short.MIN_VALUE.toInt()) -70 else rssi,
+                rssi = if (rssi == Short.MIN_VALUE.toInt()) null else rssi,
                 deviceType = resolveDeviceType(dev)
             )
             discoveredMap[dev.address] = item
-            _discoveredDevices.value = discoveredMap.values.sortedByDescending { it.rssi }
+            _discoveredDevices.value = discoveredMap.values.sortedByDescending { it.rssi ?: Int.MIN_VALUE }
         } catch (t: Throwable) {
             Log.e(TAG, "handleDeviceFound error: ${t.message}")
         }
@@ -596,6 +597,63 @@ object MikuBluetoothController {
             }
         } catch (_: Throwable) {
             DeviceType.AUDIO_HEADSET
+        }
+    }
+
+    /** Read-only system property via SystemProperties (no root). Null when unset/unreadable. */
+    private fun sysProp(key: String): String? = try {
+        (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            .invoke(null, key) as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (_: Throwable) { null }
+
+    /** What [applyCodecConfig] actually persisted, read back from the REAL props (null = never set). */
+    data class CodecPrefs(val ldacQuality: String?, val aptx: Boolean?, val aac: Boolean?)
+
+    fun readCodecPrefs(): CodecPrefs {
+        val ldac = when (sysProp("persist.bluetooth.ldac.quality") ?: sysProp("persist.vendor.bt.a2dp.ldac.quality")) {
+            "1000" -> "Sound Quality (990 kbps)"
+            "1001" -> "Balanced (660 kbps)"
+            "1002" -> "Connection (330 kbps)"
+            "1003" -> "Adaptive Bitrate"
+            else -> null
+        }
+        val aptx = sysProp("persist.vendor.bt.a2dp.aptx_hd")?.let { it.equals("true", true) }
+        val aac = sysProp("persist.vendor.bt.a2dp.aac")?.let { it.equals("true", true) }
+        return CodecPrefs(ldac, aptx, aac)
+    }
+
+    /**
+     * The codec the A2DP stack is REALLY using right now for the active device, from
+     * BluetoothA2dp.getCodecStatus() (SystemApi — reachable because we are platform-signed).
+     * Null when nothing is connected or the API is unavailable; never a guess.
+     */
+    fun activeCodecSummary(): String? {
+        val a2dp = a2dpProfile ?: return null
+        return try {
+            val dev = a2dp.connectedDevices?.firstOrNull() ?: return null
+            val status = a2dp.javaClass.getMethod("getCodecStatus", BluetoothDevice::class.java).invoke(a2dp, dev) ?: return null
+            val cfg = status.javaClass.getMethod("getCodecConfig").invoke(status) ?: return null
+            val type = (cfg.javaClass.getMethod("getCodecType").invoke(cfg) as? Int) ?: return null
+            val name = when (type) {
+                0 -> "SBC"; 1 -> "AAC"; 2 -> "aptX"; 3 -> "aptX HD"; 4 -> "LDAC"; 5 -> "LC3"; 6 -> "Opus"
+                else -> "codec #$type"
+            }
+            val rateMask = (cfg.javaClass.getMethod("getSampleRate").invoke(cfg) as? Int) ?: 0
+            val bitsMask = (cfg.javaClass.getMethod("getBitsPerSample").invoke(cfg) as? Int) ?: 0
+            val rate = when {
+                rateMask and 0x20 != 0 -> "192 kHz"; rateMask and 0x10 != 0 -> "176.4 kHz"
+                rateMask and 0x08 != 0 -> "96 kHz"; rateMask and 0x04 != 0 -> "88.2 kHz"
+                rateMask and 0x02 != 0 -> "48 kHz"; rateMask and 0x01 != 0 -> "44.1 kHz"
+                else -> null
+            }
+            val bits = when {
+                bitsMask and 0x04 != 0 -> "32-bit"; bitsMask and 0x02 != 0 -> "24-bit"; bitsMask and 0x01 != 0 -> "16-bit"
+                else -> null
+            }
+            listOfNotNull(name, rate, bits).joinToString(" · ")
+        } catch (t: Throwable) {
+            Log.w(TAG, "getCodecStatus unavailable: ${t.message}")
+            null
         }
     }
 

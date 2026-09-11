@@ -967,7 +967,8 @@ object MikuWeatherService {
                         feelsLikeF = feelsLike,
                         humidityPct = humidity,
                         windSpeedMph = windSpeed,
-                        windGustMph = windSpeed * 1.35f,
+                        // Real gust from the current hour's Open-Meteo wind_gusts_10m (was windSpeed × 1.35, invented).
+                        windGustMph = meteogramList.firstOrNull()?.windGustsMph ?: windSpeed,
                         windDirectionDeg = windDir,
                         windDirectionCompass = compass,
                         precipitationIn = precipIn,
@@ -979,8 +980,9 @@ object MikuWeatherService {
                         cloudCoverPct = cloudCover,
                         visibilityMiles = visibilityVal,
                         uvIndex = uvVal,
-                        aqi = 32,
-                        aqiCategory = "Good",
+                        // No air-quality source is queried by this service — say so instead of a fake 32/"Good".
+                        aqi = -1,
+                        aqiCategory = "—",
                         sunrise = sunriseStr,
                         sunset = sunsetStr,
                         solarFraction = solarFraction,

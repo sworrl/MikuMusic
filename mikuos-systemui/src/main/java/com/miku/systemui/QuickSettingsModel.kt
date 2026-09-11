@@ -44,17 +44,20 @@ object QuickSettingsModel {
         }
     }
 
-    fun getWifiInfo(ctx: Context): Triple<Boolean, String, Int> {
+    data class WifiState(val isEnabled: Boolean, val isAssociated: Boolean, val ssid: String, val level: Int?)
+
+    fun getWifiState(ctx: Context): WifiState {
         val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
         val isEnabled = wm?.isWifiEnabled == true
+        @Suppress("DEPRECATION")
         val info = wm?.connectionInfo
         // Associated (not just radio-on) — subtitle said "Connected" whenever the radio was on.
         val associated = isEnabled && (info?.networkId ?: -1) != -1
         val rawSsid = info?.ssid?.replace("\"", "") ?: ""
         val ssid = if (!associated || rawSsid.isBlank() || rawSsid == "<unknown ssid>") "Wi-Fi" else rawSsid
-        val rssi = info?.rssi ?: -100
-        val level = WifiManager.calculateSignalLevel(rssi, 5)
-        return Triple(isEnabled, ssid, level)
+        // Signal level only when actually associated; the old code turned "no link" into -100 dBm → level 0.
+        val level = if (associated) info?.rssi?.let { WifiManager.calculateSignalLevel(it, 5) } else null
+        return WifiState(isEnabled, associated, ssid, level)
     }
 
     fun toggleWifi(ctx: Context, enable: Boolean) {
@@ -74,8 +77,11 @@ object QuickSettingsModel {
                 val hs = bt.getProfileConnectionState(android.bluetooth.BluetoothProfile.HEADSET)
                 if (a2dp == android.bluetooth.BluetoothProfile.STATE_CONNECTED ||
                     hs == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
-                    connectedName = bt.bondedDevices?.firstOrNull {
-                        bt.getProfileConnectionState(android.bluetooth.BluetoothProfile.A2DP) == android.bluetooth.BluetoothProfile.STATE_CONNECTED
+                    // Name of the device that is ACTUALLY connected (BluetoothDevice.isConnected,
+                    // SystemApi via reflection). The old predicate never looked at the device, so
+                    // it named whichever bonded device came first — often the wrong one.
+                    connectedName = bt.bondedDevices?.firstOrNull { dev ->
+                        runCatching { dev.javaClass.getMethod("isConnected").invoke(dev) as? Boolean }.getOrNull() == true
                     }?.let { runCatching { it.name }.getOrNull() } ?: "Connected"
                 }
             }
@@ -95,13 +101,18 @@ object QuickSettingsModel {
     fun getTiles(ctx: Context, scope: CoroutineScope, onRefresh: () -> Unit): List<QsTile> {
         val list = mutableListOf<QsTile>()
 
-        // 1. Wi-Fi (Internet)
-        val (isWifiOn, wifiSsid, _) = getWifiInfo(ctx)
+        // 1. Wi-Fi (Internet) — "Connected" only when actually associated with a network.
+        val wifi = getWifiState(ctx)
+        val isWifiOn = wifi.isEnabled
         list.add(
             QsTile(
                 id = "wifi",
-                label = if (isWifiOn) wifiSsid else "Internet",
-                subtitle = if (isWifiOn) "Connected" else "Disconnected",
+                label = if (wifi.isAssociated) wifi.ssid else if (isWifiOn) "Wi-Fi" else "Internet",
+                subtitle = when {
+                    !isWifiOn -> "Off"
+                    wifi.isAssociated -> wifi.level?.let { "Connected · signal $it/4" } ?: "Connected"
+                    else -> "On · not connected"
+                },
                 icon = if (isWifiOn) Icons.Default.Wifi else Icons.Default.WifiOff,
                 isActive = isWifiOn,
                 onClick = {
@@ -131,7 +142,8 @@ object QuickSettingsModel {
             )
         )
 
-        // 3. Cirrus CS43198 Filter
+        // 3. Cirrus CS43198 Filter — state comes from sysfs / Settings.Global; "unknown" when neither
+        //    answers (the tile used to be hard-wired isActive = true and defaulted to Fast Linear).
         val currentFilter = CirrusLogicManager.getDigitalFilter(ctx)
         list.add(
             QsTile(
@@ -143,12 +155,13 @@ object QuickSettingsModel {
                     CirrusLogicManager.DigitalFilter.SLOW_LINEAR -> "Slow Linear"
                     CirrusLogicManager.DigitalFilter.SLOW_MINIMUM -> "Slow Min"
                     CirrusLogicManager.DigitalFilter.NOS -> "NOS (Raw)"
+                    null -> "Unknown — tap to set"
                 },
                 icon = Icons.Default.GraphicEq,
-                isActive = true,
+                isActive = currentFilter != null,
                 onClick = {
                     val all = CirrusLogicManager.DigitalFilter.values()
-                    val nextIdx = (currentFilter.ordinal + 1) % all.size
+                    val nextIdx = if (currentFilter == null) 0 else (currentFilter.ordinal + 1) % all.size
                     val nextFilter = all[nextIdx]
                     scope.launch {
                         CirrusLogicManager.setDigitalFilter(ctx, nextFilter)
@@ -166,7 +179,11 @@ object QuickSettingsModel {
             QsTile(
                 id = "cs43198_gain",
                 label = "PO Gain",
-                subtitle = if (isHighGain) "High (+6 dB)" else "Low (0 dB)",
+                subtitle = when (currentGain) {
+                    CirrusLogicManager.GainMode.HIGH -> "High (+6 dB)"
+                    CirrusLogicManager.GainMode.LOW -> "Low (0 dB)"
+                    null -> "Unknown — tap to set"
+                },
                 icon = Icons.Default.VolumeUp,
                 isActive = isHighGain,
                 onClick = {
@@ -238,13 +255,14 @@ object QuickSettingsModel {
             )
         )
 
-        // 8. Wireless ADB
-        val isAdb = WirelessAdbManager.isEnabled()
+        // 8. Wireless ADB — the port shown is the one adbd is really bound to (service.adb.tcp.port)
+        val adbPort = WirelessAdbManager.currentPort()
+        val isAdb = adbPort != null
         list.add(
             QsTile(
                 id = "wireless_adb",
                 label = "Wireless ADB",
-                subtitle = if (isAdb) "Port 5555" else "Off",
+                subtitle = if (adbPort != null) "Port $adbPort" else "Off",
                 icon = Icons.Default.Cable,
                 isActive = isAdb,
                 onClick = {

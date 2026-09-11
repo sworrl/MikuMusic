@@ -10,14 +10,16 @@ import java.net.NetworkInterface
 object WirelessAdbManager {
     private const val DEFAULT_PORT = 5555
 
+    /** Real TCP port adbd is bound to (SystemProperties, no root); null when adbd is USB-only. */
+    fun currentPort(): Int? = try {
+        (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            .invoke(null, "service.adb.tcp.port") as? String)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+    } catch (_: Throwable) { null }
+
     fun isEnabled(): Boolean {
         // Read the real port via SystemProperties (reflection) — readable without root; the old
         // RootShell getprop returned null on this no-root OS so the tile was permanently "Off".
-        val port = try {
-            Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-                .invoke(null, "service.adb.tcp.port") as? String
-        } catch (_: Throwable) { null }?.trim() ?: "-1"
-        return (port.toIntOrNull() ?: -1) > 0
+        return currentPort() != null
     }
 
     suspend fun setEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {

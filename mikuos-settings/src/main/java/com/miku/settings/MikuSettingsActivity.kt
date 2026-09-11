@@ -118,7 +118,7 @@ enum class SettingsSection(val title: String, val icon: ImageVector, val desc: S
     DISPLAY("Display & Light", Icons.Default.BrightnessMedium, "Brightness, ambient light sensor, screen timeout & theme"),
     BATTERY("Battery & Power", Icons.Default.BatteryChargingFull, "Live telemetry, voltage, current mA & battery health"),
     STORAGE_APPS("Apps & Storage", Icons.Default.Storage, "Internal memory, MicroSD card & application manager"),
-    SYSTEM_ABOUT("About MikuOS", Icons.Default.Info, "M500 Miku Edition specs, kernel, Snapdragon 680 & root")
+    SYSTEM_ABOUT("About MikuOS", Icons.Default.Info, "Build, kernel, SoC & privilege as reported by the running system")
 }
 
 class MikuSettingsActivity : ComponentActivity() {
@@ -415,27 +415,38 @@ fun AudioDacScreen(ctx: Context) {
     var dsdComp by remember { mutableStateOf(CirrusLogicManager.getDsdGainCompensate(ctx)) }
     var outMode by remember { mutableStateOf(CirrusLogicManager.getOutputMode(ctx)) }
     var balance by remember { mutableStateOf(CirrusLogicManager.getBalance(ctx)) }
+    // REAL control-path status: is the kernel DAC sysfs readable, and has anything been persisted?
+    val sysfsReachable = remember { CirrusLogicManager.isSysfsReachable() }
+    val hasPersisted = remember { CirrusLogicManager.hasPersistedDacSettings(ctx) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        // Status Hero Card
+        // Status Hero Card — reflects what was actually probed, not an unconditional "operational".
         item {
             Column(Modifier.mikuHeroCard().padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("🟢", fontSize = 16.sp)
+                    Text(if (sysfsReachable) "🟢" else if (hasPersisted) "🟡" else "⚪", fontSize = 16.sp)
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "Dual CS43198 MasterHIFI™ & ALSA Direct Pipeline",
-                        color = MikuTealBright,
+                        when {
+                            sysfsReachable -> "Dual CS43198 · kernel sysfs control reachable"
+                            hasPersisted -> "Dual CS43198 · Settings.Global fallback (sysfs not readable)"
+                            else -> "Dual CS43198 · no DAC state readable yet"
+                        },
+                        color = if (sysfsReachable) MikuTealBright else MikuMuted,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Direct kernel sysfs writes active (/sys/devices/platform/sa_sound_setting/). Hardware filters, gain stages, dynamic range enhancement, and UAC2 bit-perfect audio engine operational.",
+                    when {
+                        sysfsReachable -> "Filter, gain, DRE, power rails and balance are read from /sys/devices/platform/sa_sound_setting/. Selections below are what the kernel reports; nothing is pre-selected from a default."
+                        hasPersisted -> "/sys/devices/platform/sa_sound_setting/ is not readable by this process. Selections below are the last values persisted in Settings.Global (vendor.audio.hiby.*); writes go through the shell path. Unselected = never set."
+                        else -> "Neither the kernel DAC nodes nor the HiBy audio settings report a value yet. Pick a setting to write one; until then nothing is selected."
+                    },
                     color = MikuMuted,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
@@ -864,10 +875,13 @@ fun AudioDacScreen(ctx: Context) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("DSD Gain Compensation (+6 dB)", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Matches SACD reference levels with standard PCM playback", color = MikuMuted, fontSize = 11.5.sp)
+                        Text(
+                            if (dsdComp == null) "Not set on this device yet — toggle to write a value" else "Matches SACD reference levels with standard PCM playback",
+                            color = MikuMuted, fontSize = 11.5.sp
+                        )
                     }
                     Switch(
-                        checked = dsdComp,
+                        checked = dsdComp == true,
                         onCheckedChange = {
                             dsdComp = it
                             scope.launch { CirrusLogicManager.setDsdGainCompensate(ctx, it) }
@@ -1407,7 +1421,9 @@ fun FnSwitchScreen(ctx: Context) {
 @Composable
 fun WirelessScreen(ctx: Context) {
     val scope = rememberCoroutineScope()
-    var adbEnabled by remember { mutableStateOf(WirelessAdbManager.isEnabled()) }
+    // Real adbd TCP port from service.adb.tcp.port (null = USB-only); re-read after every toggle.
+    var adbPort by remember { mutableStateOf(WirelessAdbManager.currentPort()) }
+    val adbEnabled = adbPort != null
     val wifiIp = remember { WirelessAdbManager.getWifiIpAddress(ctx) }
 
     LazyColumn(
@@ -1440,18 +1456,25 @@ fun WirelessScreen(ctx: Context) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
-                        Text("ADB Port 5555 Service", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(adbPort?.let { "ADB over TCP · port $it" } ?: "ADB over TCP (USB only)", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (wifiIp != null) "Connect: adb connect $wifiIp:5555" else "Connect device to Wi-Fi",
-                            color = if (wifiIp != null) MikuTealBright else MikuPink,
+                            when {
+                                adbPort != null && wifiIp != null -> "Connect: adb connect $wifiIp:$adbPort"
+                                adbPort != null -> "Connect device to Wi-Fi"
+                                else -> "adbd is not listening on TCP"
+                            },
+                            color = if (adbPort != null && wifiIp != null) MikuTealBright else MikuPink,
                             fontSize = 11.5.sp
                         )
                     }
                     Switch(
                         checked = adbEnabled,
                         onCheckedChange = {
-                            adbEnabled = it
-                            scope.launch { WirelessAdbManager.setEnabled(it) }
+                            scope.launch {
+                                WirelessAdbManager.setEnabled(it)
+                                kotlinx.coroutines.delay(800)          // adbd restart
+                                adbPort = WirelessAdbManager.currentPort()
+                            }
                         },
                         colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                     )
@@ -1579,9 +1602,21 @@ fun BluetoothScreen(ctx: Context) {
     val discoveredDevices by com.miku.settings.bluetooth.MikuBluetoothController.discoveredDevices.collectAsState()
 
     val prefs = remember { ctx.getSharedPreferences("miku_bluetooth_prefs", Context.MODE_PRIVATE) }
-    var ldacQuality by remember { mutableStateOf(prefs.getString("ldac_quality", "Sound Quality (990 kbps)") ?: "Sound Quality (990 kbps)") }
-    var aptxEnabled by remember { mutableStateOf(prefs.getBoolean("aptx_enabled", true)) }
-    var aacEnabled by remember { mutableStateOf(prefs.getBoolean("aac_enabled", true)) }
+    // Codec preferences are read back from the REAL persist.* props applyCodecConfig writes —
+    // null = never set (the old code showed "990 kbps / aptX on / AAC on" from local defaults).
+    val codecPrefs = remember { com.miku.settings.bluetooth.MikuBluetoothController.readCodecPrefs() }
+    var ldacQuality by remember { mutableStateOf<String?>(codecPrefs.ldacQuality) }
+    var aptxEnabled by remember { mutableStateOf<Boolean?>(codecPrefs.aptx) }
+    var aacEnabled by remember { mutableStateOf<Boolean?>(codecPrefs.aac) }
+    // The codec A2DP is really negotiating right now (BluetoothA2dp.getCodecStatus) — null when idle.
+    var activeCodec by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pairedDevices) {
+        while (true) {
+            activeCodec = withContext(Dispatchers.IO) { runCatching { com.miku.settings.bluetooth.MikuBluetoothController.activeCodecSummary() }.getOrNull() }
+            kotlinx.coroutines.delay(3000)
+        }
+    }
+    val connectedCount = pairedDevices.count { it.isConnected }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1620,7 +1655,14 @@ fun BluetoothScreen(ctx: Context) {
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = if (isBtEnabled) "Active · Hi-Res Audio Ready" else "Disabled",
+                                // Real state only: radio on + how many bonded devices are actually connected,
+                                // plus the negotiated codec when A2DP is streaming. No "Hi-Res Ready" claim.
+                                text = when {
+                                    !isBtEnabled -> "Disabled"
+                                    activeCodec != null -> "Active · $connectedCount connected · $activeCodec"
+                                    connectedCount > 0 -> "Active · $connectedCount connected"
+                                    else -> "Active · nothing connected"
+                                },
                                 color = if (isBtEnabled) MikuTealBright else MikuMuted,
                                 fontSize = 11.5.sp
                             )
@@ -1892,7 +1934,7 @@ fun BluetoothScreen(ctx: Context) {
                                     Spacer(Modifier.width(10.dp))
                                     Column(Modifier.weight(1f)) {
                                         Text(devItem.name, color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${devItem.address} · Signal ${devItem.rssi} dBm", color = MikuMuted, fontSize = 10.sp)
+                                        Text("${devItem.address} · Signal ${devItem.rssi?.let { "$it dBm" } ?: "—"}", color = MikuMuted, fontSize = 10.sp)
                                     }
                                     Button(
                                         onClick = { com.miku.settings.bluetooth.MikuBluetoothController.pairDevice(devItem.device) },
@@ -1927,6 +1969,9 @@ fun BluetoothScreen(ctx: Context) {
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
+                    if (ldacQuality == null) {
+                        Text("Not set on this device — nothing is selected until you choose one", color = MikuMuted, fontSize = 11.sp)
+                    }
                     Spacer(Modifier.height(6.dp))
 
                     val ldacOptions = listOf(
@@ -1946,7 +1991,7 @@ fun BluetoothScreen(ctx: Context) {
                                 .clickable {
                                     ldacQuality = opt
                                     prefs.edit().putString("ldac_quality", opt).apply()
-                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled, aacEnabled)
+                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled == true, aacEnabled == true)
                                 }
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -1956,7 +2001,7 @@ fun BluetoothScreen(ctx: Context) {
                                 onClick = {
                                     ldacQuality = opt
                                     prefs.edit().putString("ldac_quality", opt).apply()
-                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled, aacEnabled)
+                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled == true, aacEnabled == true)
                                 },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = MikuTealBright,
@@ -1983,14 +2028,14 @@ fun BluetoothScreen(ctx: Context) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text("Qualcomm aptX / aptX HD", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Low-latency 24-bit audiophile streaming on supported gear", color = MikuMuted, fontSize = 11.5.sp)
+                            Text(if (aptxEnabled == null) "Not set on this device (persist.vendor.bt.a2dp.aptx_hd unset)" else "Low-latency 24-bit audiophile streaming on supported gear", color = MikuMuted, fontSize = 11.5.sp)
                         }
                         Switch(
-                            checked = aptxEnabled,
+                            checked = aptxEnabled == true,
                             onCheckedChange = {
                                 aptxEnabled = it
                                 prefs.edit().putBoolean("aptx_enabled", it).apply()
-                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality, it, aacEnabled)
+                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality ?: "", it, aacEnabled == true)
                             },
                             colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                         )
@@ -2006,14 +2051,14 @@ fun BluetoothScreen(ctx: Context) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text("AAC High Definition Audio", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                            Text("Advanced Audio Coding for Apple AirPods & Sony wireless gear", color = MikuMuted, fontSize = 11.5.sp)
+                            Text(if (aacEnabled == null) "Not set on this device (persist.vendor.bt.a2dp.aac unset)" else "Advanced Audio Coding for Apple AirPods & Sony wireless gear", color = MikuMuted, fontSize = 11.5.sp)
                         }
                         Switch(
-                            checked = aacEnabled,
+                            checked = aacEnabled == true,
                             onCheckedChange = {
                                 aacEnabled = it
                                 prefs.edit().putBoolean("aac_enabled", it).apply()
-                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality, aptxEnabled, it)
+                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality ?: "", aptxEnabled == true, it)
                             },
                             colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                         )
@@ -2032,10 +2077,11 @@ fun BluetoothScreen(ctx: Context) {
                     )
                     Spacer(Modifier.height(10.dp))
 
-                    AboutSpecRow("RF Transceiver", "Qualcomm Snapdragon 680 (WCN3988)")
-                    AboutSpecRow("Bluetooth Version", "Bluetooth 5.0 Core / Low Energy (BLE)")
-                    AboutSpecRow("Supported Codecs", "LDAC (96k/24b), aptX HD, aptX, AAC, SBC")
-                    AboutSpecRow("Audio Hardware Bridge", "Direct MasterHIFI DAC & BT Concurrent Routing")
+                    // Live rows come from the stack; hardware spec rows are static datasheet facts.
+                    AboutSpecRow("Active A2DP Codec", activeCodec ?: (if (connectedCount > 0) "connected · codec not reported" else "— (nothing streaming)"))
+                    AboutSpecRow("Connected Devices", if (connectedCount > 0) "$connectedCount" else "none")
+                    AboutSpecRow("RF Transceiver", "Qualcomm WCN3988 (SM6225 companion)")
+                    AboutSpecRow("Bluetooth Version", "Bluetooth 5.0 / BLE")
 
                     Spacer(Modifier.height(12.dp))
                     Button(
@@ -2067,11 +2113,12 @@ fun BluetoothScreen(ctx: Context) {
 @Composable
 fun DisplayScreen(ctx: Context) {
     val cr = ctx.contentResolver
+    // null when Settings.System.screen_brightness cannot be read (shown as "—", not a fake 128).
     var brightness by remember {
-        mutableStateOf(
+        mutableStateOf<Int?>(
             try {
                 Settings.System.getInt(cr, Settings.System.SCREEN_BRIGHTNESS)
-            } catch (_: Throwable) { 128 }
+            } catch (_: Throwable) { null }
         )
     }
 
@@ -2083,11 +2130,11 @@ fun DisplayScreen(ctx: Context) {
             Column(Modifier.mikuCard().padding(14.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("SCREEN BRIGHTNESS", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text("$brightness / 255", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("${brightness ?: "—"} / 255", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(8.dp))
                 Slider(
-                    value = brightness.toFloat(),
+                    value = (brightness ?: 5).toFloat(),
                     onValueChange = {
                         brightness = it.toInt()
                         try {
@@ -2288,11 +2335,13 @@ fun DisplayScreen(ctx: Context) {
                 Text("Configure Pixel-style edge swipe back & navigation bar", color = MikuMuted, fontSize = 10.sp)
                 Spacer(Modifier.height(10.dp))
 
+                // null = navigation_mode not set on this device → neither option pre-selected
+                // (it used to show "Gesture" selected from a hard-coded default of 2).
                 var isGestureNav by remember {
-                    mutableStateOf(
+                    mutableStateOf<Boolean?>(
                         try {
-                            Settings.Secure.getInt(cr, "navigation_mode", 2) == 2
-                        } catch (_: Throwable) { true }
+                            Settings.Secure.getString(cr, "navigation_mode")?.trim()?.toIntOrNull()?.let { it == 2 }
+                        } catch (_: Throwable) { null }
                     )
                 }
 
@@ -2305,10 +2354,10 @@ fun DisplayScreen(ctx: Context) {
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(if (isGestureNav) MikuTealBright.copy(alpha = 0.25f) else MikuSurface2)
+                            .background(if (isGestureNav == true) MikuTealBright.copy(alpha = 0.25f) else MikuSurface2)
                             .border(
                                 1.dp,
-                                if (isGestureNav) MikuTealBright else Color.Transparent,
+                                if (isGestureNav == true) MikuTealBright else Color.Transparent,
                                 RoundedCornerShape(8.dp)
                             )
                             .clickable {
@@ -2326,7 +2375,7 @@ fun DisplayScreen(ctx: Context) {
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("GESTURE NAV", color = if (isGestureNav) MikuTealBright else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("GESTURE NAV", color = if (isGestureNav == true) MikuTealBright else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(2.dp))
                             Text("Pixel Edge Swipe Back", color = MikuMuted, fontSize = 9.sp, textAlign = TextAlign.Center)
                         }
@@ -2337,10 +2386,10 @@ fun DisplayScreen(ctx: Context) {
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(8.dp))
-                            .background(if (!isGestureNav) MikuTealBright.copy(alpha = 0.25f) else MikuSurface2)
+                            .background(if (isGestureNav == false) MikuTealBright.copy(alpha = 0.25f) else MikuSurface2)
                             .border(
                                 1.dp,
-                                if (!isGestureNav) MikuTealBright else Color.Transparent,
+                                if (isGestureNav == false) MikuTealBright else Color.Transparent,
                                 RoundedCornerShape(8.dp)
                             )
                             .clickable {
@@ -2356,7 +2405,7 @@ fun DisplayScreen(ctx: Context) {
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text("3-BUTTON BAR", color = if (!isGestureNav) MikuTealBright else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("3-BUTTON BAR", color = if (isGestureNav == false) MikuTealBright else Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(2.dp))
                             Text("Classic Buttons", color = MikuMuted, fontSize = 9.sp, textAlign = TextAlign.Center)
                         }
@@ -2431,34 +2480,49 @@ fun BatteryScreen(ctx: Context) {
     // Primary source = the sticky ACTION_BATTERY_CHANGED broadcast (BatteryService-fed, always
     // correct). BATTERY_PROPERTY_CAPACITY goes through the health HAL directly and returns 0
     // on this vendor for normal apps — that was the "battery stuck / not reading" bug.
-    val pct = remember {
-        val sticky = ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+    // Every value below comes from the sticky broadcast / BatteryManager; anything the HAL does not
+    // report is shown as "—" (it used to print 0% / 0 mA as if measured). Re-read every 2 s so the
+    // screen is actually live, as its section title promises.
+    var tick by remember { mutableIntStateOf(0) }
+    LaunchedEffect(Unit) { while (true) { kotlinx.coroutines.delay(2000); tick++ } }
+    val sticky = remember(tick) {
+        try { ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED)) } catch (_: Throwable) { null }
+    }
+    val pct: Int? = remember(sticky) {
         val lvl = sticky?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
-        val scale = sticky?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val scale = sticky?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
         if (lvl >= 0 && scale > 0) (lvl * 100) / scale
-        else bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 1..100 } ?: 0
+        else bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)?.takeIf { it in 1..100 }
     }
-    val currentMa = bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)?.let { it / 1000 } ?: 0
-    val batHealth = remember {
-        val h = try { ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(android.os.BatteryManager.EXTRA_HEALTH, 0) ?: 0 } catch (_: Throwable) { 0 }
-        when (h) { 2 -> "Good"; 3 -> "Overheat"; 4 -> "Dead"; 5 -> "Over-volt"; 6 -> "Failure"; 7 -> "Cold"; else -> "—" }
+    // CURRENT_NOW: Int.MIN_VALUE = unsupported; 0 on this vendor means "not reported", not 0 mA.
+    val currentMa: Int? = remember(tick) {
+        bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+            ?.takeIf { it != Int.MIN_VALUE && it != 0 }?.let { it / 1000 }
     }
-    val batStatus = remember {
-        val st = try { ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, 0) ?: 0 } catch (_: Throwable) { 0 }
-        when (st) { 2 -> "Charging"; 3 -> "Discharging"; 4 -> "Not charging"; 5 -> "Full"; else -> "—" }
+    val voltageMv: Int? = remember(sticky) { sticky?.getIntExtra(android.os.BatteryManager.EXTRA_VOLTAGE, -1)?.takeIf { it > 0 } }
+    val tempC: Float? = remember(sticky) { sticky?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE && it != 0 }?.let { it / 10f } }
+    val batHealth = remember(sticky) {
+        when (sticky?.getIntExtra(android.os.BatteryManager.EXTRA_HEALTH, 0) ?: 0) { 2 -> "Good"; 3 -> "Overheat"; 4 -> "Dead"; 5 -> "Over-volt"; 6 -> "Failure"; 7 -> "Cold"; else -> "—" }
     }
+    val batStatus = remember(sticky) {
+        when (sticky?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, 0) ?: 0) { 2 -> "Charging"; 3 -> "Discharging"; 4 -> "Not charging"; 5 -> "Full"; else -> "—" }
+    }
+    val plugged = remember(sticky) {
+        when (sticky?.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) ?: 0) { 1 -> "AC"; 2 -> "USB"; 4 -> "Wireless"; 8 -> "Dock"; 0 -> "Unplugged"; else -> "—" }
+    }
+    val technology = remember(sticky) { sticky?.getStringExtra(android.os.BatteryManager.EXTRA_TECHNOLOGY)?.takeIf { it.isNotBlank() } ?: "—" }
 
     Column(Modifier.mikuHeroCard().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Column {
                 Text("BATTERY TELEMETRY", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("$pct%", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Black)
+                Text(pct?.let { "$it%" } ?: "—%", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Black)
             }
             Icon(
                 Icons.Default.BatteryChargingFull,
                 contentDescription = null,
-                tint = if (pct > 20) MikuTealBright else MikuPinkBright,
+                tint = if ((pct ?: 100) > 20) MikuTealBright else MikuPinkBright,
                 modifier = Modifier.size(48.dp)
             )
         }
@@ -2466,10 +2530,18 @@ fun BatteryScreen(ctx: Context) {
         Spacer(Modifier.height(14.dp))
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            MetricPill(label = "CURRENT", value = "${currentMa} mA")
+            MetricPill(label = "CURRENT", value = currentMa?.let { "$it mA" } ?: "—")
+            MetricPill(label = "VOLTAGE", value = voltageMv?.let { String.format("%.2f V", it / 1000f) } ?: "—")
+            MetricPill(label = "TEMP", value = tempC?.let { String.format("%.1f °C", it) } ?: "—")
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             MetricPill(label = "HEALTH", value = batHealth)
             MetricPill(label = "STATUS", value = batStatus)
+            MetricPill(label = "SOURCE", value = plugged)
         }
+        Spacer(Modifier.height(8.dp))
+        Text("Chemistry: $technology · values not reported by the battery HAL show as —", color = MikuMuted, fontSize = 10.5.sp)
     }
 }
 
@@ -2509,12 +2581,31 @@ fun StorageAppsScreen(ctx: Context) {
 // ----------------------------------------------------
 @Composable
 fun AboutScreen(ctx: Context) {
-    val mikuosVersion = try {
-        val propClass = Class.forName("android.os.SystemProperties")
-        val getMethod = propClass.getMethod("get", String::class.java, String::class.java)
-        getMethod.invoke(null, "ro.mikuos.version", "0.1.0") as String
-    } catch (_: Throwable) { "0.1.0" }
-    val model = android.os.Build.MODEL
+    // Everything here is read from the running system (SystemProperties / Build / kernel). A value
+    // that is not set on this image prints "unknown" — the old screen printed a literal "0.1.0",
+    // "Android 14 GKI", "M500_MIKU_4G", "Snapdragon 680 8-Core" and "Magisk Privileged" whatever
+    // the device actually was.
+    fun prop(key: String): String? = try {
+        (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            .invoke(null, key) as? String)?.trim()?.takeIf { it.isNotEmpty() }
+    } catch (_: Throwable) { null }
+    val mikuosVersion = prop("ro.mikuos.version")
+    val model = android.os.Build.MODEL?.takeIf { it.isNotBlank() && !it.contains("qssi", ignoreCase = true) }
+    val androidRelease = android.os.Build.VERSION.RELEASE ?: "unknown"
+    val buildDisplay = android.os.Build.DISPLAY?.takeIf { it.isNotBlank() } ?: "unknown"
+    val socModel = (if (android.os.Build.VERSION.SDK_INT >= 31) android.os.Build.SOC_MODEL?.takeIf { it.isNotBlank() && it != android.os.Build.UNKNOWN } else null)
+        ?: prop("ro.soc.model") ?: prop("ro.board.platform") ?: "unknown"
+    val cores = Runtime.getRuntime().availableProcessors()
+    val kernel = System.getProperty("os.version")?.takeIf { it.isNotBlank() } ?: "unknown"
+    val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
+    val uid = android.os.Process.myUid()
+    val hasSecure = ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+    val privilege = when {
+        uid == 1000 -> "system uid 1000 · platform-signed"
+        hasSecure -> "uid $uid · platform permissions granted"
+        else -> "uid $uid · standard app permissions"
+    }
+    val gkiTag = prop("ro.kernel.version")?.let { " (GKI $it)" } ?: ""
 
     Column(Modifier.mikuCard().padding(16.dp)) {
         Text("ABOUT MIKUOS", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
@@ -2533,21 +2624,23 @@ fun AboutScreen(ctx: Context) {
 
             Spacer(Modifier.width(14.dp))
             Column {
-                Text(if (model.isNotEmpty() && !model.contains("qssi", ignoreCase = true)) model else "m500_mikuOS-v$mikuosVersion", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                Text("MikuOS v$mikuosVersion (Android 14 GKI)", color = MikuTeal, fontSize = 12.sp)
+                Text(model ?: android.os.Build.DEVICE ?: "unknown device", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text("MikuOS ${mikuosVersion?.let { "v$it" } ?: "(version prop not set)"} · Android $androidRelease", color = MikuTeal, fontSize = 12.sp)
             }
         }
 
         Spacer(Modifier.height(16.dp))
 
-        AboutSpecRow("Device Identity", if (model.isNotEmpty() && !model.contains("qssi", ignoreCase = true)) model else "m500_mikuOS-v$mikuosVersion")
-        AboutSpecRow("Hardware Model", "m500 Hatsune Miku Edition (M500_MIKU_4G)")
-        AboutSpecRow("OS Release", "MikuOS v$mikuosVersion (Android 14 GKI)")
-        AboutSpecRow("SoC Architecture", "Qualcomm Snapdragon 680 (SM6225 8-Core)")
+        AboutSpecRow("Device Identity", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL} (${android.os.Build.DEVICE} / ${android.os.Build.PRODUCT})")
+        AboutSpecRow("MikuOS Version", mikuosVersion ?: "unknown (ro.mikuos.version not set)")
+        AboutSpecRow("Android Release", "$androidRelease (API ${android.os.Build.VERSION.SDK_INT})$gkiTag")
+        AboutSpecRow("Build", buildDisplay)
+        AboutSpecRow("SoC", "$socModel · $cores cores")
         AboutSpecRow("DAC Hardware", "Dual Cirrus Logic CS43198 MasterHIFI™")
-        AboutSpecRow("RGB Controller", "SGM31324 Pulsar TrueColor LED Engine")
-        AboutSpecRow("Linux Kernel", (System.getProperty("os.version") ?: "unknown") + " (" + (android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a") + ")")
-        AboutSpecRow("Root Status", if (RootShell.isAvailable()) "Magisk Privileged (uid=0)" else "Stock Unprivileged")
+        AboutSpecRow("RGB Controller", "SGM31324 LED driver")
+        AboutSpecRow("Linux Kernel", "$kernel ($abi)")
+        AboutSpecRow("Privilege", privilege)
+        AboutSpecRow("Security Patch", android.os.Build.VERSION.SECURITY_PATCH ?: "unknown")
 
         Spacer(Modifier.height(14.dp))
 

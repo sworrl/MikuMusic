@@ -44,19 +44,16 @@ object CirrusLogicManager {
         WIRED_AND_USB("wired_usb", "Wired DAC + USB-C External DAC", "Mirrors real-time audio across internal CS43198 DAC and external Type-C DAC")
     }
 
+    /**
+     * REAL kernel read only. Returns null when the node is missing / unreadable / empty. (It used
+     * to fall back to a SharedPreferences shadow written by our own setters and callers treated
+     * that as a kernel value — a fabricated "hardware" reading.)
+     */
     private fun readSysfs(ctx: Context, node: String): String? {
         return try {
             val file = File("$SYSFS_BASE/$node")
-            if (file.exists() && file.canRead()) {
-                file.readText().trim()
-            } else {
-                val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
-                prefs.getString(node, null)
-            }
-        } catch (_: Throwable) {
-            val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
-            prefs.getString(node, null)
-        }
+            if (file.exists() && file.canRead()) file.readText().trim().takeIf { it.isNotEmpty() } else null
+        } catch (_: Throwable) { null }
     }
 
     fun getOutputMode(ctx: Context): OutputMode {
@@ -192,7 +189,8 @@ object CirrusLogicManager {
         }
     }
 
-    fun getDigitalFilter(ctx: Context): DigitalFilter {
+    /** Kernel sysfs first, then the HiBy Settings.Global keys. Null = no real source says (never guessed). */
+    fun getDigitalFilter(ctx: Context): DigitalFilter? {
         val kernelVal = readSysfs(ctx, "digital_filter")
         if (!kernelVal.isNullOrBlank()) {
             DigitalFilter.values().firstOrNull { it.id == kernelVal.lowercase() }?.let { return it }
@@ -203,7 +201,7 @@ object CirrusLogicManager {
                 ?: Settings.Global.getString(cr, "vendor.audio.hiby.digital_filter")
                 ?: Settings.Global.getString(cr, "hw.digital_filter")
         } catch (_: Throwable) { null } ?: ""
-        return DigitalFilter.values().firstOrNull { it.id == raw.trim().lowercase() } ?: DigitalFilter.FAST_LINEAR
+        return DigitalFilter.values().firstOrNull { it.id == raw.trim().lowercase() }
     }
 
     suspend fun setDigitalFilter(ctx: Context, filter: DigitalFilter) = withContext(Dispatchers.IO) {
@@ -225,7 +223,8 @@ object CirrusLogicManager {
         })
     }
 
-    fun getGainMode(ctx: Context): GainMode {
+    /** Kernel sysfs first, then the HiBy Settings.Global keys. Null = no real source says (never guessed). */
+    fun getGainMode(ctx: Context): GainMode? {
         val kernelVal = readSysfs(ctx, "gain")
         if (!kernelVal.isNullOrBlank()) {
             GainMode.values().firstOrNull { it.sysfsValue == kernelVal.lowercase() }?.let { return it }
@@ -235,7 +234,7 @@ object CirrusLogicManager {
             Settings.Global.getString(cr, "vendor.audio.hiby.hw.gain")
                 ?: Settings.Global.getString(cr, "vendor.audio.hiby.gain")
         } catch (_: Throwable) { null } ?: ""
-        return GainMode.values().firstOrNull { it.sysfsValue == raw.trim().lowercase() } ?: GainMode.HIGH
+        return GainMode.values().firstOrNull { it.sysfsValue == raw.trim().lowercase() }
     }
 
     suspend fun setGainMode(ctx: Context, mode: GainMode) = withContext(Dispatchers.IO) {
@@ -307,9 +306,10 @@ object CirrusLogicManager {
         RootShell.execFast("echo $clamped > $SYSFS_BASE/lr_balance; settings put global vendor.audio.hiby.hw.balance $clamped; setprop vendor.audio.hiby.hw.balance $clamped")
     }
 
-    fun getDsdGainCompensate(ctx: Context): Boolean {
+    /** Null when the key has never been set — never report "on" from a made-up default. */
+    fun getDsdGainCompensate(ctx: Context): Boolean? {
         val cr = ctx.contentResolver
-        return try { Settings.Global.getInt(cr, "vendor.audio.hiby.hw.dsd_gain_comp", 1) == 1 } catch (_: Throwable) { true }
+        return try { Settings.Global.getString(cr, "vendor.audio.hiby.hw.dsd_gain_comp")?.trim()?.let { it == "1" } } catch (_: Throwable) { null }
     }
 
     suspend fun setDsdGainCompensate(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {

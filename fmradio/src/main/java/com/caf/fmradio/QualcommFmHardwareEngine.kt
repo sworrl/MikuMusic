@@ -51,6 +51,10 @@ class QualcommFmHardwareEngine(private val context: Context) {
         private const val BAND_HIGH_KHZ = 108000
         private const val STEP_KHZ = 200
         const val ACTION_DEBUG = "com.caf.fmradio.action.DEBUG"
+        const val SPECTRUM_BINS = 48
+        private const val SPECTRUM_FRAMES = 1024
+        private const val SPECTRUM_LOW_HZ = 60.0
+        private const val SPECTRUM_HIGH_HZ = 15000.0
     }
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -74,18 +78,43 @@ class QualcommFmHardwareEngine(private val context: Context) {
     @Volatile private var enableDeferred: CompletableDeferred<Boolean>? = null
     @Volatile private var disableDeferred: CompletableDeferred<Boolean>? = null
 
+    private val prefs = context.getSharedPreferences("miku_fm", Context.MODE_PRIVATE)
+
     val isPoweredOn = MutableStateFlow(false)
     /** True only once the chip acknowledged enable (FmRxEvEnableReceiver). */
     val hardwareOnline = MutableStateFlow(false)
     val hardwareError = MutableStateFlow<String?>(null)
-    val currentFrequencyKHz = MutableStateFlow(101100) // 101.1 MHz
-    val isStereo = MutableStateFlow(true)
+    /** Last station the user tuned (persisted); the chip is tuned here on power-on. */
+    val currentFrequencyKHz = MutableStateFlow(prefs.getInt("last_freq", 101100).coerceIn(BAND_LOW_KHZ, BAND_HIGH_KHZ))
+    /** null until the chip reports FmRxEvStereoStatus — never assumed "stereo". */
+    val isStereo = MutableStateFlow<Boolean?>(null)
     val isMuted = MutableStateFlow(false)
-    val rssi = MutableStateFlow(0)
-    val stationName = MutableStateFlow("FM 101.1 MHz")
+    /** null until FmReceiver.getRssi() returns a reading — never a placeholder number. */
+    val rssi = MutableStateFlow<Int?>(null)
+    /** RDS programme-service name; blank when no RDS has been decoded (no invented station name). */
+    val stationName = MutableStateFlow("")
     val radioText = MutableStateFlow("Tuner off")
     val isScanning = MutableStateFlow(false)
-    val presets = MutableStateFlow(listOf(88500, 91100, 96500, 101100, 104300, 107900))
+    /** User presets, persisted; empty until the user stars a station (no fabricated preset list). */
+    val presets = MutableStateFlow(loadPresets())
+    /**
+     * Live audio spectrum of the FM PCM flowing through the bridge: [SPECTRUM_BINS] log-spaced bins
+     * 60 Hz–15 kHz, each 0..1 (−60 dBFS..0 dBFS). Empty when no audio is flowing. Computed from
+     * the real AudioRecord buffer — this is what the UI waterfall draws.
+     */
+    val spectrum = MutableStateFlow(FloatArray(0))
+    /** RMS level (0..1) of the same PCM; 0 when nothing flows. */
+    val audioLevel = MutableStateFlow(0f)
+
+    private fun loadPresets(): List<Int> =
+        prefs.getString("presets", null)?.split(',')?.mapNotNull { it.trim().toIntOrNull() }
+            ?.filter { it in BAND_LOW_KHZ..BAND_HIGH_KHZ }?.distinct()?.sorted() ?: emptyList()
+
+    fun savePresets(list: List<Int>) {
+        val clean = list.filter { it in BAND_LOW_KHZ..BAND_HIGH_KHZ }.distinct().sorted()
+        presets.value = clean
+        prefs.edit().putString("presets", clean.joinToString(",")).apply()
+    }
 
     /** Real chip events. Must be a subclass of the abstract adaptor (the constructor demands it). */
     private val callbacks = object : FmRxEvCallbacksAdaptor() {
@@ -106,7 +135,8 @@ class QualcommFmHardwareEngine(private val context: Context) {
             Log.i(TAG, "cb: TuneStatus freq=$freq")
             if (freq in BAND_LOW_KHZ..BAND_HIGH_KHZ) {
                 currentFrequencyKHz.value = freq
-                stationName.value = defaultName(freq)
+                stationName.value = ""          // new station: RDS name unknown until decoded
+                isStereo.value = null           // stereo pilot unknown until the chip reports it
             }
             refreshRssi()
         }
@@ -117,7 +147,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
             isScanning.value = false
             if (freq in BAND_LOW_KHZ..BAND_HIGH_KHZ) {
                 currentFrequencyKHz.value = freq
-                stationName.value = defaultName(freq)
+                stationName.value = ""
+                isStereo.value = null
+                prefs.edit().putInt("last_freq", freq).apply()
             }
             refreshRssi()
         }
@@ -163,7 +195,6 @@ class QualcommFmHardwareEngine(private val context: Context) {
     }
 
     private fun mhz(khz: Int) = String.format("%.1f MHz", khz / 1000.0)
-    private fun defaultName(khz: Int) = "FM ${mhz(khz)}"
 
     // ------------------------------------------------------------------ power
 
@@ -221,7 +252,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 Log.e(TAG, "FM power-on FAILED", t)
                 hardwareOnline.value = false
                 hardwareError.value = t.toString()
-                stationName.value = "Tuner unavailable"
+                stationName.value = ""
+                rssi.value = null
+                isStereo.value = null
                 radioText.value = when (t) {
                     is UnsatisfiedLinkError, is NoClassDefFoundError, is ExceptionInInitializerError ->
                         "FM driver library not loadable in this install (needs the system image build)"
@@ -252,6 +285,8 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 hardwareOnline.value = false
                 configureAudioHal(false, currentFrequencyKHz.value)
                 radioText.value = "Tuner off"
+                rssi.value = null
+                isStereo.value = null
                 Log.i(TAG, "FM tuner OFF")
             } catch (t: Throwable) {
                 Log.e(TAG, "Error powering off FM", t)
@@ -264,7 +299,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
     fun tune(freqKHz: Int) {
         val clamped = freqKHz.coerceIn(BAND_LOW_KHZ, BAND_HIGH_KHZ)
         currentFrequencyKHz.value = clamped
-        stationName.value = defaultName(clamped)
+        stationName.value = ""      // RDS name for the new station is unknown until decoded
+        isStereo.value = null
+        prefs.edit().putInt("last_freq", clamped).apply()
         scope.launch(tunerDispatcher) {
             try {
                 val rx = receiver
@@ -326,13 +363,15 @@ class QualcommFmHardwareEngine(private val context: Context) {
     }
 
     fun toggleStereo() {
-        val newState = !isStereo.value
-        isStereo.value = newState
-        runCatching { receiver?.setStereoMode(newState) }
+        // Request the opposite of what the chip last reported (unknown → ask for stereo). The
+        // displayed state is only updated by FmRxEvStereoStatus, i.e. by the chip itself.
+        val request = !(isStereo.value ?: false)
+        runCatching { receiver?.setStereoMode(request) }
     }
 
     private fun refreshRssi() {
         val rx = receiver ?: return
+        if (!hardwareOnline.value) return
         runCatching { rx.rssi }.onSuccess { if (it >= 0) rssi.value = it }
     }
 
@@ -390,7 +429,10 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 val record = audioRecord
                 if (record != null && record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     val read = record.read(buffer, 0, buffer.size)
-                    if (read > 0) audioTrackHelper?.write(buffer, 0, read)
+                    if (read > 0) {
+                        audioTrackHelper?.write(buffer, 0, read)
+                        updateSpectrum(buffer, read, sampleRate)
+                    }
                 } else {
                     try { Thread.sleep(20) } catch (_: InterruptedException) { break }
                 }
@@ -402,8 +444,51 @@ class QualcommFmHardwareEngine(private val context: Context) {
             } catch (_: Throwable) {}
             audioTrackHelper?.release()
             audioTrackHelper = null
+            spectrum.value = FloatArray(0)
+            audioLevel.value = 0f
             Log.d(TAG, "AudioRecord bridge stopped")
         }, "MikuFmAudioBridgeThread").apply { start() }
+    }
+
+    // ------------------------------------------------------------------ live spectrum (real PCM)
+
+    private var lastSpectrumMs = 0L
+    private val binFreqs = FloatArray(SPECTRUM_BINS) { i ->
+        (SPECTRUM_LOW_HZ * Math.pow((SPECTRUM_HIGH_HZ / SPECTRUM_LOW_HZ), i.toDouble() / (SPECTRUM_BINS - 1))).toFloat()
+    }
+    private val monoScratch = FloatArray(SPECTRUM_FRAMES)
+
+    /**
+     * Goertzel magnitude at [SPECTRUM_BINS] log-spaced frequencies over the first
+     * [SPECTRUM_FRAMES] frames of the 16-bit stereo buffer, ~12 updates/s. Cheap (48 × 1024 MACs)
+     * and computed from the audio that is really being played — nothing synthetic.
+     */
+    private fun updateSpectrum(buf: ByteArray, bytes: Int, sampleRate: Int) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastSpectrumMs < 80) return
+        val frames = minOf(bytes / 4, SPECTRUM_FRAMES)
+        if (frames < 256) return
+        lastSpectrumMs = now
+        var sumSq = 0.0
+        for (i in 0 until frames) {
+            val l = ((buf[i * 4 + 1].toInt() shl 8) or (buf[i * 4].toInt() and 0xFF)).toShort().toFloat()
+            val r = ((buf[i * 4 + 3].toInt() shl 8) or (buf[i * 4 + 2].toInt() and 0xFF)).toShort().toFloat()
+            val m = (l + r) * 0.5f / 32768f
+            monoScratch[i] = m; sumSq += (m * m).toDouble()
+        }
+        val out = FloatArray(SPECTRUM_BINS)
+        for (b in 0 until SPECTRUM_BINS) {
+            val w = 2.0 * Math.PI * binFreqs[b] / sampleRate
+            val coeff = 2.0 * Math.cos(w)
+            var s1 = 0.0; var s2 = 0.0
+            for (i in 0 until frames) { val s0 = monoScratch[i] + coeff * s1 - s2; s2 = s1; s1 = s0 }
+            val power = s1 * s1 + s2 * s2 - coeff * s1 * s2
+            val mag = Math.sqrt(maxOf(power, 0.0)) * 2.0 / frames        // ≈ amplitude, 0..1
+            val db = 20.0 * Math.log10(maxOf(mag, 1e-6))
+            out[b] = ((db + 60.0) / 60.0).toFloat().coerceIn(0f, 1f)     // −60 dBFS..0 dBFS → 0..1
+        }
+        spectrum.value = out
+        audioLevel.value = Math.sqrt(sumSq / frames).toFloat().coerceIn(0f, 1f)
     }
 
     private fun stopAudioBridge() {

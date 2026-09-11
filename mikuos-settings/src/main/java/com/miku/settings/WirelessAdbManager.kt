@@ -10,10 +10,17 @@ import java.net.NetworkInterface
 object WirelessAdbManager {
     private const val DEFAULT_PORT = 5555
 
-    fun isEnabled(): Boolean {
-        val port = RootShell.execOut("getprop service.adb.tcp.port")?.trim() ?: "-1"
-        return port == "$DEFAULT_PORT" || (port.toIntOrNull() ?: -1) > 0
-    }
+    /**
+     * REAL TCP port adbd is bound to, read via SystemProperties (no root needed). The old
+     * `RootShell.execOut("getprop …")` needs an `su` session, which this no-root OS never has,
+     * so the toggle was permanently "off" regardless of the real adbd state.
+     */
+    fun currentPort(): Int? = try {
+        (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            .invoke(null, "service.adb.tcp.port") as? String)?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+    } catch (_: Throwable) { null }
+
+    fun isEnabled(): Boolean = currentPort() != null
 
     suspend fun setEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
         val port = if (enabled) "$DEFAULT_PORT" else "-1"

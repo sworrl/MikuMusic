@@ -158,7 +158,8 @@ fun MikuNotificationShadeView(
     var tick by remember { mutableIntStateOf(0) }
     var currentTime by remember { mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())) }
     var currentDate by remember { mutableStateOf(SimpleDateFormat("MM / dd / yyyy", Locale.getDefault()).format(Date())) }
-    var batteryPct by remember { mutableIntStateOf(100) }
+    // null until the sticky ACTION_BATTERY_CHANGED has been read — never a placeholder 100%.
+    var batteryPct by remember { mutableStateOf<Int?>(null) }
     var isCharging by remember { mutableStateOf(false) }
     var media by remember { mutableStateOf<MikuMediaHub.Now?>(null) }
     var tiles by remember { mutableStateOf<List<QsTile>>(emptyList()) }
@@ -352,7 +353,7 @@ fun MikuNotificationShadeView(
                             null, tint = if (isCharging) Color(0xFF69F0AE) else MikuTealBright, modifier = Modifier.size(16.dp)
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("$batteryPct%", color = MikuWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text(batteryPct?.let { "$it%" } ?: "—%", color = MikuWhite, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.width(4.dp))
                     // expand / collapse chevron (40dp target)

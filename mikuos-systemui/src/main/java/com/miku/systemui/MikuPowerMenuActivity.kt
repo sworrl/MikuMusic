@@ -161,14 +161,14 @@ fun MikuPowerMenuScreen(
         }
     }
 
-    // Battery level telemetry
-    val batteryPct = remember {
+    // Battery level telemetry — null (shown as "—") when the sticky broadcast has no level; never 100% by default.
+    val batteryPct: Int? = remember {
         try {
             val bi = ctx.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
             val lvl = bi?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
             val scale = bi?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-            if (lvl >= 0 && scale > 0) lvl * 100 / scale else 100
-        } catch (_: Throwable) { 100 }
+            if (lvl >= 0 && scale > 0) lvl * 100 / scale else null
+        } catch (_: Throwable) { null }
     }
 
     // Breathing glow for the power core arc — static in audio_only / idle (no infinite transition)
@@ -314,7 +314,7 @@ fun MikuPowerMenuScreen(
                             .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         Text(
-                            text = "⚡ $batteryPct%",
+                            text = "⚡ ${batteryPct?.let { "$it%" } ?: "—"}",
                             color = MikuTealBright,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold

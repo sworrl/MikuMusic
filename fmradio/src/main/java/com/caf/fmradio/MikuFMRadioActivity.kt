@@ -62,22 +62,32 @@ import java.io.File
 import java.util.*
 import kotlin.math.*
 
+/**
+ * UI state mirrored from [QualcommFmHardwareEngine]. Nothing here is pre-filled with a plausible
+ * value: stereo and RSSI are null until the chip reports them, the station name is blank until
+ * RDS decodes one, presets are the user's own, and the spectrum is the real FM PCM.
+ */
 data class FmState(
     val isPowerOn: Boolean = false,
-    val frequencyKHz: Int = 101100, // 101.1 MHz
-    val isStereo: Boolean = true,
+    /** True only after the tuner chip acknowledged enable. */
+    val isHardwareOnline: Boolean = false,
+    val hardwareError: String? = null,
+    val frequencyKHz: Int = 101100,
+    val isStereo: Boolean? = null,
     val isMuted: Boolean = false,
     val isRecording: Boolean = false,
-    val rssi: Int = 68,
-    val stationName: String = "Qualcomm CS43131 Direct FM",
-    val radioText: String = "Hatsune Miku Live Broadcast",
+    val rssi: Int? = null,
+    val stationName: String = "",
+    val radioText: String = "",
     val isHeadsetPlugged: Boolean = false,
-    val favorites: List<Int> = listOf(88500, 91100, 96500, 101100, 104300, 107900)
+    val favorites: List<Int> = emptyList(),
+    val spectrum: FloatArray = FloatArray(0)
 )
 
 /**
  * Direct Qualcomm Snapdragon Hardware FM Radio Manager.
- * Uses QualcommFmHardwareEngine to route hardware FM tuner PCM directly to the CS43131 DAC.
+ * Uses QualcommFmHardwareEngine (Si4705 tuner via the QTI FM library) and bridges its PCM to the
+ * audio HAL / dual CS43198 DAC.
  */
 object FmRadioManager {
     private const val TAG = "MikuDirectFmEngine"
@@ -91,6 +101,9 @@ object FmRadioManager {
             engine = QualcommFmHardwareEngine(ctx.applicationContext).also { eng ->
                 scope.launch {
                     launch { eng.isPoweredOn.collect { on -> _state.value = _state.value.copy(isPowerOn = on) } }
+                    launch { eng.hardwareOnline.collect { on -> _state.value = _state.value.copy(isHardwareOnline = on) } }
+                    launch { eng.hardwareError.collect { e -> _state.value = _state.value.copy(hardwareError = e) } }
+                    launch { eng.spectrum.collect { s -> _state.value = _state.value.copy(spectrum = s) } }
                     launch { eng.currentFrequencyKHz.collect { freq -> _state.value = _state.value.copy(frequencyKHz = freq) } }
                     launch { eng.isStereo.collect { stereo -> _state.value = _state.value.copy(isStereo = stereo) } }
                     launch { eng.isMuted.collect { muted -> _state.value = _state.value.copy(isMuted = muted) } }
@@ -138,7 +151,7 @@ object FmRadioManager {
             favs.sort()
         }
         _state.value = _state.value.copy(favorites = favs)
-        engine?.presets?.value = favs
+        engine?.savePresets(favs)     // persisted; survives restarts (was in-memory only)
     }
 
     fun toggleRecording(ctx: Context) {
@@ -320,16 +333,34 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Status only from real chip state: online (acked enable), starting,
+                            // error, or standby. Stereo/RSSI print "—" until the chip reports them.
+                            val online = fmState.isHardwareOnline
+                            val err = fmState.hardwareError
+                            val statusColor = when {
+                                online -> MikuCyan
+                                err != null -> MikuNeonPink
+                                fmState.isPowerOn -> Color(0xFFFFD54F)
+                                else -> Color.Gray
+                            }
                             Box(
                                 Modifier
                                     .size(7.dp)
                                     .clip(CircleShape)
-                                    .background(if (fmState.isPowerOn) MikuCyan else Color.Gray)
+                                    .background(statusColor)
                             )
                             Spacer(Modifier.width(5.dp))
                             Text(
-                                if (fmState.isPowerOn) "${if (fmState.isStereo) "FM STEREO" else "FM MONO"} • ${fmState.rssi} dBµV" else "STANDBY",
-                                color = if (fmState.isPowerOn) MikuCyan else Color.Gray,
+                                when {
+                                    online -> {
+                                        val mode = when (fmState.isStereo) { true -> "FM STEREO"; false -> "FM MONO"; null -> "FM" }
+                                        "$mode • RSSI ${fmState.rssi?.toString() ?: "—"}"
+                                    }
+                                    err != null -> "TUNER ERROR"
+                                    fmState.isPowerOn -> "STARTING TUNER…"
+                                    else -> "STANDBY"
+                                },
+                                color = statusColor,
                                 fontSize = 8.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = AudiowideFont
@@ -373,7 +404,14 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                     }
 
                     Text(
-                        text = if (fmState.stationName.isNotEmpty()) fmState.stationName else "Qualcomm CS43131 Direct HAL",
+                        // RDS name when decoded; otherwise the engine's real status/RDS text, or
+                        // "No RDS name" — never an invented station or a wrong chip name.
+                        text = when {
+                            fmState.stationName.isNotEmpty() -> fmState.stationName
+                            fmState.radioText.isNotBlank() -> fmState.radioText
+                            fmState.isHardwareOnline -> "No RDS name"
+                            else -> "—"
+                        },
                         color = MikuTextSecondary,
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.Medium,
@@ -406,7 +444,7 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(4.dp))
 
             // ============================================================
-            // EXPANDED REAL-TIME DSP AUDIO WATERFALL (FULL VERTICAL SPACE)
+            // LIVE AUDIO SPECTRUM + WATERFALL (real FM PCM) over a band tuning strip
             // ============================================================
             Box(
                 Modifier
@@ -416,6 +454,10 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                 RadioWaterfallSpectrum(
                     currentFreqKHz = fmState.frequencyKHz,
                     isPowerOn = fmState.isPowerOn,
+                    isHardwareOnline = fmState.isHardwareOnline,
+                    hardwareError = fmState.hardwareError,
+                    spectrum = fmState.spectrum,
+                    favorites = fmState.favorites,
                     onTuneFreq = { newFreq -> FmRadioManager.tune(ctx, newFreq) }
                 )
             }
@@ -494,7 +536,16 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
 
             Spacer(Modifier.height(4.dp))
 
-            // Preset Favorite Stations
+            // Preset Favorite Stations (the user's own; empty until a station is starred)
+            if (fmState.favorites.isEmpty()) {
+                Text(
+                    "No presets yet — tap ☆ to save the current station",
+                    color = MikuTextSecondary,
+                    fontSize = 9.sp,
+                    fontFamily = AudiowideFont,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+            }
             LazyRow(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -578,22 +629,31 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
     }
 }
 
+/**
+ * Top 40 %: live audio spectrum of the FM PCM (log-spaced 60 Hz–15 kHz bins from the engine).
+ * Bottom 60 %: waterfall = history of that spectrum. The pink marker + bottom scale are the FM
+ * band (87.5–108 MHz) tuning strip; tap/drag anywhere to tune. Nothing is synthesised: with the
+ * tuner off, starting, or silent the plot is flat.
+ */
 @Composable
 fun RadioWaterfallSpectrum(
     currentFreqKHz: Int,
     isPowerOn: Boolean,
+    isHardwareOnline: Boolean,
+    hardwareError: String?,
+    spectrum: FloatArray,
+    favorites: List<Int>,
     onTuneFreq: (Int) -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "rfOsc")
-    val phase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2 * Math.PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rfPhase"
-    )
+    val binCount = QualcommFmHardwareEngine.SPECTRUM_BINS
+    val rowCount = 20
+    // Waterfall history: newest row first. Each engine update (a new FloatArray) pushes one row.
+    var rows by remember { mutableStateOf(List(rowCount) { FloatArray(binCount) }) }
+    LaunchedEffect(spectrum) {
+        rows = if (spectrum.size == binCount) (listOf(spectrum) + rows).take(rowCount)
+        else List(rowCount) { FloatArray(binCount) }
+    }
+    val live = if (spectrum.size == binCount) spectrum else FloatArray(binCount)
 
     Box(
         Modifier
@@ -623,27 +683,20 @@ fun RadioWaterfallSpectrum(
             val w = size.width
             val h = size.height
             val fftHeight = h * 0.40f
-            val waterfallHeight = h * 0.60f
-            val binCount = 48
-            val rowCount = 20
+            val scaleHeight = 10.dp.toPx()
+            val waterfallHeight = h * 0.60f - scaleHeight
             val rowHeight = waterfallHeight / rowCount
             val binWidth = w / binCount
 
-            // Active tuned center bin
+            // Tuned position on the band strip (87.5–108 MHz across the width)
             val tunedFrac = ((currentFreqKHz - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f)
-            val centerBin = (tunedFrac * binCount).toInt()
 
-            // 1. Draw Waterfall Grid
+            // 1. Waterfall = history of the REAL spectrum (row 0 newest)
             for (r in 0 until rowCount) {
                 val y = fftHeight + r * rowHeight
-                val rowAgeFrac = r.toFloat() / rowCount
-
+                val row = rows.getOrNull(r)
                 for (b in 0 until binCount) {
-                    val dist = abs(b - centerBin).toFloat()
-                    val peak = if (isPowerOn) exp(-0.15f * dist * dist) else 0f
-                    val ripple = if (isPowerOn) (sin(phase + b * 0.4f + r * 0.3f) * 0.15f + 0.15f) else 0.05f
-                    val mag = (peak * (1f - rowAgeFrac * 0.5f) + ripple).coerceIn(0f, 1f)
-
+                    val mag = row?.getOrNull(b) ?: 0f
                     val color = when {
                         mag < 0.20f -> Color(0xFF031622)
                         mag < 0.45f -> Color(0xFF004D5A)
@@ -659,17 +712,26 @@ fun RadioWaterfallSpectrum(
                 }
             }
 
-            // 2. Draw Real-time FFT Curve
+            // 1b. Band scale strip under the waterfall: favourites as ticks, tuned marker below.
+            val scaleTop = fftHeight + waterfallHeight
+            drawRect(Color(0xFF020A0F), topLeft = Offset(0f, scaleTop), size = Size(w, scaleHeight))
+            favorites.forEach { f ->
+                val fx = ((f - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f) * w
+                drawLine(MikuPink.copy(alpha = 0.8f), Offset(fx, scaleTop), Offset(fx, scaleTop + scaleHeight), strokeWidth = 1.5.dp.toPx())
+            }
+            for (mhz in 88..108 step 2) {
+                val sx = ((mhz * 1000 - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f) * w
+                drawLine(MikuTeal.copy(alpha = 0.35f), Offset(sx, scaleTop + scaleHeight * 0.5f), Offset(sx, scaleTop + scaleHeight), strokeWidth = 1f)
+            }
+
+            // 2. Live spectrum curve from the real PCM (flat when nothing flows)
             val fftPath = Path()
-            val step = w / binCount
+            val step = w / (binCount - 1)
             fftPath.moveTo(0f, fftHeight)
 
             for (i in 0 until binCount) {
                 val x = i * step
-                val dist = abs(i - centerBin).toFloat()
-                val peak = if (isPowerOn) exp(-0.18f * dist * dist) * 0.85f else 0.05f
-                val noise = if (isPowerOn) (sin(phase * 1.5f + i * 0.6f) * 0.08f + 0.08f) else 0.02f
-                val mag = (peak + noise).coerceIn(0f, 1f)
+                val mag = live[i].coerceIn(0f, 1f)
                 val y = fftHeight - (mag * (fftHeight - 6f))
                 if (i == 0) fftPath.moveTo(x, y) else fftPath.lineTo(x, y)
             }
@@ -713,15 +775,25 @@ fun RadioWaterfallSpectrum(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "QUALCOMM DIRECT FM WATERFALL",
+                "LIVE AUDIO SPECTRUM · FM PCM 60 Hz–15 kHz",
                 color = MikuTeal.copy(alpha = 0.85f),
                 fontSize = 7.5.sp,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
-                if (isPowerOn) "HARDWARE ACTIVE" else "STANDBY",
-                color = if (isPowerOn) MikuPink else Color.Gray,
+                when {
+                    isHardwareOnline -> "HARDWARE ACTIVE"
+                    hardwareError != null -> "TUNER ERROR"
+                    isPowerOn -> "STARTING…"
+                    else -> "STANDBY"
+                },
+                color = when {
+                    isHardwareOnline -> MikuPink
+                    hardwareError != null -> MikuNeonPink
+                    isPowerOn -> Color(0xFFFFD54F)
+                    else -> Color.Gray
+                },
                 fontSize = 7.5.sp,
                 fontWeight = FontWeight.Bold
             )
