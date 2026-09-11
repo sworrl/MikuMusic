@@ -275,7 +275,11 @@ fun MikuNetworkObservatoryModal(
                                     letterSpacing = 0.8.sp
                                 )
                                 Text(
-                                    text = "CV01 RF Link: ${if (wifi.isConnected) "${wifi.bandLabel} (${wifi.rssiDbm}dBm)" else "Cellular ${cell.networkType}"} · Ping: ${networkState.latencyMs}ms",
+                                    text = "CV01 RF Link: ${when {
+                                        wifi.isConnected -> "${wifi.bandLabel.ifEmpty { "Wi-Fi" }} (${wifi.rssiDbm?.let { "${it}dBm" } ?: "— dBm"})"
+                                        networkState.activeTransport == "CELLULAR" -> "Cellular ${cell.networkType.ifEmpty { "—" }}"
+                                        else -> "No link"
+                                    }} · Ping: ${if (networkState.latencyMs >= 0L) "${networkState.latencyMs}ms" else "unreachable"}",
                                     color = MikuCyan,
                                     fontSize = 7.5.sp,
                                     fontWeight = FontWeight.Bold
@@ -406,7 +410,7 @@ fun MikuNetworkObservatoryModal(
                                                     .border(0.5.dp, MikuCyan, CutCornerShape(4.dp))
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
-                                                Text("${wifi.bandLabel} Ch ${wifi.channel}", color = MikuCyan, fontSize = 7.5.sp, fontWeight = FontWeight.Black)
+                                                Text(if (wifi.frequencyMhz > 0) "${wifi.bandLabel} Ch ${wifi.channel}" else "band —", color = MikuCyan, fontSize = 7.5.sp, fontWeight = FontWeight.Black)
                                             }
                                             Box(
                                                 Modifier
@@ -415,7 +419,7 @@ fun MikuNetworkObservatoryModal(
                                                     .border(0.5.dp, Color(0xFF00E676), CutCornerShape(4.dp))
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
-                                                Text(wifi.standard, color = Color(0xFF00E676), fontSize = 7.5.sp, fontWeight = FontWeight.Black)
+                                                Text(wifi.standard.ifEmpty { "PHY —" }, color = Color(0xFF00E676), fontSize = 7.5.sp, fontWeight = FontWeight.Black)
                                             }
                                         }
                                     }
@@ -445,7 +449,7 @@ fun MikuNetworkObservatoryModal(
                                         }
                                         Spacer(Modifier.width(8.dp))
                                         Text(
-                                            text = "${wifi.rssiDbm} dBm · ${wifi.signalPct}% · Tx ${wifi.txLinkSpeedMbps}M / Rx ${wifi.rxLinkSpeedMbps}M",
+                                            text = "${wifi.rssiDbm?.let { "$it dBm" } ?: "— dBm"} · ${wifi.signalPct?.let { "$it%" } ?: "—%"} · Tx ${if (wifi.txLinkSpeedMbps > 0) "${wifi.txLinkSpeedMbps}M" else "—"} / Rx ${if (wifi.rxLinkSpeedMbps > 0) "${wifi.rxLinkSpeedMbps}M" else "—"}",
                                             color = Color.White,
                                             fontSize = 9.sp,
                                             fontWeight = FontWeight.Bold,
@@ -475,11 +479,11 @@ fun MikuNetworkObservatoryModal(
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("DNS Resolvers:", color = MikuTextSecondary, fontSize = 8.sp)
-                                            Text("${wifi.dns1} / ${wifi.dns2}", color = Color.White, fontSize = 8.sp, fontFamily = AudiowideFont)
+                                            Text(listOf(wifi.dns1, wifi.dns2).filter { it.isNotEmpty() }.joinToString(" / ").ifEmpty { "—" }, color = Color.White, fontSize = 8.sp, fontFamily = AudiowideFont)
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("Carrier Frequency:", color = MikuTextSecondary, fontSize = 8.sp)
-                                            Text("${wifi.frequencyMhz} MHz", color = MikuCyan, fontSize = 8.sp, fontFamily = AudiowideFont)
+                                            Text(if (wifi.frequencyMhz > 0) "${wifi.frequencyMhz} MHz" else "—", color = MikuCyan, fontSize = 8.sp, fontFamily = AudiowideFont)
                                         }
                                     }
 

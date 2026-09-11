@@ -49,13 +49,14 @@ fun MikuMonitorModal(
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: TELEMETRY, 1: UPLINK_CFG
     var daemonHostInput by remember { mutableStateOf(MikuSyncTransceiver.activeHost) }
-    var souffleHostInput by remember { mutableStateOf("souffle (10.241.64.40)") }
-    var musicDirInput by remember { mutableStateOf("/media/plex/MUSIC") }
+    // Real configured values (MikuIngestConfig) — no hardcoded host names or library paths.
+    var souffleHostInput by remember { mutableStateOf(MikuIngestConfig.syncHost(ctx)) }
+    var musicDirInput by remember { mutableStateOf(MikuSyncTransceiver.getSdMusicPath(ctx)) }
     var statusFeedback by remember { mutableStateOf("") }
 
+    // This device's real address, or "—" when there is no non-loopback IPv4 yet.
     val devIp = remember(syncState.ipAddress) {
-        if (syncState.ipAddress.isNotEmpty() && syncState.ipAddress != "127.0.0.1") syncState.ipAddress
-        else "192.168.13.157"
+        if (syncState.ipAddress.isNotEmpty() && syncState.ipAddress != "127.0.0.1") syncState.ipAddress else "—"
     }
 
     Dialog(
@@ -224,6 +225,8 @@ fun MikuMonitorModal(
                                 statusFeedback = "⚡ Measured: ${String.format(Locale.US, "%.1f", res.speedMBs)} MB/s (${res.latencyMs}ms)"
                             }
                         },
+                        workersLabel = if (daemon.online && (daemon.fetchActive > 0 || daemon.workers.isNotEmpty())) "${maxOf(daemon.fetchActive, daemon.workers.size)} active" else "—",
+                        cacheLabel = if (daemon.online && (daemon.cacheAlbums > 0 || daemon.cacheBytes > 0)) "${daemon.cacheAlbums} albums · ${formatBytes(daemon.cacheBytes)}" else "—",
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -336,51 +339,59 @@ private fun TelemetryView(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    // Link state is the daemon probe result; the transport is what ConnectivityManager reports.
                     GridCell(
-                        text = "NET_LINK: ${if (daemon.online) "ONLINE_SECURE" else "ONLINE_SECURE"}",
+                        text = "NET_LINK: ${if (daemon.online) "DAEMON_ONLINE" else "DAEMON_OFFLINE"} · ${syncState.transport.badge}",
                         modifier = Modifier.weight(1f)
                     )
                     GridCell(
-                        text = "DEVICE: M500 ($devIp:5555)",
+                        text = "DEVICE: M500 ($devIp)",
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                // Row 2: BEACON_TX & THROUGHPUT
+                // Row 2: BEACON & THROUGHPUT
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     GridCell(
-                        text = "BEACON_TX: BROADCAST (UDP 8788)",
+                        text = "BEACON: ${syncState.beaconAck.ifEmpty { "UDP 8788 (ack not tracked)" }}",
                         modifier = Modifier.weight(1f)
                     )
                     val tpText = if (daemon.isTransferring || syncState.transferRateMBs > 0f) {
                         String.format(Locale.US, "THROUGHPUT: %.1f MB/s", syncState.transferRateMBs)
-                    } else "THROUGHPUT: 0 B/s"
+                    } else "THROUGHPUT: idle"
                     GridCell(
                         text = tpText,
                         modifier = Modifier.weight(1f)
                     )
                 }
 
-                // Row 3: STAGE & T-MINUS
+                // Row 3: STAGE & ETA — both straight from the daemon; "—" when it hasn't reported.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    val workers = if (daemon.fetchActive > 0) daemon.fetchActive else 10
+                    val workersStr = if (daemon.fetchActive > 0) "${daemon.fetchActive} WORKERS" else "workers —"
                     val stageStr = when {
                         daemon.stage.isNotEmpty() -> daemon.stage.uppercase()
-                        daemon.isTransferring -> "FETCHING"
-                        else -> "FETCHING"
+                        !daemon.online -> "OFFLINE"
+                        daemon.isTransferring -> "TRANSFERRING"
+                        else -> "IDLE"
                     }
                     GridCell(
-                        text = "STAGE: $stageStr ($workers WORKERS)",
+                        text = "STAGE: $stageStr ($workersStr)",
                         modifier = Modifier.weight(1f)
                     )
+                    // ETA = remaining planned bytes / measured rate, only when both are real.
+                    val remainingBytes = daemon.bytesTotalPlan - (daemon.filesDone.toLong().takeIf { daemon.filesTotal > 0 }?.let { daemon.bytesTotalPlan * it / daemon.filesTotal } ?: 0L)
+                    val etaText = if (daemon.isTransferring && daemon.transferRateBps > 0.0 && daemon.bytesTotalPlan > 0 && daemon.filesTotal > 0) {
+                        val secs = (remainingBytes / daemon.transferRateBps).toLong().coerceAtLeast(0)
+                        "ETA: ${secs / 60}m ${secs % 60}s"
+                    } else "ETA: —"
                     GridCell(
-                        text = "T-MINUS: 0m 0s",
+                        text = etaText,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -390,8 +401,8 @@ private fun TelemetryView(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    val sdTotalStr = if (daemon.sdCardTotalBytes > 0) formatBytes(daemon.sdCardTotalBytes) else "0 B"
-                    val sdFreeStr = if (daemon.sdCardFreeBytes > 0) formatBytes(daemon.sdCardFreeBytes) else "0 B"
+                    val sdTotalStr = if (daemon.sdCardTotalBytes > 0) formatBytes(daemon.sdCardTotalBytes) else "—"
+                    val sdFreeStr = if (daemon.sdCardFreeBytes > 0) formatBytes(daemon.sdCardFreeBytes) else "—"
                     GridCell(
                         text = "SD_TOTAL: $sdTotalStr",
                         modifier = Modifier.weight(1f)
@@ -436,7 +447,7 @@ private fun TelemetryView(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = daemon.currentArtist.ifEmpty { "TOOL" },
+                            text = daemon.currentArtist.ifEmpty { "—" },
                             color = CyberNeonPink,
                             fontSize = 9.sp,
                             fontFamily = FontFamily.Monospace,
@@ -465,7 +476,7 @@ private fun TelemetryView(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = daemon.currentAlbum.ifEmpty { "Fear Inoculum" },
+                            text = daemon.currentAlbum.ifEmpty { "—" },
                             color = CyberNeonPink,
                             fontSize = 9.sp,
                             fontFamily = FontFamily.Monospace,
@@ -484,9 +495,8 @@ private fun TelemetryView(
                         .border(1.dp, CyberNeonCyan),
                     contentAlignment = Alignment.Center
                 ) {
-                    val totalAlbums = if (daemon.albumsTotal > 0) daemon.albumsTotal else 1297
                     Text(
-                        text = "${daemon.albumsDone} / $totalAlbums ALBUMS",
+                        text = if (daemon.albumsTotal > 0) "${daemon.albumsDone} / ${daemon.albumsTotal} ALBUMS" else "ALBUMS: — (daemon has not reported a plan)",
                         color = CyberNeonCyan,
                         fontSize = 9.5.sp,
                         fontFamily = FontFamily.Monospace,
@@ -527,7 +537,8 @@ private fun TelemetryView(
                 .padding(6.dp)
         ) {
             val listState = rememberLazyListState()
-            val logs = if (syncState.eventLogs.isNotEmpty()) syncState.eventLogs else defaultCyberLogs(devIp)
+            // Real event log only; an empty log shows one honest line instead of canned history.
+            val logs = if (syncState.eventLogs.isNotEmpty()) syncState.eventLogs else listOf("[--:--:--] no events yet — waiting for daemon / beacon traffic")
 
             LazyColumn(
                 state = listState,
@@ -602,8 +613,9 @@ private fun ThroughputWaveformCanvas(
         // Draw Y-axis marker lines on left
         drawLine(color = CyberGridLine, start = Offset(20f, 4f), end = Offset(20f, height - 4f), strokeWidth = 1f)
 
-        // Draw live waveform line
-        val samplePoints = if (history.isNotEmpty()) history else listOf(0f, 0f, 0.05f, 0f, 0.1f, 0.02f, 0f, 0f, 0f, 0f)
+        // Draw live waveform line — real throughput samples only; nothing drawn until there are some.
+        if (history.isEmpty()) return@Canvas
+        val samplePoints = history
         val maxVal = (samplePoints.maxOrNull() ?: 1f).coerceAtLeast(1f)
 
         val path = Path()
@@ -634,6 +646,9 @@ private fun UplinkConfigView(
     onMusicDirChange: (String) -> Unit,
     onDiscoverBeacon: () -> Unit,
     onSpeedTest: () -> Unit,
+    /** Live daemon figures; "—" when the daemon hasn't reported them. */
+    workersLabel: String,
+    cacheLabel: String,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -644,19 +659,19 @@ private fun UplinkConfigView(
             ConfigBox(label = "DAEMON_HOST (HTTP 8787)", value = daemonHost, onValueChange = onDaemonHostChange)
         }
         item {
-            ConfigBox(label = "BEACON_PORT (UDP)", value = "8788 (Active Discovery)", onValueChange = {})
+            ConfigBox(label = "BEACON_PORT (UDP)", value = "8788", onValueChange = {})
         }
         item {
-            ConfigBox(label = "SOUFFLE_MASTER_HOST", value = souffleHost, onValueChange = onSouffleHostChange)
+            ConfigBox(label = "SYNC_HOST (configured)", value = souffleHost.ifEmpty { "— (not configured)" }, onValueChange = onSouffleHostChange)
         }
         item {
-            ConfigBox(label = "MUSIC_LIBRARY_DIR", value = musicDir, onValueChange = onMusicDirChange)
+            ConfigBox(label = "SD_MUSIC_DIR (resolved)", value = musicDir, onValueChange = onMusicDirChange)
         }
         item {
-            ConfigBox(label = "INGRESS_WORKERS", value = "10 (Parallel Async Pipelines)", onValueChange = {})
+            ConfigBox(label = "INGRESS_WORKERS (daemon)", value = workersLabel, onValueChange = {})
         }
         item {
-            ConfigBox(label = "CACHE_DEPTH", value = "6 (Pre-staged Albums)", onValueChange = {})
+            ConfigBox(label = "CACHE (daemon)", value = cacheLabel, onValueChange = {})
         }
         item {
             Row(
@@ -728,26 +743,6 @@ private fun formatBytes(bytes: Long): String {
     val gb = bytes.toDouble() / (1024.0 * 1024.0 * 1024.0)
     return if (gb >= 1.0) String.format(Locale.US, "%.1f GB", gb)
     else String.format(Locale.US, "%.0f MB", bytes.toDouble() / (1024.0 * 1024.0))
-}
-
-private fun defaultCyberLogs(devIp: String): List<String> {
-    return listOf(
-        "[20:01:56.880] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
-        "[20:02:01.885] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
-        "[20:02:01.887] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
-        "[20:02:05.725] STAGE: FETCHING // PIPELINE CACHING: [Led Zeppelin / The Song Remains The Same LP1 (Japan 1st Pressing Swan Song Records P-5544~5N Double Vinyl Rip. 24bit-192kHz) [Vinyl 24-192]]",
-        "[20:02:06.891] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
-        "[20:02:06.893] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
-        "[20:02:11.898] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
-        "[20:02:11.899] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
-        "[20:02:16.905] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
-        "[20:02:16.907] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
-        "[20:02:18.718] STAGE: FETCHING // PIPELINE CACHING: [Led Zeppelin / The Song Remains The Same LP1 (Japan 1st Pressing Swan Song Records P-5544~5N Double Vinyl Rip. 24bit-192kHz) [Vinyl 24-192]]",
-        "[20:02:21.917] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
-        "[20:02:21.919] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC",
-        "[20:02:26.932] ⚡ TRUSTED ADJACENT NODE LOCKED: M500 ($devIp:5555) // LINK: SECURE",
-        "[20:02:26.934] 📡 BESPOKE BEACON ACK: 192.168.13.202:8788 // DAEMON_SYNC"
-    )
 }
 
 @Composable

@@ -386,7 +386,7 @@ object MikuWebRemoteHtml {
 
             <div class="volume-row">
                 <span style="font-size: 16px;">🔈</span>
-                <input type="range" min="0" max="100" value="70" class="vol-slider" id="volSlider" oninput="setVolume(this.value)">
+                <input type="range" min="0" max="100" value="0" class="vol-slider" id="volSlider" oninput="setVolume(this.value)">
                 <span style="font-size: 16px;">🔊</span>
             </div>
 
@@ -423,7 +423,9 @@ object MikuWebRemoteHtml {
             });
         }
 
-        // Build animated spectrum bars
+        // Spectrum bars driven by the device's REAL FFT (/api/v1/levels). When no Visualizer is
+        // bound on the device the endpoint reports active=false and the bars stay flat — no
+        // Math.random() animation pretending to be audio.
         const specBox = document.getElementById('spectrumBox');
         for (let i = 0; i < 24; i++) {
             const col = document.createElement('div');
@@ -432,17 +434,27 @@ object MikuWebRemoteHtml {
         }
         const specCols = document.querySelectorAll('.spectrum-col');
 
-        function updateSpectrum() {
-            if (isPlaying) {
-                specCols.forEach(col => {
-                    const h = Math.floor(Math.random() * 28) + 4;
-                    col.style.height = h + 'px';
+        async function updateSpectrum() {
+            try {
+                const res = await fetch('/api/v1/levels', { cache: 'no-store' });
+                if (!res.ok) { specCols.forEach(col => col.style.height = '4px'); return; }
+                const lv = await res.json();
+                if (!lv.active || !lv.is_playing || !Array.isArray(lv.fft) || lv.fft.length === 0) {
+                    specCols.forEach(col => col.style.height = '4px');
+                    return;
+                }
+                const per = Math.max(1, Math.floor(lv.fft.length / specCols.length));
+                specCols.forEach((col, i) => {
+                    let s = 0;
+                    for (let k = 0; k < per; k++) s += (lv.fft[i * per + k] || 0);
+                    const mag = Math.min(1, s / per);
+                    col.style.height = (4 + Math.round(mag * 28)) + 'px';
                 });
-            } else {
+            } catch (e) {
                 specCols.forEach(col => col.style.height = '4px');
             }
         }
-        setInterval(updateSpectrum, 120);
+        setInterval(updateSpectrum, 150);
 
         async function pollStatus() {
             try {
@@ -502,7 +514,7 @@ object MikuWebRemoteHtml {
                 if (Math.abs(tvAudio.currentTime - targetSec) > 2.5) {
                     tvAudio.currentTime = targetSec;
                 }
-                tvAudio.volume = Math.min(1.0, Math.max(0.0, (data.playback.volume_pct || 70) / 100.0));
+                tvAudio.volume = Math.min(1.0, Math.max(0.0, (data.playback.volume_pct || 0) / 100.0));
                 if (isPlaying && tvAudio.paused) {
                     tvAudio.play().catch(_ => {});
                 } else if (!isPlaying && !tvAudio.paused) {

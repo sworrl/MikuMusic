@@ -243,9 +243,17 @@ fun MikuBrainModal(
                     Button(
                         onClick = {
                             // Manual diagnostic probe override for power users
-                            MikuBrain.heartbeat(MikuBrain.BoneType.UI_RENDERER, MikuBrain.BoneState.ACTIVE, "Manual Probe Acknowledged", 1)
-                            MikuBrain.heartbeat(MikuBrain.BoneType.HARDWARE_IO, MikuBrain.BoneState.ACTIVE, "CS43131 Direct Sysfs Queried", 1)
-                            MikuBrain.heartbeat(MikuBrain.BoneType.AUDIO_DSP, MikuBrain.BoneState.ACTIVE, "Direct ALSA Buffer Sampled", 1)
+                            // Manual probe: re-run the REAL checks, don't stamp "ACTIVE" with canned text.
+                            MikuBrain.heartbeat(MikuBrain.BoneType.UI_RENDERER, MikuBrain.BoneState.ACTIVE, "Manual probe requested", 1)
+                            val audit = MikuBrain.run { com.miku.player.CirrusLogicManager.getLiveHardwareAudit() }
+                            MikuBrain.heartbeat(
+                                MikuBrain.BoneType.HARDWARE_IO,
+                                if (audit.isHardwareSynced) MikuBrain.BoneState.ACTIVE else MikuBrain.BoneState.ERROR,
+                                if (audit.isHardwareSynced) "DAC sysfs readable · filter ${audit.kernelFilter} · gain ${audit.kernelGain}" else "DAC sysfs not readable",
+                                if (audit.isHardwareSynced) 1 else 0
+                            )
+                            val playing = runCatching { com.miku.player.PlayerHolder.player?.isPlaying == true }.getOrDefault(false)
+                            MikuBrain.heartbeat(MikuBrain.BoneType.AUDIO_DSP, if (playing) MikuBrain.BoneState.ACTIVE else MikuBrain.BoneState.IDLE, if (playing) "Player is playing" else "Player idle", if (playing) 1 else 0)
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -269,11 +277,11 @@ private fun BoneCard(
     health: MikuBrain.BoneHealth
 ) {
     val (title, roleDesc, iconEmoji) = when (health.type) {
-        MikuBrain.BoneType.AUDIO_DSP -> Triple("AUDIO_DSP", "RealFmDspEngine & CS43131 Bit-Perfect Direct ALSA", "🎵")
-        MikuBrain.BoneType.LIBRARY_SCANNER -> Triple("LIBRARY_SCANNER", "MediaLibraryScanner & FLAC Metadata Indexer", "📚")
-        MikuBrain.BoneType.NETWORK_INGRESS -> Triple("NETWORK_INGRESS", "MikuSyncTransceiver & m500d Multi-Stream Socket", "🌐")
-        MikuBrain.BoneType.HARDWARE_IO -> Triple("HARDWARE_IO", "CirrusLogicManager & SGM31324 Pulsar Sysfs", "⚡")
-        MikuBrain.BoneType.UI_RENDERER -> Triple("UI_RENDERER", "Hardware Accelerated 60 FPS Compose HUD", "🎨")
+        MikuBrain.BoneType.AUDIO_DSP -> Triple("AUDIO_DSP", "Player state (ExoPlayer)", "🎵")
+        MikuBrain.BoneType.LIBRARY_SCANNER -> Triple("LIBRARY_SCANNER", "Library scanner (ScanProgress)", "📚")
+        MikuBrain.BoneType.NETWORK_INGRESS -> Triple("NETWORK_INGRESS", "Network link (MikuNetworkService)", "🌐")
+        MikuBrain.BoneType.HARDWARE_IO -> Triple("HARDWARE_IO", "CS43198 DAC sysfs (CirrusLogicManager)", "⚡")
+        MikuBrain.BoneType.UI_RENDERER -> Triple("UI_RENDERER", "Touch activity on the Compose UI", "🎨")
     }
 
     val elapsedSec = ((SystemClock.elapsedRealtime() - health.lastHeartbeatMs) / 1000).coerceAtLeast(0)

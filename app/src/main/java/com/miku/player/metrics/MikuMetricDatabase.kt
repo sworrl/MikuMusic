@@ -347,8 +347,10 @@ class MikuMetricDatabase private constructor(context: Context) :
         val latitude: Double,
         val longitude: Double,
         val locationCity: String,
-        val dacSampleRate: Int = 44100,
-        val dacGain: String = "HIGH",
+        /** 0 = unknown (never a default "CD rate"). */
+        val dacSampleRate: Int = 0,
+        /** "UNKNOWN" when the gain mode was not read. */
+        val dacGain: String = "UNKNOWN",
         val playbackDurationMs: Long = 0L
     )
 
@@ -411,7 +413,7 @@ class MikuMetricDatabase private constructor(context: Context) :
                                 longitude = c.getDouble(14),
                                 locationCity = c.getString(15) ?: "",
                                 dacSampleRate = c.getInt(16),
-                                dacGain = c.getString(17) ?: "HIGH",
+                                dacGain = c.getString(17) ?: "UNKNOWN",
                                 playbackDurationMs = c.getLong(18)
                             )
                         )

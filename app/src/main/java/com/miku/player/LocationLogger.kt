@@ -37,10 +37,13 @@ object LocationLogger {
                 val weatherState = MikuWeatherService.state.value
                 val weather = weatherState.weather
                 val gps = weatherState.gps
+                // Only a weather condition from a REAL completed fetch may be recorded; the service's
+                // default instance (never fetched in this process) must not be written as a reading.
+                val haveWeather = weather.lastUpdatedTime > 0L && !weather.tempF.isNaN()
 
                 var finalLat = gps.latitude
                 var finalLon = gps.longitude
-                var finalCity = if (gps.city.isNotEmpty()) gps.city else "Local Station"
+                var finalCity = gps.city   // empty = unknown; no "Local Station" placeholder
 
                 // Optional single-shot coarse location fix if GPS wasn't already locked
                 if (!gps.isLocked && ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
@@ -71,12 +74,12 @@ object LocationLogger {
                         title = title,
                         artist = artist,
                         album = album,
-                        tempF = weather.tempF,
-                        feelsLikeF = weather.feelsLikeF,
-                        humidityPct = weather.humidityPct,
-                        windSpeedMph = weather.windSpeedMph,
-                        weatherSummary = weather.summary,
-                        weatherCode = weather.code,
+                        tempF = if (haveWeather) weather.tempF else Float.NaN,
+                        feelsLikeF = if (haveWeather) weather.feelsLikeF else Float.NaN,
+                        humidityPct = if (haveWeather) weather.humidityPct else -1,
+                        windSpeedMph = if (haveWeather) weather.windSpeedMph else Float.NaN,
+                        weatherSummary = if (haveWeather) weather.summary else "",
+                        weatherCode = if (haveWeather) weather.code else -1,
                         isDay = weather.isDay,
                         latitude = finalLat,
                         longitude = finalLon,

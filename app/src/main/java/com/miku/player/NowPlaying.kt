@@ -1155,6 +1155,7 @@ private fun StageVisualizer(
 @Composable
 fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
     androidx.activity.compose.BackHandler(onBack = onClose)
+    // Real Wi-Fi IPv4 or null — never a made-up address the user could try to open.
     val ip = remember {
         try {
             val wm = context.applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
@@ -1168,12 +1169,16 @@ fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
                     raw shr 16 and 0xff,
                     raw shr 24 and 0xff
                 )
-            } else "192.168.13.184"
-        } catch (_: Throwable) { "192.168.13.184" }
+            } else null
+        } catch (_: Throwable) { null }
     }
+    val port = remember { com.miku.player.api.MikuApiSecurity.getApiPort(context) }
+    // Real server state, polled while the sheet is open.
+    var serverUp by remember { mutableStateOf(com.miku.player.api.MikuApiServer.isServerRunning()) }
+    LaunchedEffect(Unit) { while (true) { serverUp = com.miku.player.api.MikuApiServer.isServerRunning(); delay(1500) } }
 
-    val remoteUrl = "http://$ip:8765"
-    val tvUrl = "http://$ip:8765/tv"
+    val remoteUrl = if (ip != null) "http://$ip:$port" else "No Wi-Fi address — connect to Wi-Fi first"
+    val tvUrl = if (ip != null) "http://$ip:$port/tv" else "No Wi-Fi address — connect to Wi-Fi first"
 
     Box(
         Modifier
@@ -1202,11 +1207,12 @@ fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Status dot = the API server's real running state (green up / grey down).
                     Box(
                         Modifier
                             .size(10.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF00FF88))
+                            .background(if (serverUp) Color(0xFF00FF88) else Color(0xFF666666))
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -1279,7 +1285,7 @@ fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.End
             ) {
                 Text(
-                    "Port 8765 · Native DTA Server Active",
+                    if (serverUp) "Port $port · server running" else "Port $port · server not running",
                     color = MikuTeal.copy(alpha = 0.7f),
                     fontSize = 10.5.sp,
                     fontFamily = AudiowideFont

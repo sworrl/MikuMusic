@@ -53,14 +53,17 @@ class QualcommFmHardwareEngine(private val context: Context) {
     private var fmConfigInstance: Any? = null
 
     val isPoweredOn = MutableStateFlow(false)
-    val currentFrequencyKHz = MutableStateFlow(101100) // Default 101.1 MHz
-    val isStereo = MutableStateFlow(true)
+    val currentFrequencyKHz = MutableStateFlow(87500) // band floor until the tuner reports its real frequency
+    val isStereo = MutableStateFlow(false)
     val isMuted = MutableStateFlow(false)
-    val rssi = MutableStateFlow(68)
-    val stationName = MutableStateFlow("HiBy M500 Qualcomm FM")
-    val radioText = MutableStateFlow("Tuned to 101.1 MHz")
+    /** 0 until getRssi() actually returns a value (was a hardcoded 68). */
+    val rssi = MutableStateFlow(0)
+    /** RDS PS / RT strings: empty until the tuner decodes them — never a made-up station name. */
+    val stationName = MutableStateFlow("")
+    val radioText = MutableStateFlow("")
     val isScanning = MutableStateFlow(false)
-    val presets = MutableStateFlow(listOf(88500, 91100, 96500, 101100, 104300, 107900))
+    /** User presets only; no seeded list of frequencies. */
+    val presets = MutableStateFlow<List<Int>>(emptyList())
 
     init {
         initClassLoaderAndReceiver()
@@ -230,8 +233,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
     fun tune(freqKHz: Int) {
         val clamped = freqKHz.coerceIn(87500, 108000)
         currentFrequencyKHz.value = clamped
-        stationName.value = "FM ${(clamped / 1000.0)} MHz"
-        radioText.value = "Live Qualcomm CS43131 FM Tuner"
+        // Retuning invalidates the previous station's RDS; leave both empty until RDS decodes again.
+        stationName.value = ""
+        radioText.value = ""
 
         scope.launch {
             try {

@@ -308,6 +308,8 @@ object AudioCapture {
     val fft = FloatArray(64)
     @Volatile var bass = 0f
     @Volatile var treble = 0f
+    /** True while a real Visualizer is bound and capturing; false = the buffers above are stale. */
+    val active: Boolean get() = visualizer != null
 
     @Synchronized fun ensure(session: Int) {
         if (session == sessionId && visualizer != null) return

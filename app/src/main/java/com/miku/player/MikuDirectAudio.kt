@@ -135,6 +135,23 @@ object MikuDirectAudio {
         }
     }
 
+    /**
+     * BEST AUDIO MODE, always: force the CS43198 pair to HIGH gain.
+     *
+     * Per the standing audio-lockdown directive this device never runs a lower-quality path, and
+     * gain is part of that - LOW gain is what made IEMs sound quiet. Writes the Settings rows the
+     * HiBy framework/SystemUI read AND pushes the parameters into the audio HAL (the only
+     * root-free way to actually move the hardware; the old su/sysfs path silently no-opped).
+     * Idempotent and cheap; safe to call on every player start.
+     */
+    fun ensureMaxGain(ctx: Context) {
+        val cr = ctx.contentResolver
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", "high") }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", "high") }
+        pushToHal(ctx, "vendor.audio.hiby.hw.gain", "high")
+        pushToHal(ctx, "vendor.audio.hiby.gain", "high")
+    }
+
     /** Read the HAL's live direct-output state back for truthful verification. */
     fun status(ctx: Context): DirectStatus {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager

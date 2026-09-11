@@ -2963,19 +2963,39 @@ modifier = Modifier.clickable { onPlay(likedTracks, 0) }
     }
 }
 
-/** Live 4-bar equalizer: bars bounce while playing, hold steady when paused. */
+/**
+ * 4-bar level indicator for the current track row. The bars follow the REAL audio spectrum
+ * (AudioCapture's shared Visualizer, 4 averaged bands) whenever that capture is active; when it
+ * isn't (no Visualizer bound), they hold a steady "playing" glyph — never a synthesised sine bounce.
+ */
 @Composable private fun EqualizerBars(playing: Boolean, modifier: Modifier = Modifier) {
     val n = 4
-    // Manual time loop so the bars still bounce with device animations disabled (animator scale 0).
-    var phase by remember { mutableStateOf(0f) }
+    var levels by remember { mutableStateOf(FloatArray(n)) }
+    var live by remember { mutableStateOf(false) }
     LaunchedEffect(playing) {
-        if (!playing) return@LaunchedEffect
-        while (true) { phase += 0.20f; delay(45) }
+        if (!playing) { live = false; return@LaunchedEffect }
+        while (true) {
+            if (AudioCapture.active) {
+                val fft = AudioCapture.fft
+                val per = fft.size / n
+                val next = FloatArray(n) { b ->
+                    var s = 0f
+                    for (k in 0 until per) s += fft[b * per + k]
+                    (s / per).coerceIn(0f, 1f)
+                }
+                levels = next; live = true
+            } else live = false
+            delay(45)
+        }
     }
     Canvas(modifier) {
         val gap = size.width / (n * 2f - 1)
         for (i in 0 until n) {
-            val hf = if (playing) (0.55f + 0.42f * kotlin.math.sin((phase + i * 0.9f).toDouble()).toFloat()) else 0.4f
+            val hf = when {
+                playing && live -> 0.15f + 0.85f * levels[i]
+                playing -> 0.6f   // steady glyph: playing, but no capture bound — no fake motion
+                else -> 0.4f
+            }
             val bh = size.height * hf.coerceIn(0.15f, 1f)
             drawRoundRect(
                 MikuTealBright,
@@ -5896,8 +5916,12 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
                     .padding(horizontal = 8.dp, vertical = 3.dp)
             ) {
                 Text(
-                    if (syncState.isTransferring) "⚡ SYNCING" else "🟢 DAEMON LIVE",
-                    color = if (syncState.isTransferring) MikuPink else MikuTealBright,
+                    when {
+                        syncState.isTransferring -> "⚡ SYNCING"
+                        syncState.daemon.online -> "🟢 DAEMON LIVE"
+                        else -> "⚪ DAEMON OFFLINE"
+                    },
+                    color = if (syncState.isTransferring) MikuPink else if (syncState.daemon.online) MikuTealBright else Muted,
                     fontSize = 9.5.sp,
                     fontWeight = FontWeight.Black
                 )

@@ -287,7 +287,7 @@ fun MikuWeatherObservatoryModal(
                                         Column {
                                             Row(verticalAlignment = Alignment.Bottom) {
                                                 Text(
-                                                    text = "${weather.tempF.roundToInt()}°",
+                                                    text = weather.tempF.wxInt("°"),
                                                     color = Color.White,
                                                     fontSize = 32.sp,
                                                     fontWeight = FontWeight.Black,
@@ -304,14 +304,14 @@ fun MikuWeatherObservatoryModal(
                                                 )
                                             }
                                             Text(
-                                                text = "${weather.summary} · Feels ${weather.feelsLikeF.roundToInt()}°F",
+                                                text = "${weather.summary} · Feels ${weather.feelsLikeF.wxInt("°F")}",
                                                 color = Color.White,
                                                 fontSize = 10.5.sp,
                                                 fontWeight = FontWeight.Bold
                                             )
                                             Spacer(Modifier.height(1.dp))
                                             Text(
-                                                text = "▲ High ${weather.highTempF.roundToInt()}°F  ▼ Low ${weather.lowTempF.roundToInt()}°F",
+                                                text = "▲ High ${weather.highTempF.wxInt("°F")}  ▼ Low ${weather.lowTempF.wxInt("°F")}",
                                                 color = MikuTextSecondary,
                                                 fontSize = 8.5.sp
                                             )
@@ -422,16 +422,16 @@ fun MikuWeatherObservatoryModal(
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "WIND / GUSTS",
-                                        value = "${weather.windSpeedMph.roundToInt()} mph ${weather.windDirectionCompass}",
-                                        sub = "Gusts to ${weather.windGustMph.roundToInt()} mph",
+                                        value = "${weather.windSpeedMph.wxInt(" mph")} ${weather.windDirectionCompass}",
+                                        sub = if (weather.windGustMph.isNaN()) "Gusts not reported" else "Gusts to ${weather.windGustMph.wxInt(" mph")}",
                                         icon = Icons.Default.Air,
                                         color = MikuCyan
                                     )
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "HUMIDITY / DEW",
-                                        value = "${weather.humidityPct}%",
-                                        sub = "Dew Point ${weather.dewPointF.roundToInt()}°F",
+                                        value = if (weather.humidityPct < 0) "—" else "${weather.humidityPct}%",
+                                        sub = "Dew Point ${weather.dewPointF.wxInt("°F")}",
                                         icon = Icons.Default.WaterDrop,
                                         color = Color(0xFF2979FF)
                                     )
@@ -449,8 +449,8 @@ fun MikuWeatherObservatoryModal(
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "SOLAR / UV & AIR",
-                                        value = "UV ${weather.uvIndex.roundToInt()} · AQI ${weather.aqi}",
-                                        sub = "Air Quality: ${weather.aqiCategory}",
+                                        value = "UV ${weather.uvIndex.wxInt()} · AQI ${if (weather.aqi < 0) "—" else weather.aqi.toString()}",
+                                        sub = if (weather.aqiCategory.isEmpty()) "Air quality: not available" else "Air Quality: ${weather.aqiCategory}",
                                         icon = Icons.Default.WbSunny,
                                         color = Color(0xFFFF9100)
                                     )

@@ -49,15 +49,16 @@ object CirrusLogicManager {
         WIRED_AND_USB("wired_usb", "Wired DAC + USB-C External DAC", "Mirrors real-time audio across internal CS43198 DAC and external Type-C DAC")
     }
 
+    /** Live sysfs readout. "—" = that node could not be read; isHardwareSynced = at least one node read. */
     data class HardwareAuditState(
-        val kernelFilter: String = "nos",
-        val kernelGain: String = "low",
-        val kernelHighPower: String = "hpower_disable",
-        val kernelDre: String = "dremode_enable",
-        val kernelTurbo: String = "0",
-        val kernelOutput: String = "bal_po",
-        val kernelBalance: String = "0",
-        val isHardwareSynced: Boolean = true
+        val kernelFilter: String = "—",
+        val kernelGain: String = "—",
+        val kernelHighPower: String = "—",
+        val kernelDre: String = "—",
+        val kernelTurbo: String = "—",
+        val kernelOutput: String = "—",
+        val kernelBalance: String = "—",
+        val isHardwareSynced: Boolean = false
     )
 
     fun init(ctx: Context) {
@@ -122,13 +123,12 @@ object CirrusLogicManager {
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", gain.sysfsValue) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", gain.sysfsValue) }
 
-        RootShell.execFast(
-            "echo ${gain.sysfsValue} > $SYSFS_BASE/gain; " +
-            "settings put global vendor.audio.hiby.hw.gain ${gain.sysfsValue}; " +
-            "settings put global vendor.audio.hiby.gain ${gain.sysfsValue}; " +
-            "setprop vendor.audio.hiby.hw.gain ${gain.sysfsValue}; " +
-            "setprop vendor.audio.hiby.gain ${gain.sysfsValue}"
-        )
+        // Apply it for real. The old path shelled out to su (echo > sysfs / setprop) which is a
+        // guaranteed no-op on MikuOS (no root) - the Settings rows changed but the DAC stayed on
+        // whatever gain it booted with (found live 2026-09-11: hw.gain=low while the UI said
+        // otherwise, IEMs quiet). The HAL accepts these as parameters on the platform key.
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.gain", gain.sysfsValue)
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.gain", gain.sysfsValue)
     }
 
     fun getOutputMode(ctx: Context): OutputMode {
@@ -307,15 +307,23 @@ object CirrusLogicManager {
     }
 
     fun getLiveHardwareAudit(): HardwareAuditState {
+        val filter = readSysfs("digital_filter")
+        val gain = readSysfs("gain")
+        val hp = readSysfs("high_power_mode")
+        val dre = readSysfs("dre_mode")
+        val turbo = RootShell.execOut("getprop vendor.audio.hiby.hw.audio_turbo")?.trim()?.takeIf { it.isNotEmpty() }
+        val out = readSysfs("out_mode")
+        val bal = readSysfs("lr_balance")
+        // Unreadable nodes stay "—" (was a per-node "typical" default presented as the live value).
         return HardwareAuditState(
-            kernelFilter = readSysfs("digital_filter") ?: "nos",
-            kernelGain = readSysfs("gain") ?: "low",
-            kernelHighPower = readSysfs("high_power_mode") ?: "hpower_disable",
-            kernelDre = readSysfs("dre_mode") ?: "dremode_enable",
-            kernelTurbo = RootShell.execOut("getprop vendor.audio.hiby.hw.audio_turbo") ?: "0",
-            kernelOutput = readSysfs("out_mode") ?: "bal_po",
-            kernelBalance = readSysfs("lr_balance") ?: "0",
-            isHardwareSynced = true
+            kernelFilter = filter ?: "—",
+            kernelGain = gain ?: "—",
+            kernelHighPower = hp ?: "—",
+            kernelDre = dre ?: "—",
+            kernelTurbo = turbo ?: "—",
+            kernelOutput = out ?: "—",
+            kernelBalance = bal ?: "—",
+            isHardwareSynced = listOf(filter, gain, hp, dre, out, bal).any { it != null }
         )
     }
 }

@@ -27,7 +27,7 @@ object MikuBrain {
         AUDIO_DSP("Cirrus Audio & Real DSP"),
         LIBRARY_SCANNER("Media Indexer & Tag Scanner"),
         NETWORK_INGRESS("m500d Ingress & Rsync Transceiver"),
-        HARDWARE_IO("CS43131 DAC & Pulsar LED Driver"),
+        HARDWARE_IO("CS43198 DAC sysfs & I/O"),
         UI_RENDERER("Compose Surface & 60FPS Orchestrator")
     }
 
@@ -201,9 +201,9 @@ object MikuBrain {
                         val title = p?.mediaMetadata?.title?.toString()
                         val artist = p?.mediaMetadata?.artist?.toString()
                         val audioMsg = if (isPlaying) {
-                            "Direct ALSA Streaming: \"${title ?: "Audio"}\" ${if (artist != null) "by $artist" else ""}"
+                            "Playing: \"${title ?: "Audio"}\" ${if (artist != null) "by $artist" else ""}"
                         } else {
-                            "CS43131 Bit-Perfect Direct HAL · Standby / 0ms Buffer"
+                            "Player idle"
                         }
                         heartbeat(BoneType.AUDIO_DSP, if (isPlaying) BoneState.ACTIVE else BoneState.IDLE, audioMsg, if (isPlaying) 1 else 0)
                     } catch (_: Throwable) {}
@@ -216,11 +216,13 @@ object MikuBrain {
                         val wifi = net.wifi
                         val isConnected = wifi.isConnected && wifi.ssid.isNotEmpty() && wifi.ssid != "<unknown ssid>"
                         val netMsg = if (isConnected) {
-                            "Wi-Fi: ${wifi.ssid} (${wifi.linkSpeedMbps} Mbps · ${wifi.rssiDbm} dBm)"
-                        } else if (net.cellular.isConnected) {
-                            "Cellular LTE: ${net.cellular.networkType} (${net.cellular.carrierName})"
+                            "Wi-Fi: ${wifi.ssid} (${if (wifi.linkSpeedMbps > 0) "${wifi.linkSpeedMbps} Mbps" else "link —"} · ${wifi.rssiDbm?.let { "$it dBm" } ?: "RSSI —"})"
+                        } else if (net.activeTransport == "CELLULAR") {
+                            "Cellular ${net.cellular.networkType.ifEmpty { "—" }} (${net.cellular.carrierName.ifEmpty { "operator —" }})"
+                        } else if (net.isScanning) {
+                            "Wi-Fi scan in progress"
                         } else {
-                            "Autonomous Scanner Active · Standby"
+                            "No network link"
                         }
                         heartbeat(BoneType.NETWORK_INGRESS, if (isConnected || net.isScanning) BoneState.ACTIVE else BoneState.IDLE, netMsg, if (isConnected) 1 else 0)
                     } catch (_: Throwable) {}
@@ -228,22 +230,34 @@ object MikuBrain {
                     // ========================================================
                     // 3. AUTONOMOUS LIVE PROBE: MEDIA SCANNER & TAG INDEXER
                     // ========================================================
+                    // Real scanner state from ScanProgress (was an always-"Synchronized" constant).
                     try {
-                        heartbeat(BoneType.LIBRARY_SCANNER, BoneState.ACTIVE, "Fast Binary Store Synchronized · Cache Nominal", 0)
+                        val scanning = ScanProgress.active
+                        val scanMsg = if (scanning) {
+                            "${ScanProgress.phase.ifEmpty { "Scanning" }} · ${ScanProgress.visited.get()} files visited, ${ScanProgress.newFound.get()} new"
+                        } else if (ScanProgress.resultTotal > 0) {
+                            "Idle · last scan: ${ScanProgress.resultTotal} tracks (${if (ScanProgress.resultDelta >= 0) "+" else ""}${ScanProgress.resultDelta})"
+                        } else "Idle · no scan completed in this process"
+                        heartbeat(BoneType.LIBRARY_SCANNER, if (scanning) BoneState.ACTIVE else BoneState.IDLE, scanMsg, if (scanning) 1 else 0)
                     } catch (_: Throwable) {}
 
                     // ========================================================
-                    // 4. AUTONOMOUS LIVE PROBE: HARDWARE I/O & SENSORS
+                    // 4. AUTONOMOUS LIVE PROBE: HARDWARE I/O — reports only what is actually readable
+                    //    (the DAC sysfs nodes). No claims about the RGB light, which has no working driver here.
                     // ========================================================
                     try {
-                        heartbeat(BoneType.HARDWARE_IO, BoneState.ACTIVE, "CS43131 Dual DAC Sysfs · SGM31324 RGB PWM Active", 1)
+                        val audit = CirrusLogicManager.getLiveHardwareAudit()
+                        val hwMsg = if (audit.isHardwareSynced) {
+                            "DAC sysfs readable · filter ${audit.kernelFilter} · gain ${audit.kernelGain} · out ${audit.kernelOutput}"
+                        } else "DAC sysfs not readable"
+                        heartbeat(BoneType.HARDWARE_IO, if (audit.isHardwareSynced) BoneState.ACTIVE else BoneState.ERROR, hwMsg, if (audit.isHardwareSynced) 1 else 0)
                     } catch (_: Throwable) {}
 
                     // ========================================================
-                    // 5. AUTONOMOUS LIVE PROBE: UI RENDERER & COMPOSITOR
+                    // 5. AUTONOMOUS LIVE PROBE: UI RENDERER — only the fact we can observe (recent touch activity).
                     // ========================================================
                     try {
-                        val uiMsg = if (uiUnderLoad) "Touch Interaction Engaged · Background Yielding" else "60 FPS VSync Fluid · Compositor Synchronized"
+                        val uiMsg = if (uiUnderLoad) "Touch interaction in the last 1.5 s · background work yielding" else "No recent touch input"
                         heartbeat(BoneType.UI_RENDERER, if (uiUnderLoad) BoneState.ACTIVE else BoneState.IDLE, uiMsg, if (uiUnderLoad) 1 else 0)
                     } catch (_: Throwable) {}
 

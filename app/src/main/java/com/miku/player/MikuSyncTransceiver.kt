@@ -53,10 +53,13 @@ object MikuSyncTransceiver {
         return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC).absolutePath
     }
 
-    enum class TransportType(val label: String, val badge: String, val maxSpeedMBs: Int) {
-        USB_HIGH_SPEED("USB 2.0 High-Speed Link", "⚡ USB (45 MB/s)", 45),
-        WIFI_DIRECT("5GHz Wi-Fi Wireless Link", "📶 Wi-Fi (18.5 MB/s)", 19),
-        DISCONNECTED("No Active Link", "⚪ Offline", 0)
+    /** Transport as reported by ConnectivityManager. Badges carry NO speed claims — the only
+     *  throughput figures shown anywhere are measured (transferRateMBs / SpeedTestResult). */
+    enum class TransportType(val label: String, val badge: String) {
+        USB_HIGH_SPEED("USB / Ethernet Link", "⚡ USB / Ethernet"),
+        WIFI_DIRECT("Wi-Fi Link", "📶 Wi-Fi"),
+        DAEMON_ONLY("Daemon reachable (transport not reported)", "🔗 Daemon link"),
+        DISCONNECTED("No Active Link", "⚪ Offline")
     }
 
     data class SpeedTestResult(
@@ -101,7 +104,7 @@ object MikuSyncTransceiver {
         val fetchRateBps: Double = 0.0,
         val pushRateBps: Double = 0.0,
         val serverLoad: String = "",
-        val serverReachable: Boolean = true,
+        val serverReachable: Boolean = false,
         val failures: List<String> = emptyList(),
         val workers: List<WorkerInfo> = emptyList(),
         val sdCardFreeBytes: Long = 0L,
@@ -127,7 +130,8 @@ object MikuSyncTransceiver {
         val activeHost: String = "127.0.0.1",
         val eventLogs: List<String> = emptyList(),
         val throughputHistory: List<Float> = emptyList(),
-        val beaconAck: String = "UDP 8788 ENGAGED"
+        /** Last beacon acknowledgement text; empty until one is actually received. */
+        val beaconAck: String = ""
     )
 
     private val _state = MutableStateFlow(SyncState())
@@ -304,7 +308,8 @@ object MikuSyncTransceiver {
                         }
                     }
 
-                    val transport = if (daemon.online) TransportType.USB_HIGH_SPEED else detectTransport(ctx)
+                    // The daemon being reachable says nothing about the physical link — always detect it.
+                    val transport = detectTransport(ctx)
                     val ip = if (daemon.online) activeHost else getDeviceIpAddress(ctx)
 
                     _state.value = _state.value.copy(
@@ -420,11 +425,9 @@ object MikuSyncTransceiver {
                 val durationMs = (SystemClock.elapsedRealtime() - start).coerceAtLeast(1L)
                 val speedMBs = (bytesRead.toFloat() / (1024f * 1024f)) / (durationMs.toFloat() / 1000f)
 
-                val tier = when {
-                    speedMBs > 35f -> "⚡ USB 2.0 High-Speed Hardware Channel"
-                    speedMBs > 10f -> "📶 5GHz Wi-Fi AC Direct Link"
-                    else -> "📶 2.4GHz Wi-Fi Standard Channel"
-                }
+                // Label = the REAL detected transport; the speed is the measurement itself. No
+                // inferring "USB" / "5GHz" / "2.4GHz" from a throughput number.
+                val tier = "${_state.value.transport.badge} · measured"
                 val result = SpeedTestResult(speedMBs, durationMs, tier, System.currentTimeMillis())
                 _state.value = _state.value.copy(speedTest = result)
                 withContext(Dispatchers.Main) { onProgress(result) }
@@ -630,9 +633,9 @@ object MikuSyncTransceiver {
         val caps = cm.getNetworkCapabilities(net)
 
         return when {
-            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true -> TransportType.USB_HIGH_SPEED
+            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true || caps?.hasTransport(NetworkCapabilities.TRANSPORT_USB) == true -> TransportType.USB_HIGH_SPEED
             caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> TransportType.WIFI_DIRECT
-            _state.value.daemon.online -> TransportType.USB_HIGH_SPEED
+            _state.value.daemon.online -> TransportType.DAEMON_ONLY
             else -> TransportType.DISCONNECTED
         }
     }

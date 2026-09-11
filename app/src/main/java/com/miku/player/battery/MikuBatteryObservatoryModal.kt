@@ -65,162 +65,186 @@ fun getBatteryColorForPercent(pct: Int, isCharging: Boolean): Color {
     return Color.hsv(hue, 0.92f, 1.0f)
 }
 
+/**
+ * Real battery telemetry only. Every field is nullable: null means the source (BATTERY_CHANGED,
+ * the fuel-gauge / charger power_supply sysfs nodes, the thermal zones) did not report it, and
+ * the UI shows "—" for it. Nothing here is estimated, defaulted or modelled.
+ */
 data class RealHardwareBatteryTelemetry(
-    val level: Int = 100,
+    val level: Int? = null,
     val isCharging: Boolean = false,
-    val status: String = "Discharging",
-    val plugType: String = "Internal Cell",
-    val voltageMv: Int = 3890,
-    val currentMa: Int = -285, // mA (negative = discharge)
-    val powerMw: Int = 1108,   // mW
-    val tempC: Float = 30.0f,
-    val chargerTempC: Float = 30.0f,
-    val cpuTempC: Float = 52.0f,
-    val health: String = "Optimal (100%)",
-    val tech: String = "Li-ion Polymer",
-    val fuelGaugeChip: String = "CellWise CW2015",
-    val chargerPmicChip: String = "MPS MP2731",
-    val maxChargeCurrentMa: Int = 4520,
-    val inputCurrentLimitMa: Int = 2000,
-    val termVoltageMv: Int = 4200,
-    val designCapacityMah: Int = 4500,
-    val remainingMah: Int = 2835,
-    val estTimeToEmptyMin: Int = 596,
-    val estTimeToFullMin: Int = 0
+    val status: String? = null,
+    val plugType: String? = null,
+    val voltageMv: Int? = null,
+    val currentMa: Int? = null, // mA (negative = discharge), from the charger/fuel-gauge sysfs only
+    val powerMw: Int? = null,   // mW, derived only when BOTH voltage and current are real
+    val tempC: Float? = null,
+    val chargerTempC: Float? = null,
+    val cpuTempC: Float? = null,
+    val health: String? = null,
+    val tech: String? = null,
+    val fuelGaugeChip: String? = null,   // present only when its power_supply node exists
+    val chargerPmicChip: String? = null,
+    val maxChargeCurrentMa: Int? = null,
+    val inputCurrentLimitMa: Int? = null,
+    val termVoltageMv: Int? = null,
+    val designCapacityMah: Int? = null,  // charge_full_design from sysfs, else unknown
+    val remainingMah: Int? = null,       // charge_now from sysfs, else unknown
+    val estTimeToEmptyMin: Int? = null,  // BatteryManager.computeChargeTimeRemaining / real current only
+    val estTimeToFullMin: Int? = null
 )
 
-fun readRealHardwareBattery(context: Context): RealHardwareBatteryTelemetry {
-    var level = 100
-    var isCharging = false
-    var status = "Discharging"
-    var plugType = "Internal Battery"
-    var voltageMv = 3890
-    var currentMa = -285
-    var tempC = 30.0f
-    var chargerTempC = 30.0f
-    var cpuTempC = 52.0f
-    var health = "Good"
-    var tech = "Li-ion"
-    var inputCurrentLimitMa = 2000
-    var maxChargeCurrentMa = 4520
-    var termVoltageMv = 4200
+private fun readSysfsLong(path: String): Long? = try {
+    val f = File(path)
+    if (f.exists()) f.readText().trim().toLongOrNull() else null
+} catch (_: Throwable) { null }
 
-    // 1. Read Android Battery Intent
+private fun readSysfsText(path: String): String? = try {
+    val f = File(path)
+    if (f.exists()) f.readText().trim().takeIf { it.isNotEmpty() } else null
+} catch (_: Throwable) { null }
+
+/** First directory under /sys/class/power_supply whose name contains any of [needles]. */
+private fun findPowerSupply(vararg needles: String): File? = try {
+    File("/sys/class/power_supply").listFiles()?.firstOrNull { d ->
+        needles.any { d.name.contains(it, ignoreCase = true) }
+    }
+} catch (_: Throwable) { null }
+
+/** First thermal zone whose `type` matches [pred]; resolved by name, never by a fixed index. */
+private fun findThermalZone(pred: (String) -> Boolean): File? = try {
+    File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }?.firstOrNull { z ->
+        val type = runCatching { File(z, "type").readText().trim().lowercase() }.getOrDefault("")
+        pred(type)
+    }?.let { File(it, "temp") }
+} catch (_: Throwable) { null }
+
+private fun readThermalC(zone: File?): Float? {
+    val raw = runCatching { zone?.takeIf { it.exists() }?.readText()?.trim()?.toFloatOrNull() }.getOrNull() ?: return null
+    return if (raw > 1000f) raw / 1000f else raw
+}
+
+fun readRealHardwareBattery(context: Context): RealHardwareBatteryTelemetry {
+    var level: Int? = null
+    var isCharging = false
+    var status: String? = null
+    var plugType: String? = null
+    var voltageMv: Int? = null
+    var currentMa: Int? = null
+    var tempC: Float? = null
+    var health: String? = null
+    var tech: String? = null
+    var inputCurrentLimitMa: Int? = null
+    var maxChargeCurrentMa: Int? = null
+    var termVoltageMv: Int? = null
+    var designCapacityMah: Int? = null
+    var remainingMah: Int? = null
+
+    // 1. Sticky BATTERY_CHANGED — the framework's own reading.
     try {
-        val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-        val bIntent = context.registerReceiver(null, ifilter)
+        val bIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         if (bIntent != null) {
             val rawLevel = bIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
             val scale = bIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-            if (rawLevel >= 0 && scale > 0) {
-                level = (rawLevel * 100) / scale
-            }
+            if (rawLevel >= 0 && scale > 0) level = (rawLevel * 100) / scale
             val st = bIntent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
             isCharging = st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL
             status = when (st) {
-                BatteryManager.BATTERY_STATUS_CHARGING -> "Fast Charging"
-                BatteryManager.BATTERY_STATUS_FULL -> "Full (Trickle)"
+                BatteryManager.BATTERY_STATUS_CHARGING -> "Charging"
+                BatteryManager.BATTERY_STATUS_FULL -> "Full"
                 BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "Not Charging"
-                else -> "Discharging"
+                BatteryManager.BATTERY_STATUS_DISCHARGING -> "Discharging"
+                else -> null
             }
-            voltageMv = bIntent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 3890)
-            val rawTemp = bIntent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 300)
-            tempC = rawTemp / 10f
-            tech = bIntent.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY) ?: "Li-ion"
+            bIntent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1).takeIf { it > 0 }?.let { voltageMv = it }
+            bIntent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE).takeIf { it != Int.MIN_VALUE }?.let { tempC = it / 10f }
+            tech = bIntent.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY)?.takeIf { it.isNotBlank() }
 
             val plugged = bIntent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
             plugType = when (plugged) {
-                BatteryManager.BATTERY_PLUGGED_AC -> "Type-C Fast Power Delivery"
-                BatteryManager.BATTERY_PLUGGED_USB -> "Type-C Standard USB SDP"
-                BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless Qi Induction"
-                else -> "Li-ion Internal Pack"
+                BatteryManager.BATTERY_PLUGGED_AC -> "Type-C AC charger"
+                BatteryManager.BATTERY_PLUGGED_USB -> "Type-C USB host"
+                BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
+                0 -> "On battery"
+                else -> null
             }
 
-            val healthCode = bIntent.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)
-            health = when (healthCode) {
-                BatteryManager.BATTERY_HEALTH_GOOD -> "Optimal / 100% SOH"
-                BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Thermal Throttling (>45°C)"
-                BatteryManager.BATTERY_HEALTH_DEAD -> "Degraded Pack"
-                BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Overvoltage (>4.45V)"
-                else -> "Nominal Condition"
+            health = when (bIntent.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)) {
+                BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
+                BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
+                BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
+                BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over voltage"
+                BatteryManager.BATTERY_HEALTH_COLD -> "Cold"
+                BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> "Failure"
+                else -> null
             }
         }
     } catch (_: Throwable) {}
 
-    // 2. Read Real CellWise CW2015 Fuel Gauge Sysfs
-    try {
-        val vFile = File("/sys/class/power_supply/cw2015/voltage_now")
-        if (vFile.exists()) {
-            val uv = vFile.readText().trim().toIntOrNull()
-            if (uv != null && uv > 1000) {
-                voltageMv = uv / 1000
-            }
-        }
-        val tFile = File("/sys/class/power_supply/cw2015/temp")
-        if (tFile.exists()) {
-            val tRaw = tFile.readText().trim().toFloatOrNull()
-            if (tRaw != null) tempC = tRaw / 10f
-        }
-    } catch (_: Throwable) {}
-
-    // 3. Read Real Monolithic Power MP2731 Switch Charger Sysfs
-    try {
-        val curFile = File("/sys/class/power_supply/mp2731-charger/current_now")
-        if (curFile.exists()) {
-            val ua = curFile.readText().trim().toIntOrNull()
-            if (ua != null && ua != 0) {
-                currentMa = ua / 1000
-            }
-        }
-        val inLimitFile = File("/sys/class/power_supply/mp2731-charger/input_current_limit")
-        if (inLimitFile.exists()) {
-            val ua = inLimitFile.readText().trim().toIntOrNull()
-            if (ua != null && ua > 0) inputCurrentLimitMa = ua / 1000
-        }
-        val maxCurFile = File("/sys/class/power_supply/mp2731-charger/constant_charge_current_max")
-        if (maxCurFile.exists()) {
-            val ua = maxCurFile.readText().trim().toIntOrNull()
-            if (ua != null && ua > 0) maxChargeCurrentMa = ua / 1000
-        }
-        val termVoltFile = File("/sys/class/power_supply/mp2731-charger/constant_charge_voltage")
-        if (termVoltFile.exists()) {
-            val uv = termVoltFile.readText().trim().toIntOrNull()
-            if (uv != null && uv > 0) termVoltageMv = uv / 1000
-        }
-    } catch (_: Throwable) {}
-
-    // 4. Read Real Qualcomm CPU Thermal Zone
-    try {
-        val cpuThermal = File("/sys/class/thermal/thermal_zone21/temp") // cpu-1-0
-        if (cpuThermal.exists()) {
-            val raw = cpuThermal.readText().trim().toFloatOrNull()
-            if (raw != null && raw > 1000) cpuTempC = raw / 1000f
-        }
-        val pmicThermal = File("/sys/class/thermal/thermal_zone16/temp") // mp2731-charger
-        if (pmicThermal.exists()) {
-            val raw = pmicThermal.readText().trim().toFloatOrNull()
-            if (raw != null && raw > 1000) chargerTempC = raw / 1000f
-        }
-    } catch (_: Throwable) {}
-
-    // Estimated current if idle/discharging (180mA - 420mA depending on volume & DAC)
-    if (!isCharging && currentMa >= 0) {
-        val baseDrain = 220 + (level % 15) * 5
-        currentMa = -baseDrain
+    // 2. Fuel gauge power_supply node (CW2015 on this board) — only what it actually exposes.
+    val gauge = findPowerSupply("cw2015", "bms", "fuel")
+    if (gauge != null) {
+        readSysfsLong("${gauge.path}/voltage_now")?.takeIf { it > 1000 }?.let { voltageMv = (it / 1000).toInt() }
+        readSysfsLong("${gauge.path}/temp")?.let { tempC = it / 10f }
+        readSysfsLong("${gauge.path}/charge_full_design")?.takeIf { it > 0 }?.let { designCapacityMah = (it / 1000).toInt() }
+        readSysfsLong("${gauge.path}/charge_now")?.takeIf { it > 0 }?.let { remainingMah = (it / 1000).toInt() }
+        readSysfsLong("${gauge.path}/current_now")?.takeIf { it != 0L }?.let { currentMa = (it / 1000).toInt() }
     }
 
-    val powerMw = ((voltageMv.toFloat() * kotlin.math.abs(currentMa)) / 1000f).roundToInt()
-    val designCapacityMah = 4500
-    val remainingMah = ((designCapacityMah * (level / 100f))).roundToInt()
+    // 3. Switch-charger power_supply node (MP2731 on this board).
+    val charger = findPowerSupply("mp2731", "charger")
+    if (charger != null) {
+        readSysfsLong("${charger.path}/current_now")?.takeIf { it != 0L }?.let { currentMa = (it / 1000).toInt() }
+        readSysfsLong("${charger.path}/input_current_limit")?.takeIf { it > 0 }?.let { inputCurrentLimitMa = (it / 1000).toInt() }
+        readSysfsLong("${charger.path}/constant_charge_current_max")?.takeIf { it > 0 }?.let { maxChargeCurrentMa = (it / 1000).toInt() }
+        readSysfsLong("${charger.path}/constant_charge_voltage")?.takeIf { it > 0 }?.let { termVoltageMv = (it / 1000).toInt() }
+    }
 
-    val estTimeToEmptyMin = if (!isCharging && currentMa < 0) {
-        ((remainingMah.toFloat() / kotlin.math.abs(currentMa)) * 60f).roundToInt().coerceIn(15, 2400)
-    } else 0
+    // 3b. Generic "battery" node as a further real source for capacity / current.
+    val batteryNode = findPowerSupply("battery")
+    if (batteryNode != null) {
+        if (designCapacityMah == null) readSysfsLong("${batteryNode.path}/charge_full_design")?.takeIf { it > 0 }?.let { designCapacityMah = (it / 1000).toInt() }
+        if (remainingMah == null) readSysfsLong("${batteryNode.path}/charge_now")?.takeIf { it > 0 }?.let { remainingMah = (it / 1000).toInt() }
+        if (currentMa == null) readSysfsLong("${batteryNode.path}/current_now")?.takeIf { it != 0L }?.let { currentMa = (it / 1000).toInt() }
+    }
+    // BatteryManager's own current property (µA) is a real reading too; use it if sysfs had none.
+    if (currentMa == null) runCatching {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val ua = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+        if (ua != 0 && ua != Int.MIN_VALUE) currentMa = ua / 1000
+    }
+    if (remainingMah == null) runCatching {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val uah = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CHARGE_COUNTER)
+        if (uah > 0 && uah != Int.MIN_VALUE) remainingMah = uah / 1000
+    }
 
-    val estTimeToFullMin = if (isCharging) {
-        val effectiveChargeMa = if (currentMa > 0) currentMa else 1500
-        (((designCapacityMah - remainingMah).toFloat() / effectiveChargeMa) * 60f).roundToInt().coerceIn(5, 240)
-    } else 0
+    // 4. Thermal zones resolved by type name (hottest cpu zone; the charger PMIC zone).
+    val cpuTempC = try {
+        File("/sys/class/thermal").listFiles { f -> f.name.startsWith("thermal_zone") }
+            ?.filter { z -> runCatching { File(z, "type").readText().trim().lowercase() }.getOrDefault("").let { it.startsWith("cpu") } }
+            ?.mapNotNull { readThermalC(File(it, "temp")) }?.maxOrNull()
+    } catch (_: Throwable) { null }
+    val chargerTempC = readThermalC(findThermalZone { it.contains("mp2731") || it.contains("charger") || it.contains("chg") })
+
+    val powerMw = if (voltageMv != null && currentMa != null) ((voltageMv!!.toFloat() * kotlin.math.abs(currentMa!!)) / 1000f).roundToInt() else null
+
+    // Time estimates: the framework's own estimate when it has one, otherwise a pure
+    // (real remaining charge / real measured current) ratio — never a guessed current.
+    var estTimeToEmptyMin: Int? = null
+    var estTimeToFullMin: Int? = null
+    if (isCharging) {
+        runCatching {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val ms = bm.computeChargeTimeRemaining()
+            if (ms > 0) estTimeToFullMin = (ms / 60_000L).toInt()
+        }
+        if (estTimeToFullMin == null && designCapacityMah != null && remainingMah != null && currentMa != null && currentMa!! > 0) {
+            estTimeToFullMin = (((designCapacityMah!! - remainingMah!!).toFloat() / currentMa!!) * 60f).roundToInt().coerceAtLeast(0)
+        }
+    } else if (remainingMah != null && currentMa != null && currentMa!! < 0) {
+        estTimeToEmptyMin = ((remainingMah!!.toFloat() / kotlin.math.abs(currentMa!!)) * 60f).roundToInt().coerceAtLeast(0)
+    }
 
     return RealHardwareBatteryTelemetry(
         level = level,
@@ -235,8 +259,8 @@ fun readRealHardwareBattery(context: Context): RealHardwareBatteryTelemetry {
         cpuTempC = cpuTempC,
         health = health,
         tech = tech,
-        fuelGaugeChip = "CellWise CW2015 Fuel Gauge IC",
-        chargerPmicChip = "Monolithic Power MP2731 Fast PMIC",
+        fuelGaugeChip = gauge?.let { readSysfsText("${it.path}/model_name") ?: it.name },
+        chargerPmicChip = charger?.let { readSysfsText("${it.path}/model_name") ?: it.name },
         maxChargeCurrentMa = maxChargeCurrentMa,
         inputCurrentLimitMa = inputCurrentLimitMa,
         termVoltageMv = termVoltageMv,
@@ -246,6 +270,11 @@ fun readRealHardwareBattery(context: Context): RealHardwareBatteryTelemetry {
         estTimeToFullMin = estTimeToFullMin
     )
 }
+
+private const val NA = "—"
+private fun Int?.orNa(suffix: String = ""): String = this?.let { "$it$suffix" } ?: NA
+private fun Float?.fmt1(suffix: String = ""): String = this?.let { String.format(Locale.US, "%.1f", it) + suffix } ?: NA
+private fun minutesLabel(min: Int?): String = min?.let { "${it / 60}h ${it % 60}m" } ?: NA
 
 /**
  * Hatsune Miku Quantum Power Cell & Battery Observatory Cockpit Modal.
@@ -257,25 +286,25 @@ fun MikuBatteryObservatoryModal(
 ) {
     val ctx = LocalContext.current
     var telemetry by remember { mutableStateOf(readRealHardwareBattery(ctx)) }
-    var currentHistory by remember { mutableStateOf(listOf(280, 290, 310, 285, 320, 295, 310, 305, 290, 285, 300, 295)) }
-    var voltageHistory by remember { mutableStateOf(listOf(3890, 3890, 3889, 3888, 3888, 3887, 3886, 3886, 3885, 3885, 3884, 3883)) }
-    var selectedProfile by remember { mutableStateOf("Audiophile Direct DAC") }
+    // Sparkline history starts EMPTY and fills only with real samples (no seeded fake curve).
+    var currentHistory by remember { mutableStateOf(listOf<Int>()) }
+    var voltageHistory by remember { mutableStateOf(listOf<Int>()) }
+    // The profile selector drives the REAL power governor (Settings.Global miku_power_mode).
+    LaunchedEffect(Unit) { com.miku.player.MikuPowerGovernor.init(ctx) }
+    val governorMode = com.miku.player.MikuPowerGovernor.mode
 
     LaunchedEffect(Unit) {
         while (true) {
             val t = withContext(Dispatchers.IO) { readRealHardwareBattery(ctx) }
             telemetry = t
-            val currentAbsMa = kotlin.math.abs(t.currentMa)
-            currentHistory = (currentHistory.drop(1) + currentAbsMa)
-            voltageHistory = (voltageHistory.drop(1) + t.voltageMv)
+            t.currentMa?.let { ma -> currentHistory = (currentHistory + kotlin.math.abs(ma)).takeLast(12) }
+            t.voltageMv?.let { mv -> voltageHistory = (voltageHistory + mv).takeLast(12) }
             delay(1200L)
         }
     }
 
-    val batteryColor = getBatteryColorForPercent(telemetry.level, telemetry.isCharging)
-    val tempF = (telemetry.tempC * 9f / 5f) + 32f
-    val chargerTempF = (telemetry.chargerTempC * 9f / 5f) + 32f
-    val cpuTempF = (telemetry.cpuTempC * 9f / 5f) + 32f
+    val batteryColor = getBatteryColorForPercent(telemetry.level ?: 0, telemetry.isCharging)
+    val tempF = telemetry.tempC?.let { (it * 9f / 5f) + 32f }
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -384,7 +413,7 @@ fun MikuBatteryObservatoryModal(
                                         letterSpacing = 0.8.sp
                                     )
                                     Text(
-                                        text = "HW: ${telemetry.fuelGaugeChip} · ${telemetry.chargerPmicChip}",
+                                        text = "HW: ${telemetry.fuelGaugeChip ?: "gauge —"} · ${telemetry.chargerPmicChip ?: "charger —"}",
                                         color = MikuCyan,
                                         fontSize = 7.sp,
                                         fontWeight = FontWeight.Bold,
@@ -439,7 +468,7 @@ fun MikuBatteryObservatoryModal(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Row(verticalAlignment = Alignment.Bottom) {
                                         Text(
-                                            text = "${telemetry.level}%",
+                                            text = telemetry.level?.let { "$it%" } ?: NA,
                                             color = batteryColor,
                                             fontSize = 38.sp,
                                             fontWeight = FontWeight.Black,
@@ -447,7 +476,7 @@ fun MikuBatteryObservatoryModal(
                                         )
                                         Spacer(Modifier.width(8.dp))
                                         Text(
-                                            text = "${telemetry.remainingMah} / ${telemetry.designCapacityMah} mAh",
+                                            text = "${telemetry.remainingMah.orNa()} / ${telemetry.designCapacityMah.orNa()} mAh",
                                             color = Color.White.copy(alpha = 0.9f),
                                             fontSize = 11.sp,
                                             fontWeight = FontWeight.Bold,
@@ -456,8 +485,8 @@ fun MikuBatteryObservatoryModal(
                                         )
                                     }
                                     Text(
-                                        text = if (telemetry.isCharging) "⚡ ${telemetry.status} · ${telemetry.estTimeToFullMin}m to full"
-                                               else "🔋 Estimated runtime: ${telemetry.estTimeToEmptyMin / 60}h ${telemetry.estTimeToEmptyMin % 60}m remaining (${telemetry.powerMw} mW)",
+                                        text = if (telemetry.isCharging) "⚡ ${telemetry.status ?: "Charging"} · ${telemetry.estTimeToFullMin?.let { "${it}m to full" } ?: "time to full —"}"
+                                               else "🔋 ${telemetry.status ?: "On battery"} · runtime ${minutesLabel(telemetry.estTimeToEmptyMin)} · ${telemetry.powerMw.orNa(" mW")}",
                                         color = if (telemetry.isCharging) Color(0xFF00E676) else Color.White,
                                         fontSize = 9.sp,
                                         fontWeight = FontWeight.Bold,
@@ -477,7 +506,8 @@ fun MikuBatteryObservatoryModal(
                                         Color(0xFFFF1744)  // Cell 1 (0-14%)
                                     )
                                 }
-                                val filledCount = ((telemetry.level.coerceIn(0, 100) * 7 + 50) / 100).coerceIn(if (telemetry.level > 0) 1 else 0, 7)
+                                val lvl = telemetry.level ?: 0
+                                val filledCount = ((lvl.coerceIn(0, 100) * 7 + 50) / 100).coerceIn(if (lvl > 0) 1 else 0, 7)
 
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -517,14 +547,14 @@ fun MikuBatteryObservatoryModal(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "⚡ REAL-TIME VOLTAGE & POWER DRAIN CURVE",
+                                        text = if (currentHistory.isEmpty() && voltageHistory.isEmpty()) "⚡ VOLTAGE & CURRENT — NO SAMPLES YET" else "⚡ VOLTAGE & CURRENT (LAST ${maxOf(currentHistory.size, voltageHistory.size)} SAMPLES)",
                                         color = batteryColor,
                                         fontSize = 7.5.sp,
                                         fontWeight = FontWeight.Bold,
                                         fontFamily = AudiowideFont
                                     )
                                     Text(
-                                        text = "${if (telemetry.isCharging) "+" else ""}${telemetry.currentMa} mA · ${telemetry.powerMw} mW",
+                                        text = "${telemetry.currentMa?.let { (if (it > 0) "+" else "") + it } ?: NA} mA · ${telemetry.powerMw.orNa(" mW")}",
                                         color = if (telemetry.isCharging) Color(0xFF00E676) else Color(0xFFFFD600),
                                         fontSize = 8.sp,
                                         fontWeight = FontWeight.Black,
@@ -541,8 +571,6 @@ fun MikuBatteryObservatoryModal(
                                 ) {
                                     val w = size.width
                                     val h = size.height
-                                    val maxVal = (currentHistory.maxOrNull() ?: 600).coerceAtLeast(300)
-                                    val step = w / (currentHistory.size - 1).coerceAtLeast(1)
 
                                     // Baseline zero grid line
                                     drawLine(
@@ -552,33 +580,42 @@ fun MikuBatteryObservatoryModal(
                                         strokeWidth = 0.8.dp.toPx()
                                     )
 
-                                    // Current Drain Wave (Cyan/Orange)
-                                    val currentPath = Path()
-                                    currentHistory.forEachIndexed { idx, v ->
-                                        val x = idx * step
-                                        val y = (1f - (v.toFloat() / maxVal)) * (h * 0.85f)
-                                        if (idx == 0) currentPath.moveTo(x, y) else currentPath.lineTo(x, y)
+                                    // Current curve — only real samples; a single sample draws a dot, none draws nothing.
+                                    if (currentHistory.isNotEmpty()) {
+                                        val maxVal = (currentHistory.maxOrNull() ?: 1).coerceAtLeast(1)
+                                        val step = w / (currentHistory.size - 1).coerceAtLeast(1)
+                                        val currentPath = Path()
+                                        currentHistory.forEachIndexed { idx, v ->
+                                            val x = idx * step
+                                            val y = (1f - (v.toFloat() / maxVal)) * (h * 0.85f)
+                                            if (idx == 0) currentPath.moveTo(x, y) else currentPath.lineTo(x, y)
+                                        }
+                                        if (currentHistory.size == 1) {
+                                            drawCircle(if (telemetry.isCharging) Color(0xFF00E676) else Color(0xFFFF9100), radius = 2.dp.toPx(), center = Offset(0f, (1f - (currentHistory[0].toFloat() / maxVal)) * (h * 0.85f)))
+                                        } else drawPath(
+                                            path = currentPath,
+                                            color = if (telemetry.isCharging) Color(0xFF00E676) else Color(0xFFFF9100),
+                                            style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
+                                        )
                                     }
-                                    drawPath(
-                                        path = currentPath,
-                                        color = if (telemetry.isCharging) Color(0xFF00E676) else Color(0xFFFF9100),
-                                        style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round)
-                                    )
 
-                                    // Voltage Curve Overlay (Electric Cyan)
-                                    val voltPath = Path()
-                                    val minV = 3600f
-                                    val maxV = 4400f
-                                    voltageHistory.forEachIndexed { idx, v ->
-                                        val x = idx * step
-                                        val y = (1f - ((v - minV) / (maxV - minV)).coerceIn(0f, 1f)) * (h * 0.85f)
-                                        if (idx == 0) voltPath.moveTo(x, y) else voltPath.lineTo(x, y)
+                                    // Voltage curve overlay — scaled to the real sampled min/max.
+                                    if (voltageHistory.size >= 2) {
+                                        val step = w / (voltageHistory.size - 1).coerceAtLeast(1)
+                                        val minV = (voltageHistory.minOrNull() ?: 0) - 5f
+                                        val maxV = (voltageHistory.maxOrNull() ?: 1) + 5f
+                                        val voltPath = Path()
+                                        voltageHistory.forEachIndexed { idx, v ->
+                                            val x = idx * step
+                                            val y = (1f - ((v - minV) / (maxV - minV)).coerceIn(0f, 1f)) * (h * 0.85f)
+                                            if (idx == 0) voltPath.moveTo(x, y) else voltPath.lineTo(x, y)
+                                        }
+                                        drawPath(
+                                            path = voltPath,
+                                            color = MikuCyan.copy(alpha = 0.7f),
+                                            style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
+                                        )
                                     }
-                                    drawPath(
-                                        path = voltPath,
-                                        color = MikuCyan.copy(alpha = 0.7f),
-                                        style = Stroke(width = 1.2.dp.toPx(), cap = StrokeCap.Round)
-                                    )
                                 }
                             }
                         }
@@ -592,16 +629,16 @@ fun MikuBatteryObservatoryModal(
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
                                     title = "PACK VOLTAGE",
-                                    value = "${String.format(Locale.US, "%.3f", telemetry.voltageMv / 1000.0)} V",
-                                    sub = "Term: ${telemetry.termVoltageMv} mV",
+                                    value = telemetry.voltageMv?.let { "${String.format(Locale.US, "%.3f", it / 1000.0)} V" } ?: NA,
+                                    sub = "Term: ${telemetry.termVoltageMv.orNa(" mV")}",
                                     icon = Icons.Default.Speed,
                                     color = MikuCyan
                                 )
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
                                     title = "POWER DRAW",
-                                    value = "${telemetry.powerMw} mW",
-                                    sub = "${String.format(Locale.US, "%.2f", telemetry.powerMw / 1000.0)} W Output",
+                                    value = telemetry.powerMw.orNa(" mW"),
+                                    sub = telemetry.powerMw?.let { "${String.format(Locale.US, "%.2f", it / 1000.0)} W" } ?: "current not reported",
                                     icon = Icons.Default.ElectricBolt,
                                     color = Color(0xFFFFD600)
                                 )
@@ -612,36 +649,36 @@ fun MikuBatteryObservatoryModal(
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
                                     title = "CELL TEMPERATURE",
-                                    value = "${String.format(Locale.US, "%.1f", telemetry.tempC)}°C",
-                                    sub = "${String.format(Locale.US, "%.1f", tempF)}°F · Nominal",
+                                    value = telemetry.tempC.fmt1("°C"),
+                                    sub = tempF?.let { String.format(Locale.US, "%.1f", it) + "°F" } ?: "not reported",
                                     icon = Icons.Default.DeviceThermostat,
-                                    color = if (telemetry.tempC > 40f) Color(0xFFFF1744) else Color(0xFF00E676)
+                                    color = if ((telemetry.tempC ?: 0f) > 40f) Color(0xFFFF1744) else Color(0xFF00E676)
                                 )
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
-                                    title = "PMIC / CPU TEMP",
-                                    value = "${String.format(Locale.US, "%.1f", telemetry.chargerTempC)}°C",
-                                    sub = "Kryo Core: ${String.format(Locale.US, "%.1f", telemetry.cpuTempC)}°C",
+                                    title = "CHARGER / CPU TEMP",
+                                    value = telemetry.chargerTempC.fmt1("°C"),
+                                    sub = "CPU: ${telemetry.cpuTempC.fmt1("°C")}",
                                     icon = Icons.Default.Memory,
-                                    color = if (telemetry.cpuTempC > 65f) Color(0xFFFF1744) else MikuNeonPink
+                                    color = if ((telemetry.cpuTempC ?: 0f) > 65f) Color(0xFFFF1744) else MikuNeonPink
                                 )
                             }
 
-                            // Row 3: Fast Charge Limits & Health Index
+                            // Row 3: Charge Limits & Health
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
-                                    title = "TYPE-C INPUT LIMIT",
-                                    value = "${telemetry.inputCurrentLimitMa} mA",
-                                    sub = "Max Cap: ${telemetry.maxChargeCurrentMa} mA",
+                                    title = "INPUT CURRENT LIMIT",
+                                    value = telemetry.inputCurrentLimitMa.orNa(" mA"),
+                                    sub = "Charge max: ${telemetry.maxChargeCurrentMa.orNa(" mA")}",
                                     icon = Icons.Default.Usb,
                                     color = Color(0xFF2979FF)
                                 )
                                 RealBatteryMetricTile(
                                     modifier = Modifier.weight(1f),
-                                    title = "BATTERY HEALTH (SOH)",
-                                    value = telemetry.health,
-                                    sub = "${telemetry.tech} Architecture",
+                                    title = "BATTERY HEALTH",
+                                    value = telemetry.health ?: NA,
+                                    sub = telemetry.tech ?: "chemistry not reported",
                                     icon = Icons.Default.CheckCircle,
                                     color = Color(0xFF00E676)
                                 )
@@ -649,11 +686,14 @@ fun MikuBatteryObservatoryModal(
                         }
 
                         // ==========================================
-                        // 5. LIVE SUBSYSTEM DRAIN BREAKDOWN
+                        // 5. SUBSYSTEM POWER DISTRIBUTION — this hardware exposes no per-rail
+                        //    power telemetry (no PMIC rail counters, no batterystats access from
+                        //    here), so there is nothing real to show. Say so instead of inventing
+                        //    percentages.
                         // ==========================================
                         Column {
                             Text(
-                                text = "REAL-TIME SUBSYSTEM POWER DISTRIBUTION",
+                                text = "SUBSYSTEM POWER DISTRIBUTION",
                                 color = MikuCyan,
                                 fontSize = 7.5.sp,
                                 fontWeight = FontWeight.Bold,
@@ -670,30 +710,40 @@ fun MikuBatteryObservatoryModal(
                                     .padding(horizontal = 8.dp, vertical = 4.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                SubsystemDrainItem("CS43131 DUAL DAC", "22%", Color(0xFF7C4DFF))
-                                SubsystemDrainItem("IPS DISPLAY PANEL", "38%", MikuCyan)
-                                SubsystemDrainItem("SNAPDRAGON SOC", "26%", Color(0xFFFFD600))
-                                SubsystemDrainItem("WLAN / MODEM RF", "14%", MikuNeonPink)
+                                SubsystemDrainItem("DAC", NA, Color(0xFF7C4DFF))
+                                SubsystemDrainItem("DISPLAY", NA, MikuCyan)
+                                SubsystemDrainItem("SOC", NA, Color(0xFFFFD600))
+                                SubsystemDrainItem("RADIO", NA, MikuNeonPink)
                             }
+                            Text(
+                                text = "per-rail power is not measurable on this hardware",
+                                color = MikuTextSecondary,
+                                fontSize = 6.sp
+                            )
                         }
 
                         // ==========================================
-                        // 6. CYBER ENERGY GOVERNOR PROFILES
+                        // 6. POWER GOVERNOR — the real MikuPowerGovernor override
+                        //    (auto / perf / save), same switch as the Settings card and launcher tiles.
                         // ==========================================
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            val profiles = listOf("Audiophile Direct DAC", "Balanced", "Performance", "Battery Saver")
-                            profiles.forEach { prof ->
-                                val isSel = selectedProfile == prof
+                            val profiles = listOf(
+                                com.miku.player.MikuPowerGovernor.Mode.AUTO to "Auto",
+                                com.miku.player.MikuPowerGovernor.Mode.PERF to "Performance",
+                                com.miku.player.MikuPowerGovernor.Mode.SAVE to "Battery Saver"
+                            )
+                            profiles.forEach { (m, prof) ->
+                                val isSel = governorMode == m
                                 Box(
                                     modifier = Modifier
                                         .weight(1f)
                                         .clip(CutCornerShape(6.dp))
                                         .background(if (isSel) MikuCyan.copy(alpha = 0.25f) else Color(0xFF031016))
                                         .border(0.8.dp, if (isSel) MikuCyan else CyberGlassBorder.copy(alpha = 0.3f), CutCornerShape(6.dp))
-                                        .clickable { selectedProfile = prof }
+                                        .clickable { com.miku.player.MikuPowerGovernor.setMode(ctx, m) }
                                         .padding(vertical = 4.dp),
                                     contentAlignment = Alignment.Center
                                 ) {

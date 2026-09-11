@@ -52,34 +52,11 @@ fun MikuMeteogramForecastView(
     val palette by MikuDiurnalTheme.rememberDiurnalPalette()
     val scrollState = rememberScrollState()
 
-    // Hourly points (sample starting from NOW)
+    // Hourly points (sample starting from NOW). Only REAL forecast points are ever drawn: when the
+    // service has no hourly data the strip is empty (previously it synthesised a 12-point curve
+    // from formulas on the current temperature, which is a fake forecast).
     val points = remember(weather.hourlyMeteogram) {
-        if (weather.hourlyMeteogram.isNotEmpty()) {
-            if (isCompact) weather.hourlyMeteogram.take(12)
-            else weather.hourlyMeteogram.take(24)
-        } else {
-            (0..11).map { i ->
-                val hour = (12 + i * 2) % 24
-                val isDay = hour in 6..19
-                val (sum, ic) = MikuWeatherService.mapWeatherCode(weather.code, isDay)
-                MikuWeatherService.HourlyMeteogramPoint(
-                    timeLabel = String.format("%02d:00", hour),
-                    dayLabel = if (hour < 6) "Tomorrow" else "Today",
-                    tempF = (weather.tempF + (if (hour in 10..18) 6f else -6f) - (i * 0.4f)),
-                    feelsLikeF = weather.feelsLikeF,
-                    precipInches = (weather.precipitationIn * (1f - i * 0.08f)).coerceAtLeast(0f),
-                    precipProbPct = (weather.precipitationProbPct - i * 4).coerceIn(0, 100),
-                    windSpeedMph = (weather.windSpeedMph + (i % 3) * 1.5f),
-                    windGustsMph = (weather.windSpeedMph + (i % 3) * 2f + 3f),
-                    windDirectionDeg = (weather.windDirectionDeg + i * 15) % 360,
-                    windDirectionCompass = weather.windDirectionCompass,
-                    weatherCode = weather.code,
-                    summary = sum,
-                    icon = ic,
-                    isDay = isDay
-                )
-            }
-        }
+        if (isCompact) weather.hourlyMeteogram.take(12) else weather.hourlyMeteogram.take(24)
     }
 
     val itemWidth = if (isCompact) 44.dp else 52.dp
@@ -138,7 +115,7 @@ fun MikuMeteogramForecastView(
                 }
 
                 Text(
-                    text = "${weather.tempF.roundToInt()}°F · ${if (gps.city.isNotEmpty()) gps.city else "Local"}",
+                    text = "${weather.tempF.wxInt("°F")} · ${if (gps.city.isNotEmpty()) gps.city else "—"}",
                     color = Color.White,
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,

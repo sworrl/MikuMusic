@@ -57,10 +57,11 @@ enum class VolumeHudStyle(val key: String, val title: String, val description: S
     )
 }
 
+/** Defaults are "not read yet" (0); [MikuVolumeManager.updateFromSystem] fills real values before any HUD shows. */
 data class VolumeState(
-    val volumePct: Int = 50,
-    val maxVolume: Int = 15,
-    val currentVolume: Int = 8,
+    val volumePct: Int = 0,
+    val maxVolume: Int = 1,
+    val currentVolume: Int = 0,
     val isMuted: Boolean = false,
     val isHudVisible: Boolean = false
 )

@@ -404,7 +404,7 @@ object TrackTech {
         val highestTier: Int,      // 1..4
         val summaryTag: String,
         val detailSummary: String,
-        val specTag: String = "16-BIT · 44.1kHz FLAC",
+        val specTag: String = "—",
         val badgeSymbol: String = "✧",
         val isVinylRip: Boolean = false
     )
@@ -437,8 +437,10 @@ object TrackTech {
         val formatCounts = mutableMapOf<String, Int>()
 
         for (t in tracks) {
-            val bits = bitsFor(ctx, t) ?: 16
-            val sr = sampleRateFor(ctx, t) ?: 44100
+            // Unknown = 0, never assumed "16-bit / 44.1 kHz": an unmeasured track can't raise the
+            // album's max figures or its tier, it only counts by container (lossless vs lossy).
+            val bits = bitsFor(ctx, t) ?: 0
+            val sr = sampleRateFor(ctx, t) ?: 0
             val fmt = t.mime.substringAfterLast('/').uppercase().ifBlank { "AUDIO" }
             formatCounts[fmt] = (formatCounts[fmt] ?: 0) + 1
 
@@ -475,31 +477,34 @@ object TrackTech {
         val losslessPct = ((master + studio + cd) / total * 100).toInt()
 
         val summaryTag = when {
-            isVinylRip && master > 0 -> "VINYL MASTER · ${formatSampleRate(maxSr)}"
-            isVinylRip && studio > 0 -> "VINYL HI-RES · 24-BIT"
+            isVinylRip && master > 0 -> "VINYL MASTER${if (maxSr > 0) " · ${formatSampleRate(maxSr)}" else ""}"
+            isVinylRip && studio > 0 -> "VINYL HI-RES${if (maxBits > 0) " · $maxBits-BIT" else ""}"
             isVinylRip -> "VINYL RIP · $dominantFmt"
             master > 0 && master == tracks.size -> "100% STUDIO MASTER"
-            master > 0 -> "UP TO ${if (maxBits > 0) "$maxBits-BIT " else ""}${formatSampleRate(maxSr)}"
-            studio > 0 && studio == tracks.size -> "100% HI-RES 24-BIT"
-            studio > 0 -> "UP TO ${formatSampleRate(maxSr)} 24-BIT"
+            master > 0 -> "UP TO ${if (maxBits > 0) "$maxBits-BIT " else ""}${if (maxSr > 0) formatSampleRate(maxSr) else "HI-RES"}"
+            studio > 0 && studio == tracks.size -> "100% HI-RES${if (maxBits > 0) " $maxBits-BIT" else ""}"
+            studio > 0 -> "UP TO ${if (maxSr > 0) formatSampleRate(maxSr) else "HI-RES"}${if (maxBits > 0) " $maxBits-BIT" else ""}"
             cd == tracks.size -> "100% LOSSLESS $dominantFmt"
             losslessPct > 0 -> "$losslessPct% LOSSLESS"
-            else -> "$dominantFmt ${maxBr}k"
+            else -> if (maxBr > 0) "$dominantFmt ${maxBr}k" else dominantFmt
         }
 
+        // Spec strings only quote figures that were actually measured; "(rate unmeasured)" otherwise.
+        val srTxt = if (maxSr > 0) formatSampleRate(maxSr) else "rate unmeasured"
+        val bitsTxt = if (maxBits > 0) "$maxBits-bit" else "bit depth unmeasured"
         val detailSummary = when {
-            isVinylRip -> "$vinylCount of ${tracks.size} tracks Analog Vinyl Rip (${if (maxBits > 0) "$maxBits-bit/" else ""}${formatSampleRate(maxSr)})"
-            master > 0 -> "$master of ${tracks.size} tracks Master Tier (${formatSampleRate(maxSr)}/24+ bit)"
-            studio > 0 -> "$studio of ${tracks.size} tracks Studio Hi-Res (24-bit/96kHz)"
-            cd > 0 -> "$cd of ${tracks.size} tracks 16-bit/44.1kHz Bit-Perfect"
-            else -> "${tracks.size} tracks standard audio"
+            isVinylRip -> "$vinylCount of ${tracks.size} tracks Analog Vinyl Rip ($bitsTxt/$srTxt)"
+            master > 0 -> "$master of ${tracks.size} tracks Master Tier ($bitsTxt/$srTxt)"
+            studio > 0 -> "$studio of ${tracks.size} tracks Studio Hi-Res ($bitsTxt/$srTxt)"
+            cd > 0 -> "$cd of ${tracks.size} tracks lossless ($bitsTxt/$srTxt)"
+            else -> "${tracks.size} tracks lossy audio"
         }
 
         val baseSpecTag = when {
-            master > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else ""}${formatSampleRate(maxSr)} $dominantFmt"
-            studio > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else "24-BIT · "}${formatSampleRate(maxSr)} $dominantFmt"
-            cd > 0 -> "16-BIT · ${formatSampleRate(maxSr)} $dominantFmt"
-            else -> "$dominantFmt · ${maxBr}kbps"
+            master > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else ""}${srTxt.uppercase()} $dominantFmt"
+            studio > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else ""}${srTxt.uppercase()} $dominantFmt"
+            cd > 0 -> "${if (maxBits > 0) "$maxBits-BIT · " else ""}${srTxt.uppercase()} $dominantFmt"
+            else -> if (maxBr > 0) "$dominantFmt · ${maxBr}kbps" else "$dominantFmt · bitrate unmeasured"
         }
         val specTag = if (isVinylRip) "$baseSpecTag · ⊚ VINYL" else baseSpecTag
 

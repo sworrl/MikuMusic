@@ -542,31 +542,32 @@ private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
     ) {
         // Row 1: Primary Coordinates & Fix Status
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Hemisphere from the SIGN of the real coordinate (was a hardcoded "N" / "W").
             GpsMetricCard(
                 title = "LATITUDE",
-                value = if (gps.latitude != 0.0) "${"%.5f".format(gps.latitude)}° N" else "—",
+                value = if (gps.isLocked && gps.latitude != 0.0) "${"%.5f".format(kotlin.math.abs(gps.latitude))}° ${if (gps.latitude >= 0) "N" else "S"}" else "—",
                 color = Color(0xFF00E5FF),
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(
                 title = "LONGITUDE",
-                value = if (gps.longitude != 0.0) "${"%.5f".format(gps.longitude)}° W" else "—",
+                value = if (gps.isLocked && gps.longitude != 0.0) "${"%.5f".format(kotlin.math.abs(gps.longitude))}° ${if (gps.longitude >= 0) "E" else "W"}" else "—",
                 color = Color(0xFF00E5FF),
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // Row 2: Altitude & Ground Speed
+        // Row 2: Altitude & Ground Speed — "—" until there is a real fix (no "0 m / 0.0 mph" readings).
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             GpsMetricCard(
                 title = "ELEVATION / ALTITUDE",
-                value = "${gps.altitudeM.toInt()} m (${(gps.altitudeM * 3.28084).toInt()} ft)",
+                value = if (gps.isLocked) "${gps.altitudeM.toInt()} m (${(gps.altitudeM * 3.28084).toInt()} ft)" else "—",
                 color = Color(0xFF00FFCC),
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(
                 title = "GROUND SPEED",
-                value = "${"%.1f".format(gps.speedMph)} mph (${(gps.speedMph * 1.60934).toInt()} km/h)",
+                value = if (gps.isLocked) "${"%.1f".format(gps.speedMph)} mph (${(gps.speedMph * 1.60934).toInt()} km/h)" else "—",
                 color = Color(0xFFFF4081),
                 modifier = Modifier.weight(1f)
             )
@@ -576,13 +577,13 @@ private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             GpsMetricCard(
                 title = "BEARING / HEADING",
-                value = "${gps.bearing.toInt()}° (${degreesToCompassText(gps.bearing.toInt())})",
+                value = if (gps.isLocked) "${gps.bearing.toInt()}° (${degreesToCompassText(gps.bearing.toInt())})" else "—",
                 color = Color(0xFFFFD600),
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(
                 title = "FIX ACCURACY",
-                value = "±${"%.1f".format(gps.accuracyM)} meters",
+                value = if (gps.isLocked && gps.accuracyM > 0f) "±${"%.1f".format(gps.accuracyM)} meters" else "—",
                 color = Color(0xFF80DEEA),
                 modifier = Modifier.weight(1f)
             )

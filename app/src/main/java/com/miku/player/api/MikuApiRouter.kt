@@ -52,9 +52,23 @@ class MikuApiRouter(private val context: Context) {
                 val res = JSONObject().apply {
                     put("status", "ok")
                     put("app", "MikuMusic")
-                    put("device", "HiBy M500")
-                    put("version", "0.9.179")
+                    put("device", "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")
+                    put("version", com.miku.player.BuildConfig.VERSION_NAME)   // real app version, not a literal
                     put("timestamp", System.currentTimeMillis())
+                }
+                ApiResponse.json(200, res)
+            }
+
+            // Real audio levels for the web remote's bars: the shared Visualizer's 64-bin FFT.
+            // "active" is false whenever no Visualizer is bound — the page must then draw nothing.
+            cleanPath == "/api/v1/levels" && method == "GET" -> {
+                val active = com.miku.player.AudioCapture.active
+                val res = JSONObject().apply {
+                    put("active", active)
+                    put("is_playing", runCatching { PlayerHolder.player?.isPlaying == true }.getOrDefault(false))
+                    val arr = org.json.JSONArray()
+                    if (active) com.miku.player.AudioCapture.fft.forEach { arr.put((it * 1000).toInt() / 1000.0) }
+                    put("fft", arr)
                 }
                 ApiResponse.json(200, res)
             }

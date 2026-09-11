@@ -193,7 +193,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        "CS43131",
+                        "CS43198",
                         color = MikuCyan,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold,
@@ -255,7 +255,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "Direct register orchestration for dual CS43131 DACs, NOS analog interpolation, hardware gain stages, and bit-perfect UAC2 USB audio.",
+                            "Direct register orchestration for dual CS43198 DACs, NOS analog interpolation, hardware gain stages, and bit-perfect UAC2 USB audio.",
                             color = MikuTextSecondary,
                             fontSize = 10.5.sp,
                             lineHeight = 14.5.sp
@@ -434,7 +434,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         ) {
                             Column(Modifier.weight(1f)) {
                                 Text("Dynamic Range Enhancement (DRE)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                Text("Expands CS43131 dynamic range to 130 dB SNR for extreme micro-detail extraction.", color = MikuTextSecondary, fontSize = 10.sp)
+                                Text("Expands CS43198 dynamic range (DRE) for extreme micro-detail extraction.", color = MikuTextSecondary, fontSize = 10.sp)
                             }
                             Switch(
                                 checked = csDre,

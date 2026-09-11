@@ -63,17 +63,18 @@ import java.io.File
 import java.util.*
 import kotlin.math.*
 
+/** Defaults = nothing tuned / nothing measured. rssi 0 and empty RDS strings until the tuner reports. */
 data class FmState(
     val isPowerOn: Boolean = false,
-    val frequencyKHz: Int = 101100, // 101.1 MHz
-    val isStereo: Boolean = true,
+    val frequencyKHz: Int = 87500, // band floor; the engine publishes the real tuned frequency
+    val isStereo: Boolean = false,
     val isMuted: Boolean = false,
     val isRecording: Boolean = false,
-    val rssi: Int = 68,
-    val stationName: String = "Qualcomm CS43131 Direct FM",
-    val radioText: String = "Hatsune Miku Live Broadcast",
-    val isHeadsetPlugged: Boolean = true,
-    val favorites: List<Int> = listOf(88500, 91100, 96500, 101100, 104300, 107900)
+    val rssi: Int = 0,
+    val stationName: String = "",
+    val radioText: String = "",
+    val isHeadsetPlugged: Boolean = false,
+    val favorites: List<Int> = emptyList()
 )
 
 /**
@@ -126,8 +127,10 @@ object FmRadioManager {
     }
 
     fun toggleRecording(ctx: Context) {
-        val nextRec = !_state.value.isRecording
-        _state.value = _state.value.copy(isRecording = nextRec)
+        // There is no recorder behind this button (no tuner access from this package), so the
+        // state must never claim "recording". Kept as a no-op rather than a fake toggle.
+        android.util.Log.w(TAG, "FM recording is not available in this package")
+        _state.value = _state.value.copy(isRecording = false)
     }
 
     fun toggleMute() {
@@ -410,7 +413,7 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                     }
 
                     Text(
-                        text = if (fmState.stationName.isNotEmpty()) fmState.stationName else "Qualcomm CS43131 Direct HAL",
+                        text = if (fmState.stationName.isNotEmpty()) fmState.stationName else "No RDS station name",
                         color = MikuTextSecondary,
                         fontSize = 9.5.sp,
                         fontWeight = FontWeight.Medium,
@@ -584,23 +587,17 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
     }
 }
 
+/**
+ * Tuning dial. This is a band scale (87.5–108 MHz) with the tuned-carrier marker — NOT a spectrum:
+ * the tuner exposes no FFT / per-bin RF data to this app, so the old "real-time DSP waterfall"
+ * (a gaussian peak plus sine ripple, i.e. synthesised) is gone. Tap / drag still tunes.
+ */
 @Composable
 fun RadioWaterfallSpectrum(
     currentFreqKHz: Int,
     isPowerOn: Boolean,
     onTuneFreq: (Int) -> Unit
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "rfOsc")
-    val phase by infiniteTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2 * Math.PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "rfPhase"
-    )
-
     Box(
         Modifier
             .fillMaxSize()
@@ -630,84 +627,32 @@ fun RadioWaterfallSpectrum(
         Canvas(Modifier.fillMaxSize()) {
             val w = size.width
             val h = size.height
-            val fftHeight = h * 0.40f
-            val waterfallHeight = h * 0.60f
-            val binCount = 48
-            val rowCount = 20
-            val rowHeight = waterfallHeight / rowCount
-            val binWidth = w / binCount
-
-            // Active tuned center bin
             val tunedFrac = ((currentFreqKHz - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f)
-            val centerBin = (tunedFrac * binCount).toInt()
 
-            // 1. Draw Waterfall Grid
-            for (r in 0 until rowCount) {
-                val y = fftHeight + r * rowHeight
-                val rowAgeFrac = r.toFloat() / rowCount
-
-                for (b in 0 until binCount) {
-                    val dist = abs(b - centerBin).toFloat()
-                    val peak = if (isPowerOn) exp(-0.15f * dist * dist) else 0f
-                    val ripple = if (isPowerOn) (sin(phase + b * 0.4f + r * 0.3f) * 0.15f + 0.15f) else 0.05f
-                    val mag = (peak * (1f - rowAgeFrac * 0.5f) + ripple).coerceIn(0f, 1f)
-
-                    val color = when {
-                        mag < 0.20f -> Color(0xFF031622)
-                        mag < 0.45f -> Color(0xFF004D5A)
-                        mag < 0.70f -> Color(0xFF00B4D8)
-                        mag < 0.85f -> Color(0xFF00E5FF)
-                        else -> Color(0xFFFF4081)
-                    }
-                    drawRect(
-                        color = color,
-                        topLeft = Offset(b * binWidth, y),
-                        size = Size(binWidth + 0.5f, rowHeight + 0.5f)
-                    )
+            // 1. Band scale: a tick every 0.5 MHz, taller every 1 MHz, tallest every 5 MHz.
+            val baseY = h * 0.62f
+            drawLine(Color(0xFF004D5A), Offset(0f, baseY), Offset(w, baseY), strokeWidth = 1.dp.toPx())
+            var khz = 87500
+            while (khz <= 108000) {
+                val x = ((khz - 87500f) / (108000f - 87500f)) * w
+                val tick = when {
+                    khz % 5000 == 0 -> h * 0.22f
+                    khz % 1000 == 0 -> h * 0.13f
+                    else -> h * 0.07f
                 }
-            }
-
-            // 2. Draw Real-time FFT Curve
-            val fftPath = Path()
-            val step = w / binCount
-            fftPath.moveTo(0f, fftHeight)
-
-            for (i in 0 until binCount) {
-                val x = i * step
-                val dist = abs(i - centerBin).toFloat()
-                val peak = if (isPowerOn) exp(-0.18f * dist * dist) * 0.85f else 0.05f
-                val noise = if (isPowerOn) (sin(phase * 1.5f + i * 0.6f) * 0.08f + 0.08f) else 0.02f
-                val mag = (peak + noise).coerceIn(0f, 1f)
-                val y = fftHeight - (mag * (fftHeight - 6f))
-                if (i == 0) fftPath.moveTo(x, y) else fftPath.lineTo(x, y)
-            }
-
-            val fillPath = Path().apply {
-                addPath(fftPath)
-                lineTo(w, fftHeight)
-                lineTo(0f, fftHeight)
-                close()
-            }
-
-            drawPath(
-                path = fillPath,
-                brush = Brush.verticalGradient(
-                    listOf(Color(0x8800E5FF), Color(0x1100E5FF)),
-                    startY = 0f,
-                    endY = fftHeight
+                drawLine(
+                    color = if (isPowerOn) Color(0xFF00B4D8) else Color(0xFF335560),
+                    start = Offset(x, baseY - tick),
+                    end = Offset(x, baseY),
+                    strokeWidth = (if (khz % 5000 == 0) 1.5f else 1f).dp.toPx()
                 )
-            )
+                khz += 500
+            }
 
-            drawPath(
-                path = fftPath,
-                color = MikuTeal,
-                style = Stroke(width = 2.dp.toPx())
-            )
-
-            // 3. Tuned Carrier Frequency Marker
+            // 2. Tuned carrier marker (the only "signal" this view can truthfully show).
             val markerX = tunedFrac * w
             drawLine(
-                color = MikuPink,
+                color = if (isPowerOn) MikuPink else Color.Gray,
                 start = Offset(markerX, 0f),
                 end = Offset(markerX, h),
                 strokeWidth = 2.dp.toPx()
@@ -721,14 +666,14 @@ fun RadioWaterfallSpectrum(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "QUALCOMM DIRECT FM WATERFALL",
+                "FM BAND 87.5–108 MHz · TUNING DIAL",
                 color = MikuTeal.copy(alpha = 0.85f),
                 fontSize = 7.5.sp,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
-                if (isPowerOn) "HARDWARE ACTIVE" else "STANDBY",
+                if (isPowerOn) "TUNER ON" else "STANDBY",
                 color = if (isPowerOn) MikuPink else Color.Gray,
                 fontSize = 7.5.sp,
                 fontWeight = FontWeight.Bold
