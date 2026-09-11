@@ -41,7 +41,7 @@ import kotlin.math.absoluteValue
 /**
  * Hatsune Miku Beryl / Compiz-Enhanced Multi-Tasking Recents Carousel.
  * Provides a 1:1 Pixel-style horizontal multitasking switcher featuring:
- * - Live App Snapshot View Cards
+ * - Styled task cards (icon + label + package; NOT screen snapshots — no TaskSnapshot is read)
  * - Beryl 3D Perspective Tilt & Coverflow Curve
  * - Beryl Disintegration / Particle Dissolve Animation on dismiss
  * - Quick "Clear All" with holographic shockwave
@@ -250,7 +250,8 @@ fun MikuRecentsOverviewCarousel(
 }
 
 /**
- * Live App Snapshot View Card mimicking Pixel Live Previews with Beryl Holographic Glow.
+ * Styled task card with Beryl holographic glow. It shows the task's real icon, label and package —
+ * it is NOT a live screen preview, and must never imitate the app's current UI.
  */
 @Composable
 fun LiveAppSnapshotCard(task: RecentTaskItem) {
@@ -331,7 +332,9 @@ fun LiveAppSnapshotCard(task: RecentTaskItem) {
                 )
             }
 
-            // Simulated Live UI Preview Content
+            // Task card body. NOT a live screen snapshot — no TaskSnapshot/thumbnail is read here, so
+            // nothing may imitate the app's actual current UI (the "settings list" branch used to draw
+            // four fabricated skeleton rows that looked like the real Settings screen).
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -348,9 +351,11 @@ fun LiveAppSnapshotCard(task: RecentTaskItem) {
                 contentAlignment = Alignment.Center
             ) {
                 val p = task.packageName.lowercase()
+                // Real playback state — "NOW PLAYING" used to show for any package whose name merely
+                // contained "player"/"music", playing or not.
+                val audioPlaying by com.miku.launcher.bpm.MikuBpmEngine.state.collectAsState()
                 when {
                     p.contains("player") || p.contains("music") -> {
-                        // Live Audio Player Preview Mockup
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Box(
                                 modifier = Modifier
@@ -363,28 +368,13 @@ fun LiveAppSnapshotCard(task: RecentTaskItem) {
                                 Icon(Icons.Default.MusicNote, contentDescription = null, tint = brandColor, modifier = Modifier.size(36.dp))
                             }
                             Spacer(Modifier.height(14.dp))
-                            Text("NOW PLAYING", color = MikuCyan, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                            Text(
+                                if (audioPlaying.isPlaying) "NOW PLAYING" else "AUDIO APP",
+                                color = MikuCyan, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont
+                            )
                             Spacer(Modifier.height(4.dp))
-                            Text("Cirrus Logic CS43131 Bit-Perfect", color = MikuTextSecondary, fontSize = 10.sp)
-                        }
-                    }
-                    p.contains("settings") -> {
-                        // Settings List Preview Mockup
-                        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            repeat(4) { i ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(Color(0xFF0C2433))
-                                        .padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(Modifier.size(16.dp).clip(CircleShape).background(brandColor.copy(alpha = 0.5f)))
-                                    Spacer(Modifier.width(10.dp))
-                                    Box(Modifier.height(8.dp).weight(1f).clip(RoundedCornerShape(4.dp)).background(Color(0x33FFFFFF)))
-                                }
-                            }
+                            // Stylised task card, not telemetry — no chip/format claim here.
+                            Text(task.label, color = MikuTextSecondary, fontSize = 10.sp, maxLines = 1)
                         }
                     }
                     else -> {

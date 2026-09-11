@@ -379,7 +379,10 @@ private fun ArcoDashboardPane() {
 
     var lastNonOff by remember { mutableStateOf("cyberpunk_city") }
     LaunchedEffect(activeEffect) { if (activeEffect.isNotBlank() && activeEffect != "off") lastNonOff = activeEffect }
+    // The server exposes no brightness GET, so the slider position is a REQUEST, not the rig's
+    // current brightness. Until the user moves it, the readout shows "—" instead of asserting 100 %.
     var brightness by remember { mutableFloatStateOf(1f) }
+    var brightnessTouched by remember { mutableStateOf(false) }
     var brightnessUnsupported by remember { mutableStateOf(false) }
 
     Column(arcoCardModifier(MikuCyan)) {
@@ -410,13 +413,20 @@ private fun ArcoDashboardPane() {
         ArcoCardTitle("GLOBAL BRIGHTNESS", MikuGold)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Icon(Icons.Default.Bolt, contentDescription = null, tint = MikuGold)
-            Text("${(brightness * 100).toInt()}%", color = MikuGold, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+            Text(
+                if (brightnessTouched) "${(brightness * 100).toInt()}%" else "—",
+                color = MikuGold, fontSize = 12.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont
+            )
         }
         Slider(
             value = brightness,
-            onValueChange = { brightness = it },
+            onValueChange = { brightness = it; brightnessTouched = true },
             onValueChangeFinished = { scope.launch { ArcoClient.setBrightness(brightness).onFailure { brightnessUnsupported = true } } },
             colors = SliderDefaults.colors(thumbColor = MikuGold, activeTrackColor = MikuGold)
+        )
+        Text(
+            "The server exposes no brightness read-back, so this slider sends a value — it does not report the rig's current brightness.",
+            color = MikuTextSecondary, fontSize = 8.sp
         )
         if (brightnessUnsupported) {
             Text("Server build doesn't expose a brightness endpoint yet (client is ready — see ArcoClient.setBrightness).", color = Color(0xFFFF9100), fontSize = 8.sp)
@@ -536,15 +546,23 @@ private fun ArcoThemeCard(theme: ArcoTheme, isActive: Boolean, onClick: () -> Un
 private fun ArcoZonesPane() {
     val scope = rememberCoroutineScope()
     val zones by ArcoClient.zones.collectAsState()
+    // Real provenance: false = these are the hardcoded notify-zone names, not the rig's LED map.
+    val zonesAreLive by ArcoClient.zonesAreLive.collectAsState()
     var selected by remember { mutableStateOf(setOf<String>()) }
     var flashColor by remember { mutableStateOf("FF0055") }
 
     LaunchedEffect(Unit) { ArcoClient.fetchZones() }
 
     Column(arcoCardModifier(MikuGold)) {
-        ArcoCardTitle("ZONES (${zones.size}, LIVE)", MikuGold)
+        ArcoCardTitle(
+            if (zonesAreLive) "ZONES (${zones.size}, LIVE)" else "ZONES (${zones.size}, FALLBACK ENUM)",
+            MikuGold
+        )
         Text(
-            "Fetched live from the server at connect time — this list grows automatically as zones/LEDs are added to the rig; nothing here is hardcoded.",
+            if (zonesAreLive)
+                "Fetched live from the server at connect time — this list grows automatically as zones/LEDs are added to the rig."
+            else
+                "This server build exposes no zones endpoint, so these are the documented notify-zone NAMES, not the rig's real LED map. LED counts are unknown.",
             color = MikuTextSecondary, fontSize = 8.5.sp
         )
         Spacer(Modifier.height(8.dp))

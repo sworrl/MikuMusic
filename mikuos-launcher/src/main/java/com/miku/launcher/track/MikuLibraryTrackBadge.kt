@@ -52,7 +52,8 @@ fun MikuLibraryTrackBadge(
             )
             Spacer(Modifier.width(4.dp))
             Text(
-                text = "♫ ${libraryState.abbreviatedTracks}",
+                // "—" until the MediaStore count has actually been read (was a confident "♫ 0").
+                text = "♫ ${if (libraryState.isInitialized) libraryState.abbreviatedTracks else "—"}",
                 color = MikuCyan,
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.Bold,

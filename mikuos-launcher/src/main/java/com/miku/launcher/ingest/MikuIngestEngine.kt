@@ -31,7 +31,8 @@ import java.util.concurrent.ConcurrentLinkedQueue
 
 data class MikuIngestState(
     val totalTracks: Int = 0,
-    val abbreviatedTracks: String = "0",
+    // "—" until a scan has actually counted: "0" asserted an empty library before any query ran.
+    val abbreviatedTracks: String = "—",
     val flacCount: Int = 0,
     val dsdCount: Int = 0,
     val wavCount: Int = 0,
@@ -56,7 +57,8 @@ data class MikuIngestState(
     val scannedFilesCount: Int = 0,
     val isServerReachable: Boolean = false,
     val isNetworkOnline: Boolean = false,
-    val statusMessage: String = "Idle · Ingested",
+    // "Idle · Ingested" implied an ingest had already happened before anything ran.
+    val statusMessage: String = "Idle · no ingest run yet",
     val lastScanTime: String = "Never",
     val logMessages: List<String> = emptyList(),
     val isInitialized: Boolean = false,
@@ -471,7 +473,9 @@ object MikuIngestEngine {
                     _state.value = _state.value.copy(
                         scanProgress = prog,
                         scannedFilesCount = scannedCount,
-                        statusMessage = "Indexed $scannedCount / $totalToScan tracks (${(prog * 100).toInt()}%)"
+                        // "Indexed" overstated it: the files have been HANDED to MediaScanner (the
+                        // completion callback is a no-op), not confirmed indexed.
+                        statusMessage = "Submitted $scannedCount / $totalToScan files to MediaScanner (${(prog * 100).toInt()}%)"
                     )
                     delay(40)
                 }
@@ -537,16 +541,30 @@ object MikuIngestEngine {
                 statusMessage = "Connecting to Rsync Ingest Server ($syncHost:$rsyncPort)..."
             )
 
-            try {
-                RootShell.execFast("rsync --version 2>/dev/null")
-                log("Rsync sync broadcast transmitted to Miku Player engine")
-            } catch (_: Throwable) {}
+            // NO FAKE SYNC. This used to fire `rsync --version`, discard the result, log "Rsync sync
+            // broadcast transmitted" (no broadcast was ever sent), sleep 1.5 s and then report
+            // "Rsync sync completed" with a 100 % progress bar — while nothing had been transferred.
+            // Report exactly what is actually known: whether an rsync binary exists at all and
+            // whether the configured server answers.
+            val rsyncVersion = try {
+                RootShell.execOut("rsync --version 2>/dev/null")
+                    ?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
+            } catch (_: Throwable) { null }
 
-            delay(1500)
+            val status = when {
+                syncHost.isBlank() ->
+                    "No sync host configured — set one before an ingest sync can run"
+                rsyncVersion.isNullOrBlank() ->
+                    "rsync not available on this device — no sync performed"
+                else ->
+                    "rsync present ($rsyncVersion) · transfer not implemented in this build — no files were synced"
+            }
+            log(status)
+
             _state.value = _state.value.copy(
                 isScanning = false,
-                scanProgress = 1f,
-                statusMessage = "Rsync sync completed"
+                scanProgress = 0f,
+                statusMessage = status
             )
             refresh(appContext)
         }

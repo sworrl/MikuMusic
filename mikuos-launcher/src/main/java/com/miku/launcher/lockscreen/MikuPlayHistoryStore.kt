@@ -53,7 +53,10 @@ object MikuPlayHistoryStore {
                         title = obj.optString("title", "Unknown"),
                         artist = obj.optString("artist", "Unknown"),
                         album = obj.optString("album", ""),
-                        format = obj.optString("format", "FLAC 24-bit"),
+                        // An entry with no stored format has no known format. This used to
+                        // re-materialize every such row as a "FLAC 24-bit" quality claim, which the
+                        // history drawer then rendered as a green format badge.
+                        format = obj.optString("format", ""),
                         timestampMs = obj.optLong("time", System.currentTimeMillis()),
                         durationMs = obj.optLong("dur", 0L)
                     )
@@ -72,7 +75,9 @@ object MikuPlayHistoryStore {
         title: String,
         artist: String,
         album: String = "",
-        format: String = "Direct CS43131 DTA",
+        // Blank = format unknown. It used to default to "Direct CS43131 DTA", asserting a bit-perfect
+        // hardware path for any caller that omitted it. The renderer hides a blank format badge.
+        format: String = "",
         durationMs: Long = 0L
     ) {
         if (title.isBlank()) return

@@ -58,7 +58,14 @@ object MikuSecuritySentinel {
         "27196E386B875E76ADF700E7EA84E4C6EEE33DFFA9C724126E5E11E44D6042EE"  // AOSP Platform Key
     )
 
-    fun verifyApkSignature(context: Context): Boolean {
+    /**
+     * Tri-state signature check. It used to return `true` both when the hash loop found NO match and
+     * from the catch block, so `signatureValid` was hardcoded-true: any UI rendering a
+     * "SIGNATURE VALID ✓" chip off it would have been asserting a check that never actually passed.
+     */
+    enum class SignatureState { VALID, UNRECOGNISED_KEY, CHECK_FAILED }
+
+    fun verifyApkSignatureState(context: Context): SignatureState {
         try {
             val pm = context.packageManager
             val pkg = context.packageName
@@ -69,22 +76,27 @@ object MikuSecuritySentinel {
                 @Suppress("DEPRECATION")
                 val pi = pm.getPackageInfo(pkg, PackageManager.GET_SIGNATURES)
                 pi.signatures
-            } ?: return false
+            } ?: return SignatureState.CHECK_FAILED
 
             val md = MessageDigest.getInstance("SHA-256")
             for (sig in signatures) {
                 val digest = md.digest(sig.toByteArray())
                 val hex = digest.joinToString("") { "%02X".format(it) }
                 if (OFFICIAL_SIGNATURE_HASHES.contains(hex)) {
-                    return true
+                    return SignatureState.VALID
                 }
             }
-            // In development mode, allow platform/debug keys but log state
-            return true
+            // Signed, but by a key we do not recognise (platform/debug key during development).
+            // That is NOT the same as "valid" and must never be reported as such.
+            return SignatureState.UNRECOGNISED_KEY
         } catch (t: Throwable) {
-            return true
+            return SignatureState.CHECK_FAILED
         }
     }
+
+    /** True ONLY for a recognised official signing key. */
+    fun verifyApkSignature(context: Context): Boolean =
+        verifyApkSignatureState(context) == SignatureState.VALID
 
     fun isDebuggerAttached(): Boolean {
         if (Debug.isDebuggerConnected() || Debug.waitingForDebugger()) return true
@@ -138,27 +150,32 @@ object MikuSecuritySentinel {
     }
 
     fun getSecurityReport(context: Context): SecurityReport {
-        val sigValid = verifyApkSignature(context)
+        val sigState = verifyApkSignatureState(context)
         val debugAttached = isDebuggerAttached()
         val hookDetected = isHookFrameworkDetected()
-        val isSecure = sigValid && !debugAttached && !hookDetected
+        val isSecure = sigState == SignatureState.VALID && !debugAttached && !hookDetected
 
         return SecurityReport(
             isSecure = isSecure,
-            signatureValid = sigValid,
+            signatureState = sigState,
             debuggerAttached = debugAttached,
             hookDetected = hookDetected,
-            architecture = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a",
-            securityPatch = Build.VERSION.SECURITY_PATCH
+            // "—" when the build reports no ABI; it used to assert "arm64-v8a".
+            architecture = Build.SUPPORTED_ABIS.firstOrNull() ?: "—",
+            securityPatch = Build.VERSION.SECURITY_PATCH ?: "—"
         )
     }
 }
 
 data class SecurityReport(
     val isSecure: Boolean,
-    val signatureValid: Boolean,
+    val signatureState: MikuSecuritySentinel.SignatureState,
     val debuggerAttached: Boolean,
     val hookDetected: Boolean,
     val architecture: String,
     val securityPatch: String
-)
+) {
+    /** Only a recognised official key counts as valid — never "the check did not run". */
+    val signatureValid: Boolean
+        get() = signatureState == MikuSecuritySentinel.SignatureState.VALID
+}

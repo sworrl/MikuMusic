@@ -30,6 +30,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miku.launcher.*
+import com.miku.launcher.ui.MikuPowerProfile
 import com.miku.launcher.ui.swipeUpFromBottomToDismiss
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -66,7 +67,14 @@ fun MikuThermalObservatoryModal(
     val ctx = LocalContext.current
     var thermalZones by remember { mutableStateOf<List<ThermalZoneData>>(emptyList()) }
     var cpuFrequencies by remember { mutableStateOf<List<Long>>(emptyList()) }
-    var selectedProfile by remember { mutableStateOf("Balanced") }
+    // Real power mode/profile (Settings.Global) instead of a local, non-functional selector.
+    val powerMode by com.miku.launcher.ui.rememberPowerMode()
+    val powerProfile by com.miku.launcher.ui.rememberPowerProfile()
+    // SoC identity from the platform (Build.SOC_MODEL on API 31+), never a literal chip name.
+    val socLabel = remember {
+        val m = if (android.os.Build.VERSION.SDK_INT >= 31) android.os.Build.SOC_MODEL else null
+        if (m.isNullOrBlank() || m == android.os.Build.UNKNOWN) "SoC" else m
+    }
 
     // Rolling 30-sample chronological time-series buffer
     val chronologicalHistory = remember { mutableStateListOf<ThermalChronologicalPoint>() }
@@ -125,17 +133,21 @@ fun MikuThermalObservatoryModal(
                 thermalZones = zones
                 cpuFrequencies = freqs
 
-                // Record chronological point
-                val currentCpuMax = zones.filter { it.subsystem == "CPU" }.maxOfOrNull { it.tempC } ?: cpuTempC.coerceAtLeast(40f)
-                val currentBatMax = zones.filter { it.subsystem == "BATTERY" }.maxOfOrNull { it.tempC } ?: batteryTempC.coerceAtLeast(30f)
-                val peak = maxOf(currentCpuMax, currentBatMax, zones.maxOfOrNull { it.tempC } ?: 45f)
+                // Record chronological point — ONLY from real readings (sysfs zones, or the host's
+                // already-real cpu/battery values when > 0). No floor, no presumed temperature; a
+                // sample with nothing readable is simply not recorded.
+                val currentCpuMax = zones.filter { it.subsystem == "CPU" }.maxOfOrNull { it.tempC }
+                    ?: cpuTempC.takeIf { it > 0f }
+                val currentBatMax = zones.filter { it.subsystem == "BATTERY" }.maxOfOrNull { it.tempC }
+                    ?: batteryTempC.takeIf { it > 0f }
+                val peak = listOfNotNull(currentCpuMax, currentBatMax, zones.maxOfOrNull { it.tempC }).maxOrNull()
 
-                withContext(Dispatchers.Main) {
+                if (peak != null) withContext(Dispatchers.Main) {
                     chronologicalHistory.add(
                         ThermalChronologicalPoint(
                             timestampMs = System.currentTimeMillis(),
-                            cpuTempC = currentCpuMax,
-                            batteryTempC = currentBatMax,
+                            cpuTempC = currentCpuMax ?: 0f,
+                            batteryTempC = currentBatMax ?: 0f,
                             maxTempC = peak
                         )
                     )
@@ -148,15 +160,18 @@ fun MikuThermalObservatoryModal(
         }
     }
 
-    val livePeakTemp = chronologicalHistory.lastOrNull()?.maxTempC ?: maxOf(cpuTempC, batteryTempC, 45f)
-    val liveCpuTemp = chronologicalHistory.lastOrNull()?.cpuTempC ?: cpuTempC.coerceAtLeast(42f)
-    val liveBatTemp = chronologicalHistory.lastOrNull()?.batteryTempC ?: batteryTempC.coerceAtLeast(32f)
+    // null = no sensor has produced a reading yet → "—" and a neutral colour.
+    val livePeakTemp: Float? = chronologicalHistory.lastOrNull()?.maxTempC
+        ?: listOf(cpuTempC, batteryTempC).filter { it > 0f }.maxOrNull()
+    val hasThermal = livePeakTemp != null
+    val peakForColor = livePeakTemp ?: -1f
 
     val thermoclineColor = when {
-        livePeakTemp >= 58f -> com.miku.launcher.ui.MikuIdentity.Coral // Hot / Throttle Red
-        livePeakTemp >= 48f -> Color(0xFFFF9100) // Warm Amber Orange
-        livePeakTemp >= 38f -> com.miku.launcher.ui.MikuIdentity.Gold // Nominal Gold
-        livePeakTemp >= 30f -> Color(0xFF00E5FF) // Cool Cyan
+        !hasThermal -> MikuTextSecondary                                  // No data: neutral
+        peakForColor >= 58f -> com.miku.launcher.ui.MikuIdentity.Coral // Hot / Throttle Red
+        peakForColor >= 48f -> Color(0xFFFF9100) // Warm Amber Orange
+        peakForColor >= 38f -> com.miku.launcher.ui.MikuIdentity.Gold // Nominal Gold
+        peakForColor >= 30f -> Color(0xFF00E5FF) // Cool Cyan
         else -> com.miku.launcher.ui.MikuIdentity.Leek                // Low Ambient Mint Green
     }
 
@@ -243,7 +258,12 @@ fun MikuThermalObservatoryModal(
                                     .padding(horizontal = 4.dp, vertical = 1.dp)
                             ) {
                                 Text(
-                                    if (livePeakTemp >= 58f) "THROTTLING" else if (livePeakTemp >= 48f) "WARM" else "NOMINAL",
+                                    when {
+                                        !hasThermal -> "NO SENSOR DATA"
+                                        peakForColor >= 58f -> "THROTTLING"
+                                        peakForColor >= 48f -> "WARM"
+                                        else -> "NOMINAL"
+                                    },
                                     color = thermoclineColor,
                                     fontSize = 7.5.sp,
                                     fontWeight = FontWeight.Black,
@@ -252,7 +272,7 @@ fun MikuThermalObservatoryModal(
                             }
                         }
                         Text(
-                            "HiBy M500 Qualcomm Kryo Octa-Core Thermal Topology",
+                            "${socLabel} thermal zones (${thermalZones.size} readable)",
                             color = MikuTextSecondary,
                             fontSize = 8.sp
                         )
@@ -261,7 +281,7 @@ fun MikuThermalObservatoryModal(
                     // Live Peak Metric HUD
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = "${String.format("%.1f", livePeakTemp)}°C",
+                            text = if (livePeakTemp != null) "${String.format("%.1f", livePeakTemp)}°C" else "—°C",
                             color = thermoclineColor,
                             fontSize = 17.sp,
                             fontWeight = FontWeight.Black,
@@ -395,7 +415,8 @@ fun MikuThermalObservatoryModal(
                             Text("-30s", color = MikuTextSecondary, fontSize = 7.sp)
                             Text("-20s", color = MikuTextSecondary, fontSize = 7.sp)
                             Text("-10s", color = MikuTextSecondary, fontSize = 7.sp)
-                            Text("LIVE", color = thermoclineColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                            // "LIVE" only with a real sample — it used to label a blank chart.
+                            Text(if (hasThermal) "LIVE" else "—", color = thermoclineColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -419,8 +440,12 @@ fun MikuThermalObservatoryModal(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("HARDWARE THERMAL HISTOGRAM (24 SENSORS)", color = MikuCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                            Text("${thermalZones.size} SENSORS ACTIVE", color = Color(0xFF00FF7F), fontSize = 7.5.sp, fontFamily = AudiowideFont)
+                            Text("HARDWARE THERMAL HISTOGRAM", color = MikuCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                            Text(
+                                if (thermalZones.isEmpty()) "NO READABLE ZONES" else "${thermalZones.size} SENSORS READABLE",
+                                color = if (thermalZones.isEmpty()) MikuTextSecondary else Color(0xFF00FF7F),
+                                fontSize = 7.5.sp, fontFamily = AudiowideFont
+                            )
                         }
 
                         Spacer(Modifier.height(6.dp))
@@ -433,8 +458,14 @@ fun MikuThermalObservatoryModal(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.Bottom
                         ) {
-                            val displayZones = thermalZones   // real only — no fabricated zones when sysfs is blocked
+                            // Real only — no fabricated zones when sysfs is blocked. Sorted by
+                            // subsystem so the legend below describes the bar order truthfully.
+                            val subsystemOrder = listOf("CPU", "GPU", "DSP", "AUDIO", "BATTERY", "RF", "SOC", "DISPLAY", "OTHER")
+                            val displayZones = thermalZones.sortedBy { subsystemOrder.indexOf(it.subsystem).let { i -> if (i < 0) 99 else i } }
 
+                            if (displayZones.isEmpty()) {
+                                Text("thermal sysfs not readable from this process", color = MikuTextSecondary, fontSize = 7.5.sp)
+                            }
                             displayZones.forEach { zone ->
                                 val normHeight = ((zone.tempC - 25f) / 50f).coerceIn(0.15f, 1.0f)
                                 val barColor = when {
@@ -456,16 +487,18 @@ fun MikuThermalObservatoryModal(
 
                         Spacer(Modifier.height(4.dp))
 
-                        // Category Labels Under Histogram
+                        // Legend: real per-subsystem counts of the readable zones (bar order matches).
+                        val counts = thermalZones.groupingBy { it.subsystem }.eachCount()
                         Row(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("CPU / KRYO", color = Color(0xFFFF9100), fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
-                            Text("GPU/DSP", color = MikuCyan, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
-                            Text("AUDIO", color = Color(0xFFB388FF), fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
-                            Text("BATTERY", color = Color(0xFF00FF88), fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
-                            Text("MODEM RF", color = MikuNeonPink, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                            Text("CPU ×${counts["CPU"] ?: 0}", color = Color(0xFFFF9100), fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                            Text("GPU/DSP ×${(counts["GPU"] ?: 0) + (counts["DSP"] ?: 0)}", color = MikuCyan, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                            Text("AUDIO ×${counts["AUDIO"] ?: 0}", color = Color(0xFFB388FF), fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                            Text("BATTERY ×${counts["BATTERY"] ?: 0}", color = Color(0xFF00FF88), fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                            Text("RF ×${counts["RF"] ?: 0}", color = MikuNeonPink, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
+                            Text("OTHER ×${(counts["SOC"] ?: 0) + (counts["DISPLAY"] ?: 0) + (counts["OTHER"] ?: 0)}", color = MikuTextSecondary, fontSize = 6.5.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -484,10 +517,11 @@ fun MikuThermalObservatoryModal(
                         .padding(8.dp)
                 ) {
                     Column {
-                        Text("DVFS CPU CLUSTERS (SNAPDRAGON 665)", color = MikuCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Text("DVFS CPU CLUSTERS (${socLabel.uppercase()})", color = MikuCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                         Spacer(Modifier.height(4.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            val freqs = if (cpuFrequencies.isNotEmpty()) cpuFrequencies else listOf(1900L, 1900L, 1900L, 1900L, 2000L, 2000L, 2000L, 2000L)
+                            // cpufreq sysfs only; unreadable cores show "—" instead of a presumed clock.
+                            val freqs: List<Long?> = if (cpuFrequencies.isNotEmpty()) cpuFrequencies else List(4) { null }
                             freqs.take(4).forEachIndexed { i, freq ->
                                 Box(
                                     Modifier
@@ -500,7 +534,7 @@ fun MikuThermalObservatoryModal(
                                 ) {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         Text("C$i", color = MikuTextSecondary, fontSize = 7.sp)
-                                        Text("${freq}M", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                                        Text(if (freq != null && freq > 0L) "${freq}M" else "—", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                     }
                                 }
                             }
@@ -511,10 +545,12 @@ fun MikuThermalObservatoryModal(
                 Spacer(Modifier.height(10.dp))
 
                 // ============================================================
-                // TIER 4: THERMAL & PERFORMANCE GOVERNOR PROFILES
+                // TIER 4: POWER MODE — wired to the REAL Settings.Global miku_power_mode that Miku
+                // Music's governor honours (save / auto / perf). Was a dead selector that stored a
+                // local string and controlled nothing.
                 // ============================================================
                 Text(
-                    "THERMAL & POWER GOVERNOR PROFILE",
+                    "POWER MODE (miku_power_mode · live: ${MikuPowerProfile.modeLabel(powerMode, powerProfile)})",
                     color = MikuCyan,
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,
@@ -526,18 +562,18 @@ fun MikuThermalObservatoryModal(
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf(
-                        Triple("Cryo Low", "❄️ Cryo Low", Color(0xFF00E5FF)),
-                        Triple("Balanced", "⚡ Balanced", com.miku.launcher.ui.MikuIdentity.Gold),
-                        Triple("Turbo", "🔥 Turbo", com.miku.launcher.ui.MikuIdentity.Coral)
-                    ).forEach { (profile, label, color) ->
-                        val isSelected = selectedProfile == profile
+                        Triple("save", "❄️ Battery Saver", Color(0xFF00E5FF)),
+                        Triple("auto", "⚡ Auto", com.miku.launcher.ui.MikuIdentity.Gold),
+                        Triple("perf", "🔥 Performance", com.miku.launcher.ui.MikuIdentity.Coral)
+                    ).forEach { (mode, label, color) ->
+                        val isSelected = powerMode == mode
                         Box(
                             Modifier
                                 .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isSelected) color.copy(alpha = 0.22f) else Color(0xFF041017))
                                 .border(1.dp, if (isSelected) color else CyberGlassBorder.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                                .clickable { selectedProfile = profile }
+                                .clickable { MikuPowerProfile.setMode(ctx, mode) }
                                 .padding(vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {

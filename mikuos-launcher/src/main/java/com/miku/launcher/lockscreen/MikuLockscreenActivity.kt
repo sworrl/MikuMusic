@@ -415,8 +415,9 @@ data class MikuNowPlaying(
     val artwork: Any? = null,       // ByteArray or Uri — Coil consumes either
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
-    val format: String = "Direct DTA 24-bit / 96kHz",
-    val bpm: Float = 128f
+    // Blank / 0 = the player has not published a real format or tempo for this track.
+    val format: String = "",
+    val bpm: Float = 0f
 )
 
 /**
@@ -511,8 +512,9 @@ fun MikuKawaiiLockscreenScreen(
     }
 
     // Real-time time & date (24-Hour Military Time & MM/DD/YYYY)
-    var currentTime by remember { mutableStateOf("") }
-    var currentDate by remember { mutableStateOf("") }
+    // Seeded from the real clock synchronously — the first frame is never a placeholder time/date.
+    var currentTime by remember { mutableStateOf(SimpleDateFormat("HH:mm", Locale.US).format(Date())) }
+    var currentDate by remember { mutableStateOf(SimpleDateFormat("MM/dd/yyyy", Locale.US).format(Date())) }
     LaunchedEffect(Unit) {
         val timeFormat = SimpleDateFormat("HH:mm", Locale.US)
         val dateFormat = SimpleDateFormat("MM/dd/yyyy", Locale.US)
@@ -524,17 +526,30 @@ fun MikuKawaiiLockscreenScreen(
         }
     }
 
-    // Battery
-    var batteryPercent by remember { mutableIntStateOf(100) }
-    var isCharging by remember { mutableStateOf(false) }
+    // Battery — seeded from the sticky broadcast synchronously so the first frame is the real
+    // level, never a placeholder 100%.
+    val initialBattery = remember {
+        try {
+            val b = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val lvl = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scl = b?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val st = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            // -1 = could not read. It was 0, which the badge rendered as a red, critical-looking
+            // "0%" — just as fabricated as the placeholder 100% it replaced.
+            val pct = if (lvl >= 0 && scl > 0) (lvl * 100 / scl.toFloat()).roundToInt() else -1
+            pct to (st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL)
+        } catch (_: Throwable) { -1 to false }
+    }
+    var batteryPercent by remember { mutableIntStateOf(initialBattery.first) }
+    var isCharging by remember { mutableStateOf(initialBattery.second) }
     LaunchedEffect(Unit) {
         while (true) {
             val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
             val bStatus = context.registerReceiver(null, ifilter)
-            val level = bStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: 100
-            val scale = bStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: 100
+            val level = bStatus?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scale = bStatus?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
             val status = bStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            batteryPercent = (level * 100 / scale.toFloat()).roundToInt()
+            if (level >= 0 && scale > 0) batteryPercent = (level * 100 / scale.toFloat()).roundToInt()
             isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
             delay(5000)
         }
@@ -598,16 +613,21 @@ fun MikuKawaiiLockscreenScreen(
                         isPlaying = try { Settings.Global.getInt(cr, "miku_is_playing", 0) == 1 } catch (_: Throwable) { true }
                     }
                 }
-                if (artist.isNullOrEmpty()) artist = "Hatsune Miku"
+                // NO fabricated artist. This used to force artist = "Hatsune Miku" for any session
+                // without artist metadata — a Spotify/Tidal stream or a tag-less file was attributed
+                // to her on screen AND written into the persisted play history. A blank artist stays
+                // blank; the renderer shows "Unknown artist".
                 // Our player publishes true format/bpm/like into Settings.Global; for a 3rd-party
                 // app (Spotify etc) show its source rather than a false "DTA" claim.
+                // No published format = blank (badge hidden); never a default "DTA 24/96" claim.
                 val format = if (isMiku) {
-                    try { Settings.Global.getString(cr, "miku_now_playing_format") ?: "Direct DTA 24-bit / 96kHz" }
-                    catch (_: Throwable) { "Direct DTA 24-bit / 96kHz" }
+                    try { Settings.Global.getString(cr, "miku_now_playing_format") ?: "" }
+                    catch (_: Throwable) { "" }
                 } else appLabelFor(context, pkg)
+                // 0 = tempo not analysed; third-party sessions never get an invented tempo.
                 val bpm = if (isMiku) {
-                    try { Settings.Global.getFloat(cr, "miku_now_playing_bpm", 128f) } catch (_: Throwable) { 128f }
-                } else 128f
+                    try { Settings.Global.getFloat(cr, "miku_now_playing_bpm", 0f) } catch (_: Throwable) { 0f }
+                } else 0f
                 val isLikedFromSettings = isMiku && try {
                     Settings.Global.getString(cr, "miku_current_track_liked") == "1"
                 } catch (_: Throwable) { false }
@@ -761,13 +781,17 @@ fun MikuKawaiiLockscreenScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween
         ) {
+            // batteryPercent < 0 = the sticky broadcast was unreadable → neutral badge + "—%".
+            val batteryKnown = batteryPercent >= 0
             val batteryColor = when {
+                !batteryKnown -> Color(0xFF88BAC6)
                 isCharging -> com.miku.launcher.ui.MikuIdentity.Leek
                 batteryPercent > 60 -> palette.primary
                 batteryPercent > 20 -> com.miku.launcher.ui.MikuIdentity.Gold
                 else -> com.miku.launcher.ui.MikuIdentity.Coral
             }
             val batteryGradient = when {
+                !batteryKnown -> listOf(Color(0xEE0B1A20), Color(0xFF030D14))
                 isCharging -> listOf(Color(0x5500E676), Color(0xFF04150E))
                 batteryPercent > 60 -> listOf(Color(0xEE081F2A), Color(0xFF030D14))
                 batteryPercent > 20 -> listOf(Color(0x55FFD600), Color(0xFF1E1704))
@@ -871,7 +895,7 @@ fun MikuKawaiiLockscreenScreen(
                             )
                             Spacer(Modifier.width(3.dp))
                             Text(
-                                "$batteryPercent%",
+                                if (batteryKnown) "$batteryPercent%" else "—%",
                                 color = Color.White,
                                 fontSize = 10.dampedSp(),
                                 fontWeight = FontWeight.Bold,
@@ -890,7 +914,7 @@ fun MikuKawaiiLockscreenScreen(
             ) {
                 Text(
                     modifier = Modifier.graphicsLayer { alpha = settleClock.value.coerceIn(0f, 1f); translationY = (1f - settleClock.value) * 14.dp.toPx() },
-                    text = currentTime.ifBlank { "12:00" },
+                    text = currentTime,
                     color = Color.White,
                     fontSize = 38.dampedSp(),
                     fontWeight = FontWeight.Black,
@@ -899,7 +923,7 @@ fun MikuKawaiiLockscreenScreen(
                 )
                 Text(
                     modifier = Modifier.graphicsLayer { alpha = settleDate.value.coerceIn(0f, 1f); translationY = (1f - settleDate.value) * 10.dp.toPx() },
-                    text = currentDate.ifBlank { "01/01/2026" },
+                    text = currentDate,
                     color = palette.primary,
                     fontSize = 11.5.dampedSp(),
                     fontWeight = FontWeight.Bold,
@@ -988,7 +1012,8 @@ fun MikuKawaiiLockscreenScreen(
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = nowPlaying.artist ?: "Hatsune Miku",
+                                    // Honest unknown — never an invented artist name.
+                                    text = nowPlaying.artist?.takeIf { it.isNotBlank() } ?: "Unknown artist",
                                     color = palette.primary,
                                     fontSize = 10.5.dampedSp(),
                                     fontWeight = FontWeight.Bold,
@@ -1100,8 +1125,8 @@ fun MikuKawaiiLockscreenScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Quality Badge
-                            Box(
+                            // Quality Badge — only when the player published a real format string.
+                            if (nowPlaying.format.isNotBlank()) Box(
                                 Modifier
                                     .clip(RoundedCornerShape(4.dp))
                                     .background(Color(0x3300FF7F))
@@ -1127,11 +1152,12 @@ fun MikuKawaiiLockscreenScreen(
                             val miniApproachAnim = remember { Animatable(1.5f) }
 
                             val bpmDb = remember { com.miku.launcher.bpm.MikuBpmDatabase.getInstance(context) }
-                            val beatPeriodMs = (60_000f / nowPlaying.bpm.coerceIn(40f, 300f)).toLong()
+                            val hasTempo = nowPlaying.bpm in 40f..300f
+                            val beatPeriodMs = if (hasTempo) (60_000f / nowPlaying.bpm).toLong() else 0L
 
-                            // Continuous approach ring animation synced to BPM
+                            // Continuous approach ring animation synced to BPM — only with a real tempo
                             LaunchedEffect(nowPlaying.isPlaying, nowPlaying.bpm) {
-                                if (nowPlaying.isPlaying) {
+                                if (nowPlaying.isPlaying && hasTempo) {
                                     while (true) {
                                         miniApproachAnim.snapTo(1.7f)
                                         miniApproachAnim.animateTo(
@@ -1246,7 +1272,7 @@ fun MikuKawaiiLockscreenScreen(
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        if (miniTapCount > 1) "🔥 x$miniTapCount $miniJudgment" else "⚡ ${nowPlaying.bpm.toInt()} BPM",
+                                        if (miniTapCount > 1) "🔥 x$miniTapCount $miniJudgment" else if (hasTempo) "⚡ ${nowPlaying.bpm.toInt()} BPM" else "⚡ — BPM",
                                         color = if (miniTapCount > 5) Color(0xFFFFD700) else MikuNeonPink,
                                         fontSize = 9.dampedSp(),
                                         fontWeight = FontWeight.Black,
@@ -1440,18 +1466,22 @@ fun MikuKawaiiLockscreenScreen(
                                                         overflow = TextOverflow.Ellipsis
                                                     )
                                                     Text(
-                                                        item.artist,
+                                                        item.artist.ifBlank { "Unknown artist" },
                                                         color = Color(0xFF88BAC6),
                                                         fontSize = 12.sp,
                                                         maxLines = 1
                                                     )
                                                 }
-                                                Text(
-                                                    item.format.take(10),
-                                                    color = Color(0xFF00FF7F),
-                                                    fontSize = 11.sp,
-                                                    fontFamily = AudiowideFont
-                                                )
+                                                // Blank = the entry carries no recorded format; show
+                                                // nothing rather than a claimed codec/bit-depth.
+                                                if (item.format.isNotBlank()) {
+                                                    Text(
+                                                        item.format.take(10),
+                                                        color = Color(0xFF00FF7F),
+                                                        fontSize = 11.sp,
+                                                        fontFamily = AudiowideFont
+                                                    )
+                                                }
                                             }
                                         }
                                     }
@@ -1793,27 +1823,10 @@ fun Miku5HourLockscreenTrendCapsule(
 ) {
     val palette by MikuDiurnalTheme.rememberDiurnalPalette()
 
-    val next5Hours = remember(weather.hourlyMeteogram, weather.tempF) {
-        if (weather.hourlyMeteogram.isNotEmpty()) {
-            weather.hourlyMeteogram.take(5)
-        } else {
-            val cal = Calendar.getInstance()
-            val currentH = cal.get(Calendar.HOUR_OF_DAY)
-            (0..4).map { i ->
-                val h = (currentH + i) % 24
-                val isDay = h in 6..19
-                val (sum, ic) = MikuWeatherService.mapWeatherCode(weather.code, isDay)
-                MikuWeatherService.HourlyMeteogramPoint(
-                    timeLabel = if (i == 0) "Now" else String.format(Locale.US, "%02d:00", h),
-                    tempF = weather.tempF - (i * 1.2f),
-                    precipProbPct = (weather.precipitationProbPct - i * 3).coerceIn(0, 100),
-                    summary = sum,
-                    icon = ic,
-                    isDay = isDay
-                )
-            }
-        }
-    }
+    // Only the fetched hourly series is a forecast. No series = no strip/sparkline; the capsule
+    // never extrapolates a trend from the current reading.
+    val hasWeather = weather.lastUpdatedTime > 0L
+    val next5Hours = remember(weather.hourlyMeteogram) { weather.hourlyMeteogram.take(5) }
 
     val density = androidx.compose.ui.platform.LocalDensity.current
     val fontScale = density.fontScale
@@ -1842,12 +1855,12 @@ fun Miku5HourLockscreenTrendCapsule(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        weather.icon.ifEmpty { "🌸" },
+                        if (hasWeather) weather.icon.ifEmpty { "🌸" } else "🌐",
                         fontSize = 14.sp
                     )
                     Spacer(Modifier.width(3.dp))
                     Text(
-                        "${weather.tempF.roundToInt()}°F",
+                        if (hasWeather) "${weather.tempF.roundToInt()}°F" else "—°F",
                         color = Color.White,
                         fontSize = 12.5.dampedSp(),
                         fontWeight = FontWeight.Black,
@@ -1855,7 +1868,7 @@ fun Miku5HourLockscreenTrendCapsule(
                     )
                     Spacer(Modifier.width(5.dp))
                     Text(
-                        weather.summary,
+                        if (hasWeather) weather.summary else "No weather data yet",
                         color = palette.primary,
                         fontSize = 10.5.dampedSp(),
                         fontWeight = FontWeight.Bold,
@@ -1884,6 +1897,16 @@ fun Miku5HourLockscreenTrendCapsule(
 
             Spacer(Modifier.height(3.dp))
 
+            if (next5Hours.size < 2) {
+                Text(
+                    text = if (hasWeather) "No hourly forecast in the last fetch" else "Hourly trend appears after the first fetch",
+                    color = Color.White.copy(alpha = 0.55f),
+                    fontSize = 9.dampedSp(),
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+            } else {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1937,8 +1960,11 @@ fun Miku5HourLockscreenTrendCapsule(
                 val w = size.width
                 val h = size.height
                 val temps = next5Hours.map { it.tempF }
-                val minT = temps.minOrNull() ?: 60f
-                val maxT = temps.maxOrNull() ?: 80f
+                // No samples = nothing to plot. The old 60f/80f fallbacks invented a temperature
+                // scale for an empty series.
+                if (temps.isEmpty()) return@Canvas
+                val minT = temps.min()
+                val maxT = temps.max()
                 val range = (maxT - minT).coerceAtLeast(3f)
 
                 val pointsOffset = next5Hours.mapIndexed { idx, pt ->
@@ -1989,6 +2015,7 @@ fun Miku5HourLockscreenTrendCapsule(
                     drawCircle(MikuCyan, radius = 1.2.dp.toPx(), center = p)
                 }
             }
+            } // end real-forecast branch
         }
     }
 }

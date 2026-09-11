@@ -60,9 +60,10 @@ enum class VolumeHudStyle(val key: String, val title: String, val description: S
 }
 
 data class VolumeState(
-    val volumePct: Int = 50,
-    val maxVolume: Int = 15,
-    val currentVolume: Int = 8,
+    // maxVolume == 0 means AudioManager has not been read yet; consumers show "—", not a preset 50%.
+    val volumePct: Int = 0,
+    val maxVolume: Int = 0,
+    val currentVolume: Int = 0,
     val isMuted: Boolean = false,
     val isHudVisible: Boolean = false
 )

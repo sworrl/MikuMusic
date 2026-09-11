@@ -101,6 +101,15 @@ object ArcoClient {
     private val _zones = MutableStateFlow<List<ArcoZone>>(emptyList())
     val zones: StateFlow<List<ArcoZone>> = _zones.asStateFlow()
 
+    /**
+     * PROVENANCE of [zones]: true only when a zones endpoint actually answered. False means the list
+     * is the hardcoded NOTIFY_ZONE_FALLBACK enum. The zones pane used to badge the fallback list as
+     * "LIVE" and state "nothing here is hardcoded" — the exact opposite of the truth for the current
+     * server build, which exposes no zones endpoint at all.
+     */
+    private val _zonesAreLive = MutableStateFlow(false)
+    val zonesAreLive: StateFlow<Boolean> = _zonesAreLive.asStateFlow()
+
     private val _devices = MutableStateFlow<List<ArcoDeviceInfo>>(emptyList())
     val devices: StateFlow<List<ArcoDeviceInfo>> = _devices.asStateFlow()
 
@@ -247,7 +256,9 @@ object ArcoClient {
         httpRequest("POST", "/api/notify", json.encodeToString(ArcoNotifyRequest(color, style, zones, durationMs)))
             .mapCatching { json.decodeFromString<ArcoNotifyResponse>(it) }
 
-    /** Pushes 8-band FFT + beat data to drive arco's music visualizer themes.
+    /** Pushes 8 band levels + beat data to drive arco's music visualizer themes. NOTE: the bands are
+     * SYNTHESIZED from tempo/beat phase by ArcoMusicVisualizerBridge — MikuOS broadcasts no real
+     * per-band spectral data — so this is not FFT output despite the shape of the payload.
      * See [ArcoMusicVisualizerBridge] for the BPM-engine-driven caller. */
     suspend fun pushAudio(level: Float, beat: Float, bands: List<Float>): Result<ArcoAudioPushResponse> =
         httpRequest("POST", "/api/audio", json.encodeToString(ArcoAudioPushRequest(level, beat, bands)))
@@ -304,6 +315,7 @@ object ArcoClient {
             val parsed = runCatching { parseZonesLenient(raw) }.getOrNull()
             if (!parsed.isNullOrEmpty()) {
                 _zones.value = parsed
+                _zonesAreLive.value = true
                 return@withContext Result.success(parsed)
             }
         }
@@ -313,6 +325,7 @@ object ArcoClient {
             ArcoZone(id = it, name = it.replaceFirstChar { c -> c.uppercase() }, ledCount = null, group = "notify")
         }
         _zones.value = fallback
+        _zonesAreLive.value = false
         Result.success(fallback)
     }
 

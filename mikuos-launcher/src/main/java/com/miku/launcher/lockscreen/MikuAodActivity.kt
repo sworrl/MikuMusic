@@ -118,7 +118,8 @@ class MikuAodActivity : ComponentActivity() {
 
                     if (showWeather) {
                         val w = weatherState.weather
-                        if (w.tempF != 0f) {
+                        // Only a fetched condition (lastUpdatedTime > 0) is shown — never the model defaults.
+                        if (w.lastUpdatedTime > 0L) {
                             Spacer(Modifier.height(14.dp))
                             Text(
                                 text = "${w.icon} ${w.tempF.toInt()}°F · ${w.summary}",
@@ -153,13 +154,14 @@ class MikuAodActivity : ComponentActivity() {
                             horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
-                                text = "⚡ ${bpmState.bpm.toInt()} BPM",
+                                text = if (bpmState.bpm in 40f..300f) "⚡ ${bpmState.bpm.toInt()} BPM" else "⚡ — BPM",
                                 color = MikuCyan.copy(alpha = 0.85f),
                                 fontSize = 13.5.sp,
                                 fontWeight = FontWeight.Bold,
                                 fontFamily = AudiowideFont
                             )
-                            // 8-Bar Mini Spectrum
+                            // Decorative beat pulse (period driven by the real beatIntervalMs) —
+                            // NOT a spectrum analyser: no FFT/per-band audio data is read here.
                             val pulseAnim = rememberInfiniteTransition(label = "AodSpec")
                             val phase by pulseAnim.animateFloat(
                                 initialValue = 0.2f,

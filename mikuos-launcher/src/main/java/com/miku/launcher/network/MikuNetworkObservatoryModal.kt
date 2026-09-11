@@ -280,7 +280,11 @@ fun MikuNetworkObservatoryModal(
                                     letterSpacing = 0.8.sp
                                 )
                                 Text(
-                                    text = "CV01 RF Link: ${if (wifi.isConnected) "${wifi.bandLabel} (${wifi.rssiDbm}dBm)" else "Cellular ${cell.networkType}"} · Ping: ${networkState.latencyMs}ms",
+                                    text = "CV01 RF Link: ${
+                                        if (wifi.isConnected) "Wi-Fi ${wifi.bandLabel.ifBlank { "" }}${if (wifi.rssiDbm > -100) " (${wifi.rssiDbm}dBm)" else ""}".trim()
+                                        else if (cell.hasSignal) "Cellular ${cell.networkType.ifBlank { "—" }}"
+                                        else "no link"
+                                    } · Ping: ${if (networkState.latencyMs > 0) "${networkState.latencyMs}ms" else "—"}",
                                     color = MikuCyan,
                                     fontSize = 11.5.sp,
                                     fontWeight = FontWeight.Bold
@@ -292,9 +296,12 @@ fun MikuNetworkObservatoryModal(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            // Wi-Fi Master Power Toggle
+                            // Wi-Fi Master Power Toggle. Inert until the service has actually read the
+                            // radio once (lastUpdated != 0L) so it never shows a guessed position.
+                            val wifiStateKnown = networkState.lastUpdated != 0L
                             Switch(
                                 checked = wifi.isEnabled,
+                                enabled = wifiStateKnown,
                                 onCheckedChange = { MikuNetworkService.setWifiEnabled(ctx, it) },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = MikuCyan,
@@ -329,7 +336,7 @@ fun MikuNetworkObservatoryModal(
                     // ============================================================
                     // 3D EMBOSSED CONNECTED WI-FI HERO POD (SHOWN ONLY ONCE)
                     // ============================================================
-                    if (wifi.isConnected && wifi.ssid.isNotBlank()) {
+                    if (wifi.isConnected) {
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -378,8 +385,9 @@ fun MikuNetworkObservatoryModal(
                                             Spacer(Modifier.width(8.dp))
                                             Column {
                                                 Text(
-                                                    text = wifi.ssid,
-                                                    color = Color.White,
+                                                    // Blank = the framework hid the SSID from us; say so, never a stand-in name.
+                                                    text = wifi.ssid.ifBlank { "SSID unavailable" },
+                                                    color = if (wifi.ssid.isBlank()) MikuTextSecondary else Color.White,
                                                     fontSize = 16.sp,
                                                     fontWeight = FontWeight.Black,
                                                     fontFamily = AudiowideFont
@@ -393,7 +401,7 @@ fun MikuNetworkObservatoryModal(
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Text(
-                                                        text = "CONNECTED // ${wifi.bssid}",
+                                                        text = "CONNECTED // ${wifi.bssid.ifBlank { "BSSID —" }}",
                                                         color = com.miku.launcher.ui.MikuIdentity.Leek,
                                                         fontSize = 11.5.sp,
                                                         fontWeight = FontWeight.Bold,
@@ -411,9 +419,13 @@ fun MikuNetworkObservatoryModal(
                                                     .border(0.5.dp, MikuCyan, CutCornerShape(4.dp))
                                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                                             ) {
-                                                Text("${wifi.bandLabel} Ch ${wifi.channel}", color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Black)
+                                                Text(
+                                                    if (wifi.frequencyMhz > 0) "${wifi.bandLabel} Ch ${wifi.channel}" else "Band —",
+                                                    color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Black
+                                                )
                                             }
-                                            Box(
+                                            // 802.11 generation chip only when the framework reported it.
+                                            if (wifi.standard.isNotBlank()) Box(
                                                 Modifier
                                                     .clip(CutCornerShape(4.dp))
                                                     .background(Color(0x3300E676))
@@ -450,7 +462,8 @@ fun MikuNetworkObservatoryModal(
                                         }
                                         Spacer(Modifier.width(8.dp))
                                         Text(
-                                            text = "${wifi.rssiDbm} dBm · ${wifi.signalPct}% · Tx ${wifi.txLinkSpeedMbps}M / Rx ${wifi.rxLinkSpeedMbps}M",
+                                            text = (if (wifi.rssiDbm > -100) "${wifi.rssiDbm} dBm · ${wifi.signalPct}%" else "RSSI —") +
+                                                " · Tx ${if (wifi.txLinkSpeedMbps > 0) "${wifi.txLinkSpeedMbps}M" else "—"} / Rx ${if (wifi.rxLinkSpeedMbps > 0) "${wifi.rxLinkSpeedMbps}M" else "—"}",
                                             color = Color.White,
                                             fontSize = 16.sp,
                                             fontWeight = FontWeight.Bold,
@@ -472,19 +485,22 @@ fun MikuNetworkObservatoryModal(
                                     ) {
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("IPv4 Address:", color = MikuTextSecondary, fontSize = 12.sp)
-                                            Text(wifi.ipAddress, color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
+                                            Text(wifi.ipAddress.ifBlank { "—" }, color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("Gateway Router:", color = MikuTextSecondary, fontSize = 12.sp)
-                                            Text(wifi.gateway, color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
+                                            Text(wifi.gateway.ifBlank { "—" }, color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("DNS Resolvers:", color = MikuTextSecondary, fontSize = 12.sp)
-                                            Text("${wifi.dns1} / ${wifi.dns2}", color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont)
+                                            Text(
+                                                listOf(wifi.dns1, wifi.dns2).filter { it.isNotBlank() }.joinToString(" / ").ifBlank { "—" },
+                                                color = Color.White, fontSize = 12.sp, fontFamily = AudiowideFont
+                                            )
                                         }
                                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                             Text("Carrier Frequency:", color = MikuTextSecondary, fontSize = 12.sp)
-                                            Text("${wifi.frequencyMhz} MHz", color = MikuCyan, fontSize = 12.sp, fontFamily = AudiowideFont)
+                                            Text(if (wifi.frequencyMhz > 0) "${wifi.frequencyMhz} MHz" else "—", color = MikuCyan, fontSize = 12.sp, fontFamily = AudiowideFont)
                                         }
                                     }
 
@@ -589,7 +605,14 @@ fun MikuNetworkObservatoryModal(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = if (wifi.isEnabled) "No other Wi-Fi networks in range · Scanning..." else "Wi-Fi is turned off.",
+                                // "Scanning..." is now tied to the real scan flag instead of being
+                                // appended permanently to an idle, finished, empty result.
+                                text = when {
+                                    networkState.lastUpdated == 0L -> "Reading Wi-Fi state…"
+                                    networkState.isScanning -> "Scanning…"
+                                    !wifi.isEnabled -> "Wi-Fi is turned off."
+                                    else -> "No other Wi-Fi networks in range"
+                                },
                                 color = MikuTextSecondary,
                                 fontSize = 12.5.sp
                             )
@@ -931,6 +954,35 @@ fun MikuNetworkObservatoryModal(
                     val isHomeWifi = remember(wifi.isConnected, wifi.ssid, wifi.ipAddress) {
                         MikuIngestConfig.isHomeNetwork(ctx, wifi.isConnected, wifi.ssid, wifi.ipAddress)
                     }
+                    // REAL tunnel state. This card used to print "SPILT-TUNNEL ONLINE (4G / WAN)"
+                    // whenever you simply were NOT on home Wi-Fi — with the tunnel down, with no keys
+                    // generated and with the endpoint/routes literally printed as "not configured" on
+                    // the next two lines. It now reads the WireGuard backend's own Tunnel.State, and
+                    // the transport name comes from the modem instead of a hardcoded "4G".
+                    val wgCardStatus by MikuWireGuardManager.status.collectAsState()
+                    val wgCardUp = wgCardStatus.state == com.wireguard.android.backend.Tunnel.State.UP
+                    val wgConfigured = MikuIngestConfig.vpnEndpoint(ctx).isNotBlank()
+                    val wanTransport = when {
+                        wifi.isConnected -> "Wi-Fi"
+                        cell.dataConnected -> cell.networkType.ifBlank { "mobile data" }
+                        else -> "no uplink"
+                    }
+                    val tunnelHeadline = when {
+                        isHomeWifi -> "DIRECT HOME LAN (TUNNEL BYPASSED)"
+                        wgCardUp -> "SPLIT-TUNNEL UP ($wanTransport)"
+                        !wgConfigured -> "TUNNEL NOT CONFIGURED"
+                        else -> "TUNNEL DOWN"
+                    }
+                    val tunnelDotColor = when {
+                        isHomeWifi -> Color(0xFF00E5FF)
+                        wgCardUp -> com.miku.launcher.ui.MikuIdentity.Leek
+                        else -> MikuTextSecondary
+                    }
+                    val tunnelTextColor = when {
+                        isHomeWifi -> MikuCyan
+                        wgCardUp -> com.miku.launcher.ui.MikuIdentity.Leek
+                        else -> MikuTextSecondary
+                    }
 
                     Box(
                         Modifier
@@ -964,12 +1016,12 @@ fun MikuNetworkObservatoryModal(
                                                 Modifier
                                                     .size(7.dp)
                                                     .clip(CircleShape)
-                                                    .background(if (isHomeWifi) Color(0xFF00E5FF) else com.miku.launcher.ui.MikuIdentity.Leek)
+                                                    .background(tunnelDotColor)
                                             )
                                             Spacer(Modifier.width(6.dp))
                                             Text(
-                                                if (isHomeWifi) "DIRECT HOME LAN (TUNNEL BYPASSED)" else "SPLIT-TUNNEL ONLINE (4G / WAN)",
-                                                color = if (isHomeWifi) MikuCyan else com.miku.launcher.ui.MikuIdentity.Leek,
+                                                tunnelHeadline,
+                                                color = tunnelTextColor,
                                                 fontSize = 12.5.sp,
                                                 fontWeight = FontWeight.Black,
                                                 fontFamily = AudiowideFont

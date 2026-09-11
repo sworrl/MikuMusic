@@ -48,40 +48,72 @@ fun MikuFullscreenChargingModal(
 ) {
     val ctx = LocalContext.current
 
-    // Live Charging Telemetry
-    var voltageMv by remember { mutableIntStateOf(4200) }
-    var currentMa by remember { mutableIntStateOf(1850) }
-    var batteryTempC by remember { mutableFloatStateOf(32.5f) }
-    var chargeType by remember { mutableStateOf("Fast Charge (MP2731)") }
+    // Live Charging Telemetry — 0 = not read yet / not readable, rendered as "—". No seeded
+    // 4.20 V / 1850 mA / 32.5 °C placeholders.
+    var voltageMv by remember { mutableIntStateOf(0) }
+    var currentMa by remember { mutableIntStateOf(0) }   // signed: negative = discharging
+    var haveCurrentRead by remember { mutableStateOf(false) }
+    var batteryTempC by remember { mutableFloatStateOf(0f) }
+    var healthLabel by remember { mutableStateOf("") }
 
-    // Read real battery sysfs telemetry
+    // Read real battery telemetry: BatteryManager properties + the sticky battery broadcast
+    // (both work unprivileged), with the power_supply sysfs nodes as an extra source when readable.
     LaunchedEffect(Unit) {
-        val cr = ctx.contentResolver
         while (true) {
             try {
                 val bm = ctx.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
                 if (bm != null) {
                     val cur = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
                     if (cur != Int.MIN_VALUE && cur != 0) {
-                        currentMa = kotlin.math.abs(cur) / (if (kotlin.math.abs(cur) > 10000) 1000 else 1)
+                        // KEEP THE SIGN. abs() was discarding it, so a plugged-but-net-draining
+                        // device showed its drain as a positive green "charging" current.
+                        val mag = kotlin.math.abs(cur)
+                        val scaled = mag / (if (mag > 10000) 1000 else 1)
+                        currentMa = if (cur < 0) -scaled else scaled
+                        haveCurrentRead = true
+                    }
+                }
+                val sticky = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+                if (sticky != null) {
+                    val v = sticky.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1)
+                    if (v > 0) voltageMv = if (v > 10000) v / 1000 else v
+                    val t = sticky.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+                    if (t != Int.MIN_VALUE && t > -300) batteryTempC = t / 10f
+                    healthLabel = when (sticky.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)) {
+                        BatteryManager.BATTERY_HEALTH_GOOD -> "GOOD"
+                        BatteryManager.BATTERY_HEALTH_OVERHEAT -> "OVERHEAT"
+                        BatteryManager.BATTERY_HEALTH_COLD -> "COLD"
+                        BatteryManager.BATTERY_HEALTH_DEAD -> "DEAD"
+                        BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "OVER-VOLTAGE"
+                        BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> "FAILURE"
+                        else -> ""
                     }
                 }
                 val voltFile = File("/sys/class/power_supply/battery/voltage_now")
-                if (voltFile.exists()) {
-                    val rawV = voltFile.readText().trim().toIntOrNull() ?: 4200000
-                    voltageMv = if (rawV > 10000) rawV / 1000 else rawV
+                if (voltFile.exists() && voltFile.canRead()) {
+                    voltFile.readText().trim().toIntOrNull()?.takeIf { it > 0 }?.let { rawV ->
+                        voltageMv = if (rawV > 10000) rawV / 1000 else rawV
+                    }
                 }
                 val tempFile = File("/sys/class/power_supply/battery/temp")
-                if (tempFile.exists()) {
-                    val rawT = tempFile.readText().trim().toFloatOrNull() ?: 320f
-                    batteryTempC = if (rawT > 100f) rawT / 10f else rawT
+                if (tempFile.exists() && tempFile.canRead()) {
+                    tempFile.readText().trim().toFloatOrNull()?.let { rawT ->
+                        batteryTempC = if (rawT > 100f) rawT / 10f else rawT
+                    }
                 }
             } catch (_: Throwable) {}
             kotlinx.coroutines.delay(1200)
         }
     }
 
-    val wattage = (voltageMv.toFloat() / 1000f) * (currentMa.toFloat() / 1000f)
+    val haveVoltage = voltageMv > 0
+    val haveCurrent = haveCurrentRead && currentMa != 0
+    val haveTemp = batteryTempC != 0f
+    // Magnitude only for the wattage figure; the CURRENT card shows the signed value.
+    val wattage = if (haveVoltage && haveCurrent)
+        (voltageMv.toFloat() / 1000f) * (kotlin.math.abs(currentMa).toFloat() / 1000f) else 0f
+    // batteryPct < 0 = the level could not be read (it used to arrive here as a confident 0).
+    val pctKnown = batteryPct >= 0
 
     val infiniteTransition = rememberInfiniteTransition(label = "ChargingAnim")
 
@@ -160,7 +192,7 @@ fun MikuFullscreenChargingModal(
                     )
                 }
                 Text(
-                    "MP2731 Fast Power Delivery • CW2015 Fuel Gauge",
+                    "Battery telemetry · BatteryManager + power_supply sysfs",
                     color = MikuTextSecondary,
                     fontSize = 8.5.sp
                 )
@@ -227,7 +259,9 @@ fun MikuFullscreenChargingModal(
                     Canvas(Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
-                        val fillHeight = h * (1f - (batteryPct / 100f).coerceIn(0.05f, 0.98f))
+                        // Unknown level = empty tank (no fluid), never a 5%-looking sliver.
+                        val fillHeight = if (pctKnown)
+                            h * (1f - (batteryPct / 100f).coerceIn(0.05f, 0.98f)) else h
 
                         val wavePath = Path().apply {
                             moveTo(0f, h)
@@ -260,7 +294,7 @@ fun MikuFullscreenChargingModal(
                         verticalArrangement = Arrangement.Center
                     ) {
                         Text(
-                            text = "$batteryPct%",
+                            text = if (pctKnown) "$batteryPct%" else "—%",
                             color = Color.White,
                             fontSize = 38.sp,
                             fontWeight = FontWeight.Black,
@@ -297,7 +331,7 @@ fun MikuFullscreenChargingModal(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("VOLTAGE", color = MikuTextSecondary, fontSize = 7.sp, fontFamily = AudiowideFont)
-                            Text("${String.format("%.2f", voltageMv / 1000f)}V", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                            Text(if (haveVoltage) "${String.format("%.2f", voltageMv / 1000f)}V" else "—V", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                         }
                     }
 
@@ -313,7 +347,11 @@ fun MikuFullscreenChargingModal(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("CURRENT", color = MikuTextSecondary, fontSize = 7.sp, fontFamily = AudiowideFont)
-                            Text("${currentMa}mA", color = Color(0xFF00FF88), fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                            Text(
+                                if (haveCurrent) "${if (currentMa > 0) "+" else ""}${currentMa}mA" else "—mA",
+                                color = if (haveCurrent && currentMa < 0) MikuNeonPink else Color(0xFF00FF88),
+                                fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont
+                            )
                         }
                     }
 
@@ -329,7 +367,7 @@ fun MikuFullscreenChargingModal(
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("POWER", color = MikuTextSecondary, fontSize = 7.sp, fontFamily = AudiowideFont)
-                            Text("${String.format("%.1f", wattage)}W", color = MikuNeonPink, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                            Text(if (wattage > 0f) "${String.format("%.1f", wattage)}W" else "—W", color = MikuNeonPink, fontSize = 13.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
                         }
                     }
                 }
@@ -350,7 +388,18 @@ fun MikuFullscreenChargingModal(
                             Spacer(Modifier.width(6.dp))
                             Column {
                                 Text("CELL TEMPERATURE", color = MikuTextSecondary, fontSize = 7.sp)
-                                Text("${String.format("%.1f", batteryTempC)}°C • NOMINAL", color = Color(0xFF00FF88), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                // Status word is derived from the real temperature, not asserted.
+                                val tempStatus = when {
+                                    !haveTemp -> "—"
+                                    batteryTempC >= 45f -> "HOT"
+                                    batteryTempC >= 40f -> "WARM"
+                                    else -> "NOMINAL"
+                                }
+                                Text(
+                                    if (haveTemp) "${String.format("%.1f", batteryTempC)}°C • $tempStatus" else "—°C",
+                                    color = when (tempStatus) { "HOT" -> Color(0xFFFF5252); "WARM" -> Color(0xFFFFD600); "NOMINAL" -> Color(0xFF00FF88); else -> MikuTextSecondary },
+                                    fontSize = 9.sp, fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
@@ -369,7 +418,8 @@ fun MikuFullscreenChargingModal(
                             Spacer(Modifier.width(6.dp))
                             Column {
                                 Text("BATTERY HEALTH", color = MikuTextSecondary, fontSize = 7.sp)
-                                Text("GOOD (CW2015 100%)", color = MikuCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                // Framework EXTRA_HEALTH only; no invented state-of-health percentage.
+                                Text(healthLabel.ifBlank { "—" }, color = if (healthLabel.isBlank()) MikuTextSecondary else MikuCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }

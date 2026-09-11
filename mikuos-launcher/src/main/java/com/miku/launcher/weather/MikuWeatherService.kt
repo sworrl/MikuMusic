@@ -44,97 +44,111 @@ object MikuWeatherService {
         val accuracyM: Float = 0f,
         val speedMph: Float = 0f,
         val bearing: Float = 0f,
+        // A Location only sometimes carries speed/altitude/bearing (a NETWORK_PROVIDER fix usually
+        // carries none). These mirror loc.hasSpeed()/hasAltitude()/hasBearing() so a consumer can tell
+        // "measured 0" from "never measured" — otherwise a network fix renders a confident
+        // "0.0 mph (0 km/h)" / "0 m altitude" for a quantity the radio never reported.
+        val hasSpeed: Boolean = false,
+        val hasAltitude: Boolean = false,
+        val hasBearing: Boolean = false,
         val provider: String = "None",
         val lastFixTime: Long = 0L,
-        val city: String = "Detecting Location...",
+        // Empty = no fix / not resolved yet. Consumers render their own honest "Locating…" label;
+        // nothing here pretends to be a resolved place.
+        val city: String = "",
         val county: String = "",
         val state: String = "",
         val country: String = "",
-        val fuzzyLocation: String = "Detecting Location..."
+        val fuzzyLocation: String = ""
     )
 
+    // ---- Forecast models --------------------------------------------------------------------
+    // Every default below is a NEUTRAL "no data" value (0 / blank), never a plausible reading.
+    // A WeatherCondition is only real once lastUpdatedTime > 0 (set by a successful fetch);
+    // every surface must gate on that instead of rendering these fields.
     data class HourlyPrecipPoint(
-        val timeLabel: String = "Now",
+        val timeLabel: String = "",
         val precipInches: Float = 0f,
         val precipProbPct: Int = 0,
         val weatherCode: Int = 0,
-        val tempF: Float = 72f,
-        val summary: String = "Clear",
-        val icon: String = "☀️"
+        val tempF: Float = 0f,
+        val summary: String = "",
+        val icon: String = ""
     )
 
     data class HourlyMeteogramPoint(
-        val timeLabel: String = "12:00",
-        val dayLabel: String = "Today",
-        val tempF: Float = 72f,
-        val feelsLikeF: Float = 70f,
+        val timeLabel: String = "",
+        val dayLabel: String = "",
+        val tempF: Float = 0f,
+        val feelsLikeF: Float = 0f,
         val precipInches: Float = 0f,
         val precipProbPct: Int = 0,
-        val windSpeedMph: Float = 5f,
-        val windGustsMph: Float = 8f,
+        val windSpeedMph: Float = 0f,
+        val windGustsMph: Float = 0f,
         val windDirectionDeg: Int = 0,
-        val windDirectionCompass: String = "N",
+        val windDirectionCompass: String = "",
         val weatherCode: Int = 0,
-        val summary: String = "Clear",
-        val icon: String = "☀️",
+        val summary: String = "",
+        val icon: String = "",
         val isDay: Boolean = true
     )
 
     data class DailyForecastPoint(
-        val dayName: String = "Today",
-        val dateFormatted: String = "08/18",
-        val maxTempF: Float = 75f,
-        val minTempF: Float = 55f,
+        val dayName: String = "",
+        val dateFormatted: String = "",
+        val maxTempF: Float = 0f,
+        val minTempF: Float = 0f,
         val precipSumIn: Float = 0f,
         val precipProbMax: Int = 0,
-        val maxWindSpeedMph: Float = 10f,
+        val maxWindSpeedMph: Float = 0f,
         val weatherCode: Int = 0,
-        val summary: String = "Clear Sky",
-        val icon: String = "☀️"
+        val summary: String = "",
+        val icon: String = ""
     )
 
     data class MoonPhaseInfo(
-        val phaseFraction: Float = 0.5f,
-        val phaseName: String = "Waxing Gibbous",
-        val phaseIcon: String = "🌔",
-        val illuminationPct: Int = 75,
-        val ageDays: Float = 11.2f
+        val phaseFraction: Float = 0f,
+        val phaseName: String = "",
+        val phaseIcon: String = "",
+        val illuminationPct: Int = 0,
+        val ageDays: Float = 0f
     )
 
     data class WeatherCondition(
         val code: Int = 0,
-        val summary: String = "Clear Sky",
-        val icon: String = "☀️",
-        val tempF: Float = 72f,
-        val feelsLikeF: Float = 70f,
-        val humidityPct: Int = 45,
-        val windSpeedMph: Float = 5f,
-        val windGustMph: Float = 8f,
+        val summary: String = "",
+        val icon: String = "",
+        val tempF: Float = 0f,
+        val feelsLikeF: Float = 0f,
+        val humidityPct: Int = 0,
+        val windSpeedMph: Float = 0f,
+        val windGustMph: Float = 0f,
         val windDirectionDeg: Int = 0,
-        val windDirectionCompass: String = "N",
+        val windDirectionCompass: String = "",
         val precipitationIn: Float = 0f,
         val precipitationProbPct: Int = 0,
-        val highTempF: Float = 75f,
-        val lowTempF: Float = 55f,
-        val dewPointF: Float = 50f,
-        val pressureInHg: Float = 29.92f,
-        val cloudCoverPct: Int = 10,
-        val visibilityMiles: Float = 10f,
-        val uvIndex: Float = 5f,
-        val aqi: Int = 30,
-        val aqiCategory: String = "Good",
-        val sunrise: String = "06:00 AM",
-        val sunset: String = "08:00 PM",
-        val solarFraction: Float = 0.5f,
+        val highTempF: Float = 0f,
+        val lowTempF: Float = 0f,
+        val dewPointF: Float = 0f,
+        val pressureInHg: Float = 0f,
+        val cloudCoverPct: Int = 0,
+        val visibilityMiles: Float = 0f,
+        val uvIndex: Float = 0f,
+        val aqi: Int = -1,
+        val aqiCategory: String = "",
+        val sunrise: String = "",
+        val sunset: String = "",
+        val solarFraction: Float = 0f,
         val isDay: Boolean = true,
+        // Moon phase is pure astronomy (computed from the clock), so it is real even before a fetch.
         val moonPhase: MoonPhaseInfo = calculateMoonPhase(),
         val nextPrecipLabel: String = "",
-        val todayCond: String = "Clear",
-        val tomorrowDay: String = "Tomorrow",
-        val tomorrowHi: Float = 75f,
-        val tomorrowLo: Float = 55f,
-        val tomorrowCond: String = "Clear",
-        val sourcesUsed: String = "NWS · Open-Meteo",
+        val todayCond: String = "",
+        val tomorrowDay: String = "",
+        val tomorrowHi: Float = 0f,
+        val tomorrowLo: Float = 0f,
+        val tomorrowCond: String = "",
+        val sourcesUsed: String = "",
         val hourlySparklineTemps: List<Int> = emptyList(),
         val nwsStationId: String = "",
         val severeWarning: String? = null,
@@ -306,6 +320,9 @@ object MikuWeatherService {
                 accuracyM = loc.accuracy,
                 speedMph = speedMph,
                 bearing = loc.bearing,
+                hasSpeed = loc.hasSpeed(),
+                hasAltitude = loc.hasAltitude(),
+                hasBearing = loc.hasBearing(),
                 provider = loc.provider ?: "GPS",
                 lastFixTime = SystemClock.elapsedRealtime()
             )
@@ -355,6 +372,8 @@ object MikuWeatherService {
                 state = region,
                 country = country,
                 provider = "Manual Override",
+                // A typed-in place measures no kinematics — clear any carry-over from an earlier fix.
+                hasSpeed = false, hasAltitude = false, hasBearing = false,
                 lastFixTime = SystemClock.elapsedRealtime(),
                 fuzzyLocation = buildFuzzyString("", city, region)
             )
@@ -453,9 +472,9 @@ object MikuWeatherService {
             if (_state.value.weather.lastUpdatedTime >= updated) return
             _state.value = _state.value.copy(
                 weather = _state.value.weather.copy(
-                    tempF = p.getFloat("wx_tempf", 72f),
-                    summary = p.getString("wx_summary", "Clear Sky") ?: "Clear Sky",
-                    icon = p.getString("wx_icon", "☀️") ?: "☀️",
+                    tempF = p.getFloat("wx_tempf", 0f),
+                    summary = p.getString("wx_summary", "") ?: "",
+                    icon = p.getString("wx_icon", "") ?: "",
                     severeWarning = p.getString("wx_severe", null),
                     lastUpdatedTime = updated
                 )
@@ -482,6 +501,7 @@ object MikuWeatherService {
                         state = region,
                         country = country,
                         provider = "Manual",
+                        hasSpeed = false, hasAltitude = false, hasBearing = false,
                         lastFixTime = SystemClock.elapsedRealtime(),
                         fuzzyLocation = buildFuzzyString("", city, region)
                     )
@@ -501,6 +521,7 @@ object MikuWeatherService {
                 city = p.getString("last_city", "") ?: "",
                 state = p.getString("last_region", "") ?: "",
                 provider = "Last Known",
+                hasSpeed = false, hasAltitude = false, hasBearing = false,
                 lastFixTime = SystemClock.elapsedRealtime(),
                 fuzzyLocation = buildFuzzyString("", p.getString("last_city", "") ?: "", p.getString("last_region", "") ?: "")
             )
@@ -548,6 +569,7 @@ object MikuWeatherService {
                         state = region,
                         country = country,
                         provider = "IP Geolocation",
+                        hasSpeed = false, hasAltitude = false, hasBearing = false,
                         lastFixTime = SystemClock.elapsedRealtime(),
                         fuzzyLocation = fuzzy
                     )

@@ -151,7 +151,10 @@ fun MikuUsbHostModal(
                     // 1. USB DAC Master Mode
                     ModeButton(
                         title = "⚡ USB DAC Mode (Direct ALSA)",
-                        subtitle = "UAC2 192kHz/32-bit Bit-Perfect soundcard",
+                        // No rate/bit-depth claim: setUsbDacMode only writes Settings.Global work_mode
+                        // and sys.usb.config=uac2 — nothing reads back the gadget's advertised format,
+                        // and the host picks the rate anyway. "192kHz/32-bit Bit-Perfect" was invented.
+                        subtitle = "Expose the player as a UAC2 audio gadget (host selects the rate)",
                         accentColor = MikuCyan,
                         onClick = {
                             MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_DAC, selectedDismissOption)
@@ -167,7 +170,8 @@ fun MikuUsbHostModal(
                     // 2. MTP File Transfer
                     ModeButton(
                         title = "📁 MTP / File Transfer",
-                        subtitle = "High-speed internal storage & SD card access",
+                        // "High-speed" was never measured (the negotiated link speed is not read).
+                        subtitle = "MTP file transfer — internal storage & SD card",
                         accentColor = Color(0xFF80D8FF),
                         onClick = {
                             MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_MTP, selectedDismissOption)

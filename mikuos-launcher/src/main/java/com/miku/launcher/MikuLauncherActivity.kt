@@ -550,8 +550,22 @@ fun MikuLauncherScreen() {
         } else null
     }
 
-    var batteryPct by remember { mutableIntStateOf(100) }
-    var isCharging by remember { mutableStateOf(false) }
+    // Seeded from the sticky battery broadcast synchronously: the badge's first frame is the real
+    // level (the poll below is visibility-gated and used to leave a fake 100% up until it ran).
+    val initialBatteryRead = remember {
+        try {
+            val b = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+            val lvl = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+            val scl = b?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
+            val st = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+            // -1 = unreadable. It was 0, and every consumer (home badge, shade chip, fullscreen
+            // charging modal) printed a confident, critical-looking "0%" with an empty gauge.
+            (if (lvl >= 0 && scl > 0) (lvl * 100) / scl else -1) to
+                (st == BatteryManager.BATTERY_STATUS_CHARGING || st == BatteryManager.BATTERY_STATUS_FULL)
+        } catch (_: Throwable) { -1 to false }
+    }
+    var batteryPct by remember { mutableIntStateOf(initialBatteryRead.first) }
+    var isCharging by remember { mutableStateOf(initialBatteryRead.second) }
     var isWifiConnected by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -564,7 +578,8 @@ fun MikuLauncherScreen() {
                 val scale = bIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
                 val bStatus = bIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
                 isCharging = bStatus == BatteryManager.BATTERY_STATUS_CHARGING || bStatus == BatteryManager.BATTERY_STATUS_FULL
-                batteryPct = if (level >= 0 && scale > 0) (level * 100) / scale else 100
+                // Unreadable broadcast keeps the last real value instead of snapping to 100.
+                if (level >= 0 && scale > 0) batteryPct = (level * 100) / scale
 
                 val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
                 val net = cm?.activeNetwork
@@ -819,9 +834,10 @@ fun MikuLauncherScreen() {
         }
     }
 
-    // Dynamic CPU & Battery Thermal Telemetry Poller
-    var cpuTempC by remember { mutableStateOf(34.0f) }
-    var batteryTempC by remember { mutableStateOf(30.0f) }
+    // Dynamic CPU & Battery Thermal Telemetry Poller. 0 = not read yet / sensor unreadable; every
+    // consumer renders that as "—" instead of a presumed room-temperature figure.
+    var cpuTempC by remember { mutableStateOf(0f) }
+    var batteryTempC by remember { mutableStateOf(0f) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -856,9 +872,7 @@ fun MikuLauncherScreen() {
                     }
                 } catch (_: Throwable) {}
 
-                if (cTemp == 0f && bTemp > 0f) cTemp = bTemp + 4.5f   // derive from REAL battery temp only; no flat fake
-                if (bTemp == 0f) bTemp = cTemp - 4.0f
-
+                // No cross-derivation: an unreadable sensor stays 0 and is shown as "—".
                 cpuTempC = cTemp
                 batteryTempC = bTemp
             }
@@ -994,6 +1008,7 @@ fun MikuLauncherScreen() {
                     ConnectedRfNetworkCapsule(
                         wifi = networkState.wifi,
                         cell = networkState.cellular,
+                        radioStateKnown = networkState.lastUpdated != 0L,
                         onClick = { isNetworkObservatoryOpen = true }
                     )
                 },
@@ -1747,7 +1762,10 @@ fun MikuLauncherScreen() {
                 batteryTempC = batteryTempC
             )
         }
-        com.miku.launcher.ui.MikuModalHost(visible = isBatteryObservatoryOpen, onDismiss = { isBatteryObservatoryOpen = false }) {
+        // The "QUANTUM CHARGING CORE" screen is only truthful while the device is actually charging.
+        // It was mounted on the SAME flag as the battery observatory with no isCharging check, so
+        // tapping the battery badge on battery power put a full-screen CHARGING panel over it.
+        com.miku.launcher.ui.MikuModalHost(visible = isBatteryObservatoryOpen && isCharging, onDismiss = { isBatteryObservatoryOpen = false }) {
             com.miku.launcher.battery.MikuFullscreenChargingModal(
                 onDismiss = { isBatteryObservatoryOpen = false },
                 batteryPct = batteryPct,
@@ -1845,6 +1863,41 @@ fun HardwareWidgetsPage(
     onOpenFnSettings: () -> Unit,
     onOpenMonitor: () -> Unit
 ) {
+    val hwCtx = LocalContext.current
+    // Every value on these cards is READ at composition from a real source; anything that cannot
+    // be read renders "—" / "unavailable". Nothing here is a literal pretending to be measured.
+    val hwFilter = remember { runCatching { CirrusLogicManager.getDigitalFilterOrNull(hwCtx) }.getOrNull() }
+    val hwGain = remember { runCatching { CirrusLogicManager.getGainModeOrNull(hwCtx) }.getOrNull() }
+    // "—" when no pattern was ever chosen (getMode() would report its AUDIOPHILE_AUTO fallback).
+    val pulsarModeLabel = remember { runCatching { PulsarLight.getModeOrNull(hwCtx)?.label }.getOrNull() ?: "— (none chosen)" }
+    val pulsarSysfsVisible = remember {
+        listOf("/sys/class/leds/sgm31324-leds", "/sys/class/leds/red", "/sys/class/leds/blue")
+            .any { p -> runCatching { java.io.File(p).let { it.exists() && it.canRead() } }.getOrDefault(false) }
+    }
+    // The RGB indicator is confirmed non-functional on this unit (SELinux-locked nodes, no consumer
+    // LED service), so say that outright rather than only that we cannot read it back.
+    val pulsarReadback = if (pulsarSysfsVisible) "sysfs visible" else "No LED on this unit (nodes not visible)"
+    val fnLockLabel = remember {
+        try {
+            val raw = android.provider.Settings.Global.getString(hwCtx.contentResolver, "button_lock")
+            when (raw?.trim()) { null, "" -> "—"; "0" -> "OFF"; else -> "ENGAGED ($raw)" }
+        } catch (_: Throwable) { "—" }
+    }
+    val launcherVersion = remember {
+        runCatching { "v" + hwCtx.packageManager.getPackageInfo(hwCtx.packageName, 0).versionName }.getOrDefault("v—")
+    }
+    val kernelLabel = remember {
+        val rel = runCatching { System.getProperty("os.version") }.getOrNull()?.takeIf { it.isNotBlank() } ?: "—"
+        val abi = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "—"
+        "Linux $rel · $abi"
+    }
+    val signingLabel = remember {
+        runCatching {
+            val pm = hwCtx.packageManager
+            if (pm.checkSignatures(hwCtx.packageName, "android") == android.content.pm.PackageManager.SIGNATURE_MATCH)
+                "Platform-signed · Native Compose" else "NOT platform-signed · Native Compose"
+        }.getOrDefault("Signature check failed")
+    }
     Box(Modifier.fillMaxSize()) {
         Image(
             painter = painterResource(id = R.drawable.miku_bg_page1),
@@ -1893,7 +1946,11 @@ fun HardwareWidgetsPage(
                     Spacer(Modifier.height(3.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Filter & Gain", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("NOS Mode / Low Gain 0dB", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        // Read from the DAC sysfs / vendor globals; "—" when neither is readable.
+                        Text(
+                            "${hwFilter?.label ?: "—"} / ${hwGain?.label ?: "—"}",
+                            color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -1919,13 +1976,15 @@ fun HardwareWidgetsPage(
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Active FX Pattern", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("Audio Bitrate Sync / BPM", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Configured Pattern", color = MikuTextSecondary, fontSize = 11.sp)
+                        // The saved preference — a setting, not a readback of the LED driver.
+                        Text(pulsarModeLabel, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Spacer(Modifier.height(3.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("PWM Hardware State", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("Online (85% Brightness)", color = MikuNeonPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("LED Driver Readback", color = MikuTextSecondary, fontSize = 11.sp)
+                        // No sysfs node is readable from this process on the M500 → honest "unavailable".
+                        Text(pulsarReadback, color = if (pulsarSysfsVisible) MikuNeonPink else MikuTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1951,13 +2010,14 @@ fun HardwareWidgetsPage(
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Side Switch Mode", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("Touch & Key Lock", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Button Lock (Global)", color = MikuTextSecondary, fontSize = 11.sp)
+                        // Settings.Global button_lock is the framework's real lock flag; absent = "—".
+                        Text(fnLockLabel, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                     Spacer(Modifier.height(3.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Pocket Safeguards", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("Volume Pass-thru ON", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Configure in Fn settings", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1979,17 +2039,20 @@ fun HardwareWidgetsPage(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("MIKUOS NATIVE SYSTEM", color = MikuCyan, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                        Text("v0.1.0", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                        // Real launcher versionName from PackageManager.
+                        Text(launcherVersion, color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Black)
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Kernel", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("Linux 4.19 · AArch64", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        // uname release from the running kernel + primary ABI — never a literal.
+                        Text(kernelLabel, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Spacer(Modifier.height(3.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Subsystem", color = MikuTextSecondary, fontSize = 11.sp)
-                        Text("Platform Signed · Native Compose", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Signing", color = MikuTextSecondary, fontSize = 11.sp)
+                        // Verified against the "android" package's certificate at runtime.
+                        Text(signingLabel, color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -3526,6 +3589,9 @@ fun MikuCyberWeatherGpsBadge(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // lastUpdatedTime == 0 -> nothing fetched yet; every field is the model's neutral
+            // default and is rendered as an em dash, never as a reading.
+            val wxReal = weather.lastUpdatedTime > 0L
             // Row 1: Weather Icon + Live Temp + High/Low Range + Condition Summary
             Row(
                 modifier = Modifier
@@ -3536,12 +3602,12 @@ fun MikuCyberWeatherGpsBadge(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        weather.icon.ifEmpty { if (isNight) "🌙" else "☀️" },
+                        if (wxReal) weather.icon.ifEmpty { if (isNight) "🌙" else "☀️" } else "🌐",
                         fontSize = 15.sp
                     )
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "${weather.tempF.toInt()}°F",
+                        if (wxReal) "${weather.tempF.toInt()}°F" else "—°F",
                         color = Color.White,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.Black,
@@ -3550,7 +3616,7 @@ fun MikuCyberWeatherGpsBadge(
                 }
 
                 // High / Low Micro Capsule
-                if (weather.highTempF != 0f && weather.lowTempF != 0f) {
+                if (wxReal && weather.highTempF != 0f && weather.lowTempF != 0f) {
                     Row(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
@@ -3566,7 +3632,7 @@ fun MikuCyberWeatherGpsBadge(
 
                 // Summary
                 Text(
-                    if (weather.summary.isNotEmpty()) weather.summary else "Clear Sky",
+                    if (wxReal && weather.summary.isNotEmpty()) weather.summary else if (wxReal) "—" else "No weather data",
                     color = rimColor,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
@@ -3587,10 +3653,10 @@ fun MikuCyberWeatherGpsBadge(
             ) {
                 // Left Metrics: Humidity & Wind
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("💧${weather.humidityPct}%", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Text(if (wxReal) "💧${weather.humidityPct}%" else "💧—", color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(5.dp))
-                    Text("💨${weather.windSpeedMph.toInt()}m", color = MikuTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    if (weather.precipitationProbPct > 0) {
+                    Text(if (wxReal) "💨${weather.windSpeedMph.toInt()}m" else "💨—", color = MikuTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    if (wxReal && weather.precipitationProbPct > 0) {
                         Spacer(Modifier.width(4.dp))
                         Text("☔${weather.precipitationProbPct}%", color = Color(0xFFFF80AB), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
@@ -3599,9 +3665,9 @@ fun MikuCyberWeatherGpsBadge(
                 // Right: Active City / Tactical Coordinate Lock
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val locText = when {
-                        gps.city.isNotEmpty() && !gps.city.startsWith("Detecting") -> gps.city
-                        gps.fuzzyLocation.isNotEmpty() && !gps.fuzzyLocation.startsWith("Detecting") -> gps.fuzzyLocation.split(",").firstOrNull() ?: "Locating..."
-                        gps.isLocked -> "GPS Lock"
+                        gps.city.isNotEmpty() -> gps.city
+                        gps.fuzzyLocation.isNotEmpty() -> gps.fuzzyLocation.split(",").firstOrNull() ?: "Locating..."
+                        gps.isLocked -> "Fix (unnamed)"
                         else -> "Locating..."
                     }
                     Box(
@@ -3635,6 +3701,9 @@ fun MikuCyberWeatherGpsBadge(
 fun ConnectedRfNetworkCapsule(
     wifi: com.miku.launcher.network.MikuNetworkService.WifiGranularState,
     cell: com.miku.launcher.network.MikuNetworkService.CellularGranularState,
+    // false until MikuNetworkService has polled the radios once — before that neither "WIFI" nor
+    // "OFF" is a fact, so the pod shows "—".
+    radioStateKnown: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -3725,7 +3794,7 @@ fun ConnectedRfNetworkCapsule(
                             modifier = Modifier.size(13.dp)
                         )
                         Text(
-                            text = "WIFI ${wifi.rssiDbm}d",
+                            text = if (wifi.rssiDbm > -100) "WIFI ${wifi.rssiDbm}d" else "WIFI",
                             color = wifiColor,
                             fontSize = 11.5.sp,
                             fontWeight = FontWeight.Black,
@@ -3739,7 +3808,7 @@ fun ConnectedRfNetworkCapsule(
                             modifier = Modifier.size(12.dp)
                         )
                         Text(
-                            text = if (wifi.isEnabled) "WIFI" else "OFF",
+                            text = if (!radioStateKnown) "—" else if (wifi.isEnabled) "WIFI" else "OFF",
                             color = Color.White.copy(alpha = 0.5f),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -3786,10 +3855,17 @@ fun ConnectedRfNetworkCapsule(
                         }
                     }
                     Text(
+                        // The radio technology comes from TelephonyManager (cell.networkType);
+                        // it was a hardcoded "LTE" literal that lied on 5G/3G/no-service. dBm is
+                        // only printed when actually measured (real RSSI is negative; 0 = unknown).
                         text = when {
+                            !radioStateKnown -> "—"
                             !cell.isConnected -> "NO SIM"
                             cellNoData -> "! NO DATA"
-                            else -> "LTE ${cell.signalDbm}d"
+                            else -> {
+                                val tech = cell.networkType.ifEmpty { "CELL" }
+                                if (cell.signalDbm < 0) "$tech ${cell.signalDbm}d" else tech
+                            }
                         },
                         color = cellColor,
                         fontSize = 11.5.sp,
@@ -3891,15 +3967,16 @@ fun UnifiedWeatherGpsCapsule(
                         .clickable { onWeatherClick() },
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    val wxReal = weather.lastUpdatedTime > 0L
                     Text(
-                        weather.icon,
+                        if (wxReal) weather.icon.ifEmpty { "🌐" } else "🌐",
                         fontSize = 16.sp
                     )
                     Spacer(Modifier.width(4.dp))
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                "${weather.tempF.toInt()}°F",
+                                if (wxReal) "${weather.tempF.toInt()}°F" else "—°F",
                                 color = Color.White,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Black,
@@ -3907,7 +3984,7 @@ fun UnifiedWeatherGpsCapsule(
                             )
                             Spacer(Modifier.width(3.dp))
                             Text(
-                                "(${weather.summary})",
+                                if (wxReal) "(${weather.summary.ifEmpty { "—" }})" else "(no weather data)",
                                 color = Color(0xFF00B0FF),
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
@@ -3915,10 +3992,12 @@ fun UnifiedWeatherGpsCapsule(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
-                        val statusLine = if (weather.nextPrecipLabel.isNotEmpty()) {
-                            "💧${weather.humidityPct}% 💨${weather.windSpeedMph.toInt()}mph · ⏱️${weather.nextPrecipLabel}"
-                        } else {
-                            "💧${weather.humidityPct}% 💨${weather.windSpeedMph.toInt()}mph ${weather.windDirectionCompass} ☔${weather.precipitationProbPct}%"
+                        val statusLine = when {
+                            !wxReal -> "💧— 💨— · awaiting first fetch"
+                            weather.nextPrecipLabel.isNotEmpty() ->
+                                "💧${weather.humidityPct}% 💨${weather.windSpeedMph.toInt()}mph · ⏱️${weather.nextPrecipLabel}"
+                            else ->
+                                "💧${weather.humidityPct}% 💨${weather.windSpeedMph.toInt()}mph ${weather.windDirectionCompass} ☔${weather.precipitationProbPct}%"
                         }
                         Text(
                             statusLine,
@@ -3991,7 +4070,7 @@ fun UnifiedWeatherGpsCapsule(
                         }
                         // Fuzzy Location display: County, City, State
                         Text(
-                            text = if (gps.fuzzyLocation.isNotEmpty()) gps.fuzzyLocation else if (gps.city.isNotEmpty()) gps.city else "Detecting Location...",
+                            text = if (gps.fuzzyLocation.isNotEmpty()) gps.fuzzyLocation else if (gps.city.isNotEmpty()) gps.city else if (gps.isLocked) "Fix acquired · place unresolved" else "No location fix yet",
                             color = Color.White.copy(alpha = 0.9f),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -4017,7 +4096,9 @@ fun MikuThermalBadge(
     modifier: Modifier = Modifier
 ) {
     val maxTemp = maxOf(cpuTempC, batteryTempC)
+    val hasReading = maxTemp > 0f
     val tempColor = when {
+        !hasReading -> MikuTextSecondary                            // No sensor read: neutral, not "cool"
         maxTemp >= 55f -> com.miku.launcher.ui.MikuIdentity.Coral // Hot / Throttle Warning: Red
         maxTemp >= 45f -> Color(0xFFFF9100) // Warm: Amber Orange
         maxTemp >= 38f -> com.miku.launcher.ui.MikuIdentity.Gold // Nominal Warm: Gold
@@ -4025,7 +4106,11 @@ fun MikuThermalBadge(
         else -> com.miku.launcher.ui.MikuIdentity.Leek           // Low Ambient: Mint Green
     }
 
-    val displayTemp = if (cpuTempC > 0f) "${cpuTempC.toInt()}°C" else "${batteryTempC.toInt()}°C"
+    val displayTemp = when {
+        cpuTempC > 0f -> "${cpuTempC.toInt()}°C"
+        batteryTempC > 0f -> "${batteryTempC.toInt()}°C"
+        else -> "—°C"
+    }
 
     CyberBespokeBadge(
         onClick = onClick,
@@ -4064,9 +4149,10 @@ fun MikuBpmEngineBadge(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 128
+    // 0 = no real tempo; rendered as "—", never a presumed 128.
+    val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 0
     val bpmColor = when {
-        !isPlaying -> Color(0xFF8BA6A9)
+        !isPlaying || liveBpm == 0 -> Color(0xFF8BA6A9)
         liveBpm >= 150 -> com.miku.launcher.ui.MikuIdentity.Coral // Hardcore / Fast: Red
         liveBpm >= 126 -> Color(0xFFFF4081) // Diva / Vocaloid Dance: Pink
         liveBpm >= 100 -> Color(0xFF00E5FF) // Pop / Groove: Cyan
@@ -4090,7 +4176,7 @@ fun MikuBpmEngineBadge(
                 modifier = Modifier.padding(end = 2.dp)
             )
             Text(
-                text = if (isPlaying) "$liveBpm" else "BPM",
+                text = if (isPlaying) (if (liveBpm > 0) "$liveBpm" else "—") else "BPM",
                 color = if (isPlaying) Color.White else bpmColor,
                 fontSize = 11.5.sp,
                 fontWeight = FontWeight.Black,
@@ -4112,7 +4198,11 @@ fun MikuQuantumBatteryBadge(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // batteryPct < 0 = the sticky ACTION_BATTERY_CHANGED read failed. Show "—%", no filled bars and
+    // a neutral tint instead of a red "0%" with an alarming low-battery pulse.
+    val batteryKnown = batteryPct >= 0
     val batteryColor = when {
+        !batteryKnown -> MikuTextSecondary
         isCharging -> com.miku.launcher.ui.MikuIdentity.Leek
         batteryPct > 50 -> Color(0xFF00E5FF)
         batteryPct > 20 -> com.miku.launcher.ui.MikuIdentity.Gold
@@ -4147,7 +4237,7 @@ fun MikuQuantumBatteryBadge(
             .border(
                 BorderStroke(
                     1.dp,
-                    if (batteryPct <= 20 && !isCharging) batteryColor.copy(alpha = sparkAlpha)
+                    if (batteryKnown && batteryPct <= 20 && !isCharging) batteryColor.copy(alpha = sparkAlpha)
                     else batteryColor.copy(alpha = 0.85f)
                 ),
                 CutCornerShape(topStart = 5.dp, bottomEnd = 5.dp, topEnd = 3.dp, bottomStart = 3.dp)
@@ -4173,6 +4263,7 @@ fun MikuQuantumBatteryBadge(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val filledBars = when {
+                    !batteryKnown -> 0   // unknown level: empty cell, not "flat battery"
                     batteryPct >= 75 -> 4
                     batteryPct >= 50 -> 3
                     batteryPct >= 25 -> 2
@@ -4202,8 +4293,8 @@ fun MikuQuantumBatteryBadge(
             }
 
             Text(
-                text = "$batteryPct%",
-                color = Color.White,
+                text = if (batteryKnown) "$batteryPct%" else "—%",
+                color = if (batteryKnown) Color.White else MikuTextSecondary,
                 fontSize = 12.5.sp,
                 fontWeight = FontWeight.Black,
                 fontFamily = AudiowideFont,
@@ -4293,9 +4384,10 @@ fun MikuNowPlayingBadge(
     beatIntervalMs: Long,
     onClick: () -> Unit
 ) {
-    val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 128
+    // 0 = no real tempo; rendered as "—", never a presumed 128.
+    val liveBpm = if (bpm in 40f..260f) bpm.toInt() else 0
     val tierColor = when {
-        !isPlaying -> Color(0xFF8BA6A9)
+        !isPlaying || liveBpm == 0 -> Color(0xFF8BA6A9)
         liveBpm >= 150 -> com.miku.launcher.ui.MikuIdentity.Coral
         liveBpm >= 126 -> MikuNeonPink
         liveBpm >= 100 -> MikuCyan
@@ -4344,7 +4436,7 @@ fun MikuNowPlayingBadge(
         }
         Spacer(Modifier.width(4.dp))
         Text(
-            text = if (isPlaying) "$liveBpm" else "BPM",
+            text = if (isPlaying) (if (liveBpm > 0) "$liveBpm" else "—") else "BPM",
             color = if (isPlaying) Color.White else tierColor,
             fontSize = 11.5.sp,
             fontWeight = FontWeight.Black,
@@ -4982,10 +5074,22 @@ fun CyberNotificationShadeModal(
     var gainMode by remember { mutableStateOf(CirrusLogicManager.getGainMode(ctx)) }
     var filterMode by remember { mutableStateOf(CirrusLogicManager.getDigitalFilter(ctx)) }
     var dreEnabled by remember { mutableStateOf(CirrusLogicManager.isDreEnabled(ctx)) }
-    var isPulsarActive by remember { mutableStateOf(true) }
+    // The getters above fall back to a preset (HIGH / FAST_LINEAR / false) so the tiles have a
+    // selection to toggle. These say whether that selection was ever actually READ from a real
+    // source — if not, the tile subtitle shows "—" instead of asserting "HIGH (+6dB)".
+    var gainKnown by remember { mutableStateOf(CirrusLogicManager.getGainModeOrNull(ctx) != null) }
+    var filterKnown by remember { mutableStateOf(CirrusLogicManager.getDigitalFilterOrNull(ctx) != null) }
+    var dreKnown by remember { mutableStateOf(CirrusLogicManager.isDreEnabledOrNull(ctx) != null) }
+    // Real saved Pulsar mode, not an assumed "on". The M500's RGB indicator is non-functional on
+    // this unit (SELinux-locked, no consumer LED service), so this is only the stored preference.
+    var pulsarMode by remember { mutableStateOf(runCatching { PulsarLight.getMode(ctx) }.getOrDefault(PulsarLight.Mode.OFF)) }
 
     // Telemetry & Weather
     val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
+    // Real radio telemetry (MikuNetworkService polls TelephonyManager/WifiManager). Before the
+    // first poll every field is blank/false, so the subtitles below read "Offline"/"—", never a
+    // fabricated "5GHz Wi-Fi + LTE".
+    val netState by com.miku.launcher.network.MikuNetworkService.state.collectAsState()
 
     // Brightness Controller
     val cr = ctx.contentResolver
@@ -5003,6 +5107,35 @@ fun CyberNotificationShadeModal(
         mutableStateOf(am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: 8)
     }
     val maxVol = remember { am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 15 }
+
+    // REAL Bluetooth audio state. The card used to claim "LDAC Hi-Res 990k" unconditionally — even
+    // with the radio off and nothing paired, and the active codec is not readable unprivileged.
+    // AudioManager's output-device list is the real source: it reports an A2DP/LE/SCO sink only when
+    // one is actually connected, and carries its product name.
+    val btAudioLabel = remember(am) {
+        runCatching {
+            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+            when {
+                adapter == null -> "No Bluetooth radio"
+                !adapter.isEnabled -> "Off"
+                else -> {
+                    val sink = am?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+                        ?.firstOrNull {
+                            it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
+                        }
+                    val name = sink?.productName?.toString()?.trim().orEmpty()
+                    when {
+                        sink == null -> "On · no audio device"
+                        name.isNotEmpty() -> name
+                        else -> "On · audio device connected"
+                    }
+                }
+            }
+        }.getOrDefault("—")
+    }
 
     Box(
         Modifier
@@ -5103,7 +5236,8 @@ fun CyberNotificationShadeModal(
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Text(
-                                    "$batteryPct%",
+                                    // -1 = level unreadable; "—%" rather than a fabricated 0 %.
+                                    if (batteryPct >= 0) "$batteryPct%" else "—%",
                                     color = Color.White,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
@@ -5152,7 +5286,24 @@ fun CyberNotificationShadeModal(
                             Spacer(Modifier.width(8.dp))
                             Column {
                                 Text("Internet", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                                Text(if (isWifiConnected) "5GHz Wi-Fi + LTE" else "LTE Connected", color = MikuCyan, fontSize = 11.sp)
+                                // Derived from the real Wi-Fi/cellular telemetry — SSID + the band the
+                                // radio actually reports, or the real mobile radio technology. The old
+                                // text asserted "5GHz Wi-Fi + LTE" / "LTE Connected" regardless.
+                                val internetSubtitle = run {
+                                    val w = netState.wifi
+                                    val c = netState.cellular
+                                    when {
+                                        w.isConnected -> listOf(
+                                            w.ssid.ifBlank { "Wi-Fi" },
+                                            w.bandLabel
+                                        ).filter { it.isNotBlank() }.joinToString(" · ")
+                                        c.dataConnected -> c.networkType.ifBlank { "Mobile data" }
+                                        c.hasSignal -> "No mobile data"
+                                        netState.lastUpdated == 0L -> "—"
+                                        else -> "Offline"
+                                    }
+                                }
+                                Text(internetSubtitle, color = MikuCyan, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -5181,13 +5332,16 @@ fun CyberNotificationShadeModal(
                             Icon(
                                 Icons.Default.Bluetooth,
                                 contentDescription = null,
-                                tint = Color(0xFF2979FF),
+                                // Dimmed when the radio is off / absent, so the glyph cannot imply a
+                                // live link the label denies.
+                                tint = if (btAudioLabel == "Off" || btAudioLabel == "No Bluetooth radio" || btAudioLabel == "—")
+                                    Color.Gray else Color(0xFF2979FF),
                                 modifier = Modifier.size(20.dp)
                             )
                             Spacer(Modifier.width(8.dp))
                             Column {
                                 Text("Bluetooth", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                                Text("LDAC Hi-Res 990k", color = Color(0xFF82B1FF), fontSize = 11.sp)
+                                Text(btAudioLabel, color = Color(0xFF82B1FF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -5287,13 +5441,15 @@ fun CyberNotificationShadeModal(
                         CyberQuickTile(
                             modifier = Modifier.weight(1f),
                             title = "MASTER DYN / GAIN",
-                            subtitle = if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH (+6dB)" else "LOW (0dB)",
+                            subtitle = if (!gainKnown) "—  (gain not readable)"
+                                else if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH" else "LOW",
                             icon = Icons.Default.VolumeUp,
-                            accentColor = if (gainMode == CirrusLogicManager.GainMode.HIGH) MikuNeonPink else MikuCyan,
-                            isActive = gainMode == CirrusLogicManager.GainMode.HIGH,
+                            accentColor = if (gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH) MikuNeonPink else MikuCyan,
+                            isActive = gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH,
                             onClick = {
                                 val next = if (gainMode == CirrusLogicManager.GainMode.LOW) CirrusLogicManager.GainMode.HIGH else CirrusLogicManager.GainMode.LOW
                                 gainMode = next
+                                gainKnown = true
                                 scope.launch(Dispatchers.IO) {
                                     CirrusLogicManager.setGainMode(ctx, next)
                                 }
@@ -5303,14 +5459,15 @@ fun CyberNotificationShadeModal(
                         CyberQuickTile(
                             modifier = Modifier.weight(1f),
                             title = "VOCAL FILTER",
-                            subtitle = filterMode.label,
+                            subtitle = if (filterKnown) filterMode.label else "—  (filter not readable)",
                             icon = Icons.Default.Tune,
                             accentColor = MikuCyan,
-                            isActive = true,
+                            isActive = filterKnown,
                             onClick = {
                                 val all = CirrusLogicManager.DigitalFilter.values()
                                 val next = all[(filterMode.ordinal + 1) % all.size]
                                 filterMode = next
+                                filterKnown = true
                                 scope.launch(Dispatchers.IO) {
                                     CirrusLogicManager.setDigitalFilter(ctx, next)
                                 }
@@ -5323,27 +5480,42 @@ fun CyberNotificationShadeModal(
                         CyberQuickTile(
                             modifier = Modifier.weight(1f),
                             title = "PULSAR RGB",
-                            subtitle = if (isPulsarActive) "BPM SYNC (ON)" else "DISABLED",
+                            // The M500's RGB indicator is confirmed NON-FUNCTIONAL on this unit: the
+                            // LED sysfs nodes are SELinux-locked and there is no consumer LED service,
+                            // so nothing here can light up. The tile used to claim "BPM SYNC (ON)"
+                            // from a hardcoded `true`. It now only reports the stored preference and
+                            // says plainly that the hardware does not respond.
+                            subtitle = if (pulsarMode == PulsarLight.Mode.OFF)
+                                "OFF · NO LED ON THIS UNIT" else "SET: ${pulsarMode.label} · NO LED ON THIS UNIT",
                             icon = Icons.Default.Lightbulb,
-                            accentColor = MikuNeonPink,
-                            isActive = isPulsarActive,
+                            accentColor = MikuTextSecondary,
+                            isActive = false,
                             onClick = {
-                                isPulsarActive = !isPulsarActive
+                                val next = if (pulsarMode == PulsarLight.Mode.OFF)
+                                    PulsarLight.Mode.AUDIOPHILE_AUTO else PulsarLight.Mode.OFF
+                                pulsarMode = next
                                 scope.launch(Dispatchers.IO) {
-                                    PulsarLight.setMode(ctx, if (isPulsarActive) PulsarLight.Mode.AUDIOPHILE_AUTO else PulsarLight.Mode.OFF)
+                                    PulsarLight.setMode(ctx, next)
                                 }
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    "Pulsar preference saved — the M500's RGB indicator is not driveable on this unit",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
                             }
                         )
 
                         CyberQuickTile(
                             modifier = Modifier.weight(1f),
-                            title = "BIT-PERFECT ALSA",
-                            subtitle = if (dreEnabled) "DRE ENHANCED" else "STANDARD HAL",
+                            title = "DRE (DYNAMIC RANGE)",
+                            subtitle = if (!dreKnown) "—  (DRE not readable)"
+                                else if (dreEnabled) "ON" else "OFF",
                             icon = Icons.Default.Headphones,
                             accentColor = com.miku.launcher.ui.MikuIdentity.Leek,
-                            isActive = dreEnabled,
+                            isActive = dreKnown && dreEnabled,
                             onClick = {
                                 dreEnabled = !dreEnabled
+                                dreKnown = true
                                 scope.launch(Dispatchers.IO) {
                                     CirrusLogicManager.setDreEnabled(ctx, dreEnabled)
                                 }

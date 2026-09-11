@@ -52,8 +52,9 @@ data class MikuAccentPalette(
  *   docs/10_miku_theme_catalog.md §4 for AOSP LatinIME feasibility notes). Null = no matching
  *   keyboard skin exists yet.
  * @param hasRealArt false = the wallpaper is a stand-in/placeholder, not the art the theme is
- *   actually named after (e.g. "halloween" and "beach_icecream" ship with no dedicated art
- *   yet — see the catalog). UI should badge these as "preview" until real art lands.
+ *   actually named after. UI should badge these as "preview" until real art lands. Every built-in
+ *   theme now ships its own art; when wiring the picker, prefer deriving this from an actual
+ *   resolveDrawableRes() hit rather than trusting this hand-maintained flag to stay accurate.
  */
 data class MikuTheme(
     val id: String,
@@ -103,15 +104,14 @@ object MikuThemeRegistry {
         hasRealArt = true
     )
 
-    /** NO dedicated Halloween art exists anywhere in the repo as of this cataloging pass
-     * (see docs/10_miku_theme_catalog.md). Wallpaper name points at a not-yet-created asset;
-     * [resolveDrawableRes] will fall back to Default's art until `theme_halloween_wallpaper`
-     * is actually added to res/. hasRealArt = false so the picker can badge it "coming soon". */
+    /** Dedicated art IS bundled (res/drawable-nodpi/theme_halloween_wallpaper.jpg), so hasRealArt is
+     * true — it was left false with an "art not sourced yet" description long after the file landed,
+     * which would have badged a real theme "coming soon" in the picker. */
     val Halloween = MikuTheme(
         id = "halloween",
         displayName = "Halloween",
-        description = "Jack-o-lantern Miku, witch hat + candy palette. Art not sourced yet.",
-        wallpaperDrawableName = "theme_halloween_wallpaper", // TODO: does not exist yet
+        description = "Jack-o-lantern Miku, witch hat + candy palette.",
+        wallpaperDrawableName = "theme_halloween_wallpaper", // present: res/drawable-nodpi/theme_halloween_wallpaper.jpg
         lockscreenDrawableName = "theme_halloween_wallpaper",
         accentPalette = MikuAccentPalette(
             primary = Color(0xFFFF7518),   // pumpkin orange
@@ -120,19 +120,18 @@ object MikuThemeRegistry {
             background = Color(0xFF140A10)
         ),
         keyboardThemeRef = null,
-        hasRealArt = false
+        hasRealArt = true
     )
 
-    /** Requested as "Miku eating ice cream on a beach". No render depicting ice cream exists;
-     * the closest asset in the repo is the same beach/ocean art used by Default (she's on the
-     * beach, just not holding ice cream). Ships pointed at that art as a functional stand-in —
-     * flagged hasRealArt = false so it's visibly distinct from Default in the picker until a
-     * real "ice cream" render is sourced or commissioned. */
+    /** Requested as "Miku eating ice cream on a beach". A dedicated render IS bundled now;
+     * see res/drawable-nodpi/theme_beach_icecream_wallpaper.jpg. The old comment/description still
+     * called it a stand-in that "reuses Default's beach art" with hasRealArt = false, which the
+     * picker would have shown as a placeholder claim about art that actually exists. */
     val BeachIcecream = MikuTheme(
         id = "beach_icecream",
         displayName = "Beach (Ice Cream)",
-        description = "Miku with ice cream on the beach. Placeholder: reuses Default's beach art — no ice-cream render exists yet.",
-        wallpaperDrawableName = "theme_beach_icecream_wallpaper", // distinct render art now bundled
+        description = "Miku with ice cream on the beach.",
+        wallpaperDrawableName = "theme_beach_icecream_wallpaper", // present: res/drawable-nodpi/theme_beach_icecream_wallpaper.jpg
         lockscreenDrawableName = "theme_beach_icecream_wallpaper",
         accentPalette = MikuAccentPalette(
             primary = Color(0xFF39C5BB),
@@ -141,7 +140,7 @@ object MikuThemeRegistry {
             background = Color(0xFFEAF6F6)
         ),
         keyboardThemeRef = null,
-        hasRealArt = false
+        hasRealArt = true
     )
 
     /** Real dedicated art: miku-assets/themes/cyber_stage/wallpaper.webp
@@ -173,7 +172,7 @@ object MikuThemeRegistry {
         id = "cozy_cafe",
         displayName = "Cozy Cafe",
         description = "Lo-fi vinyl lounge Miku in a knit sweater, mug of coffee in frame.",
-        wallpaperDrawableName = "theme_cozy_cafe_wallpaper", // TODO: not yet copied into res/
+        wallpaperDrawableName = "theme_cozy_cafe_wallpaper", // present: res/drawable-nodpi/theme_cozy_cafe_wallpaper.jpg
         lockscreenDrawableName = "theme_cozy_cafe_wallpaper",
         accentPalette = MikuAccentPalette(
             primary = Color(0xFFD89B4A),   // warm amber / tungsten bulb glow

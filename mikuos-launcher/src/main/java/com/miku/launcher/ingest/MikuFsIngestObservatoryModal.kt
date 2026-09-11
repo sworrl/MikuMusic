@@ -178,14 +178,19 @@ fun MikuFsIngestObservatoryModal(
                                     )
                                     Spacer(Modifier.width(8.dp))
                                     Text(
+                                        // "INDEXED & BIT-PERFECT" was shown with zero tracks, with
+                                        // lastScanTime "Never", and for an all-lossy library — the
+                                        // bit-perfect claim was never checked against anything.
                                         when {
                                             ingestState.isScanning -> "ACTIVE MEDIA SCAN"
                                             !ingestState.engineEnabled -> "ENGINE OFF · LOCAL SD ONLY"
-                                            else -> "INDEXED & BIT-PERFECT"
+                                            ingestState.totalTracks == 0 -> "NO TRACKS INDEXED"
+                                            else -> "${ingestState.totalTracks} INDEXED · ${ingestState.hiResPercent}% LOSSLESS"
                                         },
                                         color = when {
                                             ingestState.isScanning -> Color(0xFFFFD54F)
                                             !ingestState.engineEnabled -> MikuMuted
+                                            ingestState.totalTracks == 0 -> MikuMuted
                                             else -> Color(0xFF00FF88)
                                         },
                                         fontSize = 13.sp,
@@ -426,7 +431,7 @@ fun MikuFsIngestObservatoryModal(
                                     modifier = Modifier.weight(1f),
                                     badge = "FLAC",
                                     count = ingestState.flacCount,
-                                    desc = "24-bit / 192k Master",
+                                    desc = "Free Lossless Audio Codec",
                                     color = Color(0xFF00E5FF)
                                 )
                             }
@@ -482,19 +487,34 @@ fun MikuFsIngestObservatoryModal(
                             )
                             Spacer(Modifier.height(10.dp))
 
-                            val syncHost = MikuIngestConfig.syncHost(ctx).ifBlank { "souffle (Auto-Active)" }
+                            // No invented host. MikuIngestConfig's contract is that a blank host means
+                            // "not configured / auto-discovery" — the old fallback printed a personal
+                            // hostname plus "(Auto-Active)", asserting a link that cannot exist
+                            // (probeAndAutoResume returns early on a blank host).
+                            val configuredHost = MikuIngestConfig.syncHost(ctx)
                             val rsyncPort = MikuIngestConfig.rsyncPort(ctx)
 
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Sync Daemon Endpoint", color = MikuMuted, fontSize = 12.5.sp)
-                                Text("$syncHost:$rsyncPort", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    if (configuredHost.isBlank()) "Not configured · auto-discovery"
+                                    else "$configuredHost:$rsyncPort",
+                                    color = if (configuredHost.isBlank()) MikuMuted else Color.White,
+                                    fontSize = 13.sp, fontWeight = FontWeight.Bold
+                                )
                             }
 
                             Spacer(Modifier.height(6.dp))
 
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                 Text("Protocol Engine", color = MikuMuted, fontSize = 12.5.sp)
-                                Text("rsync v3.2.7 (uid=0 direct)", color = Color(0xFF00FF88), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                // The version was the literal "rsync v3.2.7 (uid=0 direct)" — nothing
+                                // ever ran `rsync --version`, and rsync may not exist on the device.
+                                // The engine now reports what it actually found in statusMessage.
+                                Text(
+                                    "rsync — version not probed",
+                                    color = MikuMuted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+                                )
                             }
 
                             Spacer(Modifier.height(6.dp))

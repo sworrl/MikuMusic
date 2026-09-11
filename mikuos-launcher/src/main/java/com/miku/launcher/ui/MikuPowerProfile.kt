@@ -29,7 +29,10 @@ import kotlinx.coroutines.flow.asStateFlow
  */
 object MikuPowerProfile {
     const val KEY = "miku_power_profile"
-    private val _profile = MutableStateFlow("balanced")
+    // "" = Miku Music's governor has not published a profile (key absent / unreadable). It used to
+    // default to "balanced", which the thermal modal and the POWER MODE tile then printed as a
+    // "live:" governor reading that no governor had ever produced.
+    private val _profile = MutableStateFlow("")
     val profile: StateFlow<String> = _profile.asStateFlow()
     private val _lowPower = MutableStateFlow(false)
     val lowPower: StateFlow<Boolean> = _lowPower.asStateFlow()
@@ -44,7 +47,7 @@ object MikuPowerProfile {
         val app = ctx.applicationContext
         fun read() {
             val p = try { Settings.Global.getString(app.contentResolver, KEY)?.trim()?.lowercase() } catch (_: Throwable) { null }
-            val prof = if (p.isNullOrEmpty()) "balanced" else p
+            val prof = p ?: ""   // absent stays "" (unknown), never a presumed "balanced"
             _profile.value = prof
             _lowPower.value = prof == "audio_only" || prof == "idle"
         }
@@ -74,6 +77,16 @@ object MikuPowerProfile {
         _mode.value = if (m == "perf" || m == "save") m else "auto"
     }
     fun nextMode(current: String): String = when (current) { "auto" -> "perf"; "perf" -> "save"; else -> "auto" }
+    /** Sets the user power MODE directly ("auto" | "perf" | "save") and persists it. */
+    fun setMode(ctx: Context, mode: String): String {
+        val m = if (mode == "perf" || mode == "save") mode else "auto"
+        _mode.value = m
+        val app = ctx.applicationContext
+        try { Settings.Global.putString(app.contentResolver, MODE_KEY, m) } catch (_: Throwable) {
+            try { com.miku.launcher.RootShell.execFast("settings put global $MODE_KEY $m") } catch (_: Throwable) {}
+        }
+        return m
+    }
     /** Cycles auto → perf → save → auto and persists it (root-shell fallback if the write is refused). */
     fun cycleMode(ctx: Context): String {
         val next = nextMode(_mode.value)
@@ -93,7 +106,14 @@ object MikuPowerProfile {
     fun modeLabel(mode: String, profile: String): String = when (mode) {
         "perf" -> "PERFORMANCE"
         "save" -> "BATTERY SAVER"
-        else -> "AUTO · " + when (profile) { "perf" -> "PERF"; "audio_only" -> "AUDIO"; "idle" -> "IDLE"; else -> "BALANCED" }
+        // A blank profile means nothing was published — say so instead of claiming "BALANCED".
+        else -> "AUTO · " + when (profile) {
+            "perf" -> "PERF"
+            "audio_only" -> "AUDIO"
+            "idle" -> "IDLE"
+            "balanced" -> "BALANCED"
+            else -> "profile not published"
+        }
     }
 
     fun glyph(profile: String): String = when (profile) {

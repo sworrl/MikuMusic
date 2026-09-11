@@ -97,6 +97,7 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
     LaunchedEffect(activeEffect) { if (activeEffect.isNotBlank() && activeEffect != "off") lastNonOffEffect = activeEffect }
 
     var brightness by remember { mutableFloatStateOf(1f) }
+    var brightnessTouched by remember { mutableStateOf(false) }
     var brightnessUnsupported by remember { mutableStateOf(false) }
     var isBusyAction by remember { mutableStateOf(false) }
 
@@ -226,11 +227,15 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
                     // Brightness slider (best-effort — no server endpoint yet, see ArcoClient.setBrightness TODO)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Brightness", color = MikuTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        Text("${(brightness * 100).toInt()}%", color = MikuGold, fontSize = 10.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
+                        // No brightness GET exists, so an untouched slider reports nothing, not "100%".
+                        Text(
+                            if (brightnessTouched) "${(brightness * 100).toInt()}%" else "—",
+                            color = MikuGold, fontSize = 10.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont
+                        )
                     }
                     Slider(
                         value = brightness,
-                        onValueChange = { brightness = it },
+                        onValueChange = { brightness = it; brightnessTouched = true },
                         onValueChangeFinished = {
                             scope.launch {
                                 ArcoClient.setBrightness(brightness).onFailure { brightnessUnsupported = true }

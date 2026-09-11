@@ -29,7 +29,10 @@ object MikuLiveBeatDetector {
     private val energyHist = ArrayDeque<Float>()
     private val beatIntervals = ArrayDeque<Long>()
     @Volatile private var lastBeatMs = 0L
-    @Volatile private var liveBpm = 120f
+    // 0 = no tempo measured yet. It was 120f, and the FIRST onset (which has no interval to measure
+    // from) pushed that literal out as a detected tempo — the badge, widgets and status bar then
+    // showed a confident "120" that nothing had measured.
+    @Volatile private var liveBpm = 0f
 
     fun start(context: Context) {
         if (gateJob?.isActive == true) return
@@ -102,7 +105,13 @@ object MikuLiveBeatDetector {
                 }
             }
             lastBeatMs = now
-            MikuBpmEngine.pushLivePulse(liveBpm)
+            // Audio IS out, so report playing; but only publish a tempo once at least two intervals
+            // have produced a real median. Before that there is nothing measured to publish.
+            if (liveBpm > 0f && beatIntervals.size >= 2) {
+                MikuBpmEngine.pushLivePulse(liveBpm)
+            } else {
+                MikuBpmEngine.pushLivePlaying(true)
+            }
         }
     }
 }

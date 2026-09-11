@@ -17,10 +17,10 @@ import kotlinx.coroutines.withContext
 
 data class MikuLibraryState(
     val totalTracks: Int = 0,
-    val totalArtists: Int = 0,
-    val totalAlbums: Int = 0,
-    val hiResCount: Int = 0,
-    val abbreviatedTracks: String = "0",
+    // Removed totalArtists / totalAlbums / hiResCount: they were declared but NEVER assigned, so any
+    // surface that rendered them would have shown a permanent, authoritative-looking 0.
+    // "—" until the MediaStore query has actually run; "0" would claim an empty library.
+    val abbreviatedTracks: String = "—",
     val isInitialized: Boolean = false
 )
 
@@ -74,10 +74,14 @@ object MikuLibraryEngine {
                     trackCount = cursor.count
                 }
 
+                // Fixed: the old form appended a second unit letter after a removeSuffix that could
+                // not match, so a 1500-track library rendered as "1.5kk" (and 1.5M as "1.5MM").
                 val abbrev = when {
-                    trackCount >= 1_000_000 -> String.format(java.util.Locale.US, "%.1fM", trackCount / 1_000_000f).removeSuffix(".0M") + "M"
+                    trackCount >= 1_000_000 ->
+                        String.format(java.util.Locale.US, "%.1f", trackCount / 1_000_000f).removeSuffix(".0") + "M"
                     trackCount >= 10_000 -> "${trackCount / 1000}k"
-                    trackCount >= 1_000 -> String.format(java.util.Locale.US, "%.1fk", trackCount / 1000f).removeSuffix(".0k") + "k"
+                    trackCount >= 1_000 ->
+                        String.format(java.util.Locale.US, "%.1f", trackCount / 1000f).removeSuffix(".0") + "k"
                     else -> trackCount.toString()
                 }
 

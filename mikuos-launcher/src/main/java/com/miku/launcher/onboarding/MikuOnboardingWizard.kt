@@ -304,8 +304,13 @@ val BundledApps = listOf(
 
 val AllProvisionableApps: List<ProvisionableApp> = GoogleCoreApps + OptionalApps + BundledApps
 
-/** Detects current system timezone or closest match from available network/location sources. */
-fun detectSystemTimeZone(ctx: Context): String {
+/**
+ * Reads the SYSTEM time zone (TimeZone.getDefault, then persist.sys.timezone). No location API is
+ * involved. Returns null when neither source maps to a supported zone — it used to return
+ * "America/Denver", which the wizard then displayed as "Detected: Mountain Time" to a user whose
+ * zone had not been detected at all.
+ */
+fun detectSystemTimeZone(ctx: Context): String? {
     val defaultId = TimeZone.getDefault().id
     val match = SupportedTimeZones.firstOrNull { it.id.equals(defaultId, ignoreCase = true) }
     if (match != null) return match.id
@@ -317,7 +322,7 @@ fun detectSystemTimeZone(ctx: Context): String {
         if (propMatch != null) return propMatch.id
     }
 
-    return "America/Denver" // Sensible fallback
+    return null
 }
 
 /** Applies time zone and 24-hour time formatting across MikuOS and Android framework. */
@@ -397,8 +402,9 @@ fun MikuOnboardingWizardModal(
     var currentStep by remember { mutableIntStateOf(0) }
     var selectedLanguage by remember { mutableStateOf("en") }
     
-    val autoDetectedZone = remember { detectSystemTimeZone(ctx) }
-    var selectedTimeZone by remember { mutableStateOf(autoDetectedZone) }
+    // null = the system zone did not map to a supported entry; the UI says so instead of naming one.
+    val autoDetectedZone: String? = remember { detectSystemTimeZone(ctx) }
+    var selectedTimeZone by remember { mutableStateOf(autoDetectedZone ?: TimeZone.getDefault().id) }
     var is24Hour by remember { mutableStateOf(true) } // Default to 24h as requested
     var isScreenProtectorMode by remember { mutableStateOf(false) } // Default OFF for OS, asked during onboarding
     
@@ -533,7 +539,7 @@ fun MikuOnboardingWizardModal(
                     isScreenProtectorMode = isScreenProtectorMode,
                     onScreenProtectorModeChange = { isScreenProtectorMode = it },
                     autoDetectedZone = autoDetectedZone,
-                    onAutoDetectClick = { selectedTimeZone = autoDetectedZone }
+                    onAutoDetectClick = { autoDetectedZone?.let { z -> selectedTimeZone = z } }
                 )
                 2 -> AppsProvisioningScreen(
                     selectedApps = selectedApps,
@@ -740,7 +746,7 @@ fun DateTimeSelectionScreen(
     on24HourChange: (Boolean) -> Unit,
     isScreenProtectorMode: Boolean,
     onScreenProtectorModeChange: (Boolean) -> Unit,
-    autoDetectedZone: String,
+    autoDetectedZone: String?,   // null = system zone could not be matched
     onAutoDetectClick: () -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
@@ -766,12 +772,21 @@ fun DateTimeSelectionScreen(
         }
     }
 
-    val liveTime = remember(is24Hour, selectedTimeZone) {
+    // Actually live: the old version formatted Date() once inside remember(), so a banner labelled
+    // "LIVE CLOCK PREVIEW" showed a frozen HH:mm:ss stuck at the instant the step was composed.
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1000L)
+        }
+    }
+    val liveTime = remember(is24Hour, selectedTimeZone, nowMs) {
         val tz = TimeZone.getTimeZone(selectedTimeZone)
         val pattern = if (is24Hour) "HH:mm:ss · EEE, MMM d" else "h:mm:ss a · EEE, MMM d"
         val sdf = SimpleDateFormat(pattern, Locale.getDefault())
         sdf.timeZone = tz
-        sdf.format(Date())
+        sdf.format(Date(nowMs))
     }
 
     val selectedOption = SupportedTimeZones.firstOrNull { it.id == selectedTimeZone }
@@ -957,8 +972,10 @@ fun DateTimeSelectionScreen(
 
         Spacer(Modifier.height(10.dp))
 
-        // Location Auto-Detect Card
-        val isAutoActive = selectedTimeZone == autoDetectedZone
+        // System time-zone card. NOT location: nothing here touches a location API — it reads
+        // TimeZone.getDefault() / persist.sys.timezone. It used to be titled "LOCATION AUTO-DETECT"
+        // with a GPS pin and a green "PRE-AUTH" badge.
+        val isAutoActive = autoDetectedZone != null && selectedTimeZone == autoDetectedZone
         Row(
             Modifier
                 .fillMaxWidth()
@@ -981,8 +998,8 @@ fun DateTimeSelectionScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    Icons.Default.MyLocation,
-                    contentDescription = "Auto GPS",
+                    Icons.Default.Schedule,
+                    contentDescription = "System time zone",
                     tint = if (isAutoActive) Color.Black else MikuOnboardingTeal,
                     modifier = Modifier.size(18.dp)
                 )
@@ -990,19 +1007,13 @@ fun DateTimeSelectionScreen(
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("LOCATION AUTO-DETECT", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(6.dp))
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(MikuOnboardingGreen.copy(alpha = 0.2f))
-                            .padding(horizontal = 5.dp, vertical = 2.dp)
-                    ) {
-                        Text("PRE-AUTH", color = MikuOnboardingGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    }
+                    Text("SYSTEM TIME ZONE", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
                 Text(
-                    "Detected: ${SupportedTimeZones.firstOrNull { it.id == autoDetectedZone }?.name ?: autoDetectedZone}",
+                    if (autoDetectedZone != null)
+                        "System zone: ${SupportedTimeZones.firstOrNull { it.id == autoDetectedZone }?.name ?: autoDetectedZone}"
+                    else
+                        "Couldn't match the system zone (${TimeZone.getDefault().id}) — pick one below",
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = 11.sp,
                     maxLines = 1,
@@ -1295,8 +1306,13 @@ fun AppInstallScreen(
                 installStates[appId] = InstallPhase.Skipped
             } else {
                 installStates[appId] = InstallPhase.Installing
-                val success = performAppInstall(ctx, apk, appId)
-                installStates[appId] = if (success) InstallPhase.Installed else InstallPhase.Failed
+                // performAppInstall only COMMITS an async PackageInstaller session, so its `true`
+                // meant "submitted", not "installed" — the tile showed a green OK for installs that
+                // later failed. Confirm the package is actually present before claiming Installed.
+                val submitted = performAppInstall(ctx, apk, appId)
+                val reallyInstalled = submitted &&
+                    awaitPackageInstalled(ctx.packageManager, app.packageName, 60_000L)
+                installStates[appId] = if (reallyInstalled) InstallPhase.Installed else InstallPhase.Failed
             }
         }
 
@@ -1421,6 +1437,7 @@ fun CompletionScreen(
     isScreenProtectorMode: Boolean,
     appsCount: Int
 ) {
+    val ctx = LocalContext.current
     Column(
         Modifier
             .fillMaxSize()
@@ -1483,9 +1500,19 @@ fun CompletionScreen(
             SummaryItem(Icons.Default.AccessTime, "Time Zone", SupportedTimeZones.firstOrNull { it.id == timeZone }?.name ?: timeZone)
             SummaryItem(Icons.Default.Schedule, "Time Format", if (is24Hour) "24-Hour (Military)" else "12-Hour (AM/PM)")
             SummaryItem(Icons.Default.TouchApp, "Screen Protector", if (isScreenProtectorMode) "High Sensitivity Enabled" else "Standard")
-            SummaryItem(Icons.Default.Apps, "Installed Apps", "$appsCount Apps Selected")
-            SummaryItem(Icons.Default.Keyboard, "Keyboard (IME)", "AOSP LatinIME (Cyber Themed)")
-            SummaryItem(Icons.Default.GraphicEq, "Audio Engine", "Dual CS43198 Direct ALSA")
+            // Label matches the value: this is the SELECTION count, not a confirmed install count.
+            SummaryItem(Icons.Default.Apps, "Selected Apps", "$appsCount selected")
+            // Real default IME from Settings.Secure — the wizard never sets or queries an IME, so
+            // "AOSP LatinIME (Cyber Themed)" was an assertion about a component it doesn't touch.
+            SummaryItem(
+                Icons.Default.Keyboard, "Keyboard (IME)",
+                (try {
+                    Settings.Secure.getString(ctx.contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+                } catch (_: Throwable) { null })
+                    ?.substringBefore('/')?.takeIf { it.isNotBlank() } ?: "—"
+            )
+            // "Dual CS43198 Direct ALSA" was a static spec string in a per-user CONFIGURATION
+            // summary — nothing here probed a DAC or an ALSA path. Removed.
         }
     }
 }

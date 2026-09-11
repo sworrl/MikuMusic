@@ -46,17 +46,20 @@ class MikuBatteryWidget : AppWidgetProvider() {
             val status = b?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
             val charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
                 status == BatteryManager.BATTERY_STATUS_FULL
-            val pct = if (level >= 0 && scale > 0) (level * 100) / scale else 100
+            // -1 = the sticky battery broadcast was unavailable; rendered as "--%", never 100%.
+            val pct = if (level >= 0 && scale > 0) (level * 100) / scale else -1
 
             // Miku palette: teal when healthy/charging, amber low, red critical.
             val tint = when {
+                pct < 0 -> 0x80FFFFFF.toInt()
                 charging -> 0xFF00E676.toInt()
                 pct <= 15 -> 0xFFFF5252.toInt()
                 pct <= 35 -> 0xFFFFD600.toInt()
                 else -> 0xFF39C5BB.toInt()
             }
-            v.setTextViewText(R.id.widget_battery_text, if (charging) "$pct%⚡" else "$pct%")
-            v.setTextColor(R.id.widget_battery_text, if (pct <= 15) tint else 0xFF9FF3EC.toInt())
+            val pctText = if (pct < 0) "--%" else "$pct%"
+            v.setTextViewText(R.id.widget_battery_text, if (charging) "$pctText⚡" else pctText)
+            v.setTextColor(R.id.widget_battery_text, if (pct in 0..15) tint else 0xFF9FF3EC.toInt())
             v.setInt(R.id.widget_battery_icon, "setColorFilter", tint)
 
             v.setOnClickPendingIntent(R.id.widget_battery_root, launchLauncher(ctx))

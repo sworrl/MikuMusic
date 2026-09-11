@@ -54,7 +54,10 @@ object MikuNetworkService {
     )
 
     data class WifiGranularState(
-        val isEnabled: Boolean = true,
+        // false = "not read yet", NOT "the radio is off". This was `true`, which rendered the master
+        // Wi-Fi switch ON before pollNetworkTelemetry had ever run (up to 2.5 s) even with Wi-Fi off.
+        // Surfaces that show it must gate on NetworkState.lastUpdated != 0L.
+        val isEnabled: Boolean = false,
         val isConnected: Boolean = false,
         val ssid: String = "",
         val bssid: String = "",
@@ -66,36 +69,38 @@ object MikuNetworkService {
         val txLinkSpeedMbps: Int = 0,
         val frequencyMhz: Int = 0,
         val channel: Int = 0,
-        val bandLabel: String = "Wi-Fi",
-        val standard: String = "802.11ac",
+        // Blank strings / 0 = not reported by the radio. Never a presumed band, standard, mask or DNS.
+        val bandLabel: String = "",
+        val standard: String = "",
         val ipAddress: String = "",
         val ipv6Address: String = "",
-        val subnetMask: String = "255.255.255.0",
+        val subnetMask: String = "",
         val gateway: String = "",
-        val dns1: String = "1.1.1.1",
-        val dns2: String = "8.8.8.8",
-        val macAddress: String = "Device MAC",
+        val dns1: String = "",
+        val dns2: String = "",
+        val macAddress: String = "",
         val isPowerSaveOn: Boolean = false,
         val bandPreference: String = "AUTO" // "AUTO", "5GHZ_ONLY", "24GHZ_ONLY"
     )
 
     data class CellularGranularState(
-        val isConnected: Boolean = true,
+        // Everything here is "no radio state known" until pollNetworkTelemetry fills it.
+        val isConnected: Boolean = false,
         // Registered to a tower (has bars) — independent of whether a data PDN is up.
         val hasSignal: Boolean = false,
         // Real mobile-DATA connection state. registered-with-signal-but-no-data is the "!" case
         // the AOSP status bar shows and ours previously did not (it hardcoded reachable=true).
         val dataConnected: Boolean = false,
-        val isDataOnlySim: Boolean = true,
-        val carrierName: String = "Google Fi (Data SIM)",
-        val networkType: String = "LTE+ 4G",
-        val signalDbm: Int = -95,
-        val signalLevel5: Int = 4,
-        val signalPct: Int = 78,
-        val lteBand: String = "LTE B4/B66",
-        val rsrpDbm: Int = -95,
-        val rsrqDb: Int = -11,
-        val simStateLabel: String = "DATA-ONLY SIM ACTIVE (VOICE NAGS SHIELDED)"
+        val isDataOnlySim: Boolean = false,
+        val carrierName: String = "",
+        val networkType: String = "",
+        val signalDbm: Int = 0,      // 0 = not measured (real values are negative)
+        val signalLevel5: Int = 0,
+        val signalPct: Int = 0,
+        val lteBand: String = "",
+        val rsrpDbm: Int = 0,
+        val rsrqDb: Int = 0,
+        val simStateLabel: String = ""
     )
 
     data class ChannelOccupancy(
@@ -453,8 +458,9 @@ object MikuNetworkService {
                         val parts = line.trim().split(Regex("\\s+"))
                         if (parts.size >= 5 && parts[0].contains(":")) {
                             val bssid = parts[0]
-                            val freq = parts[1].toIntOrNull() ?: 2412
-                            val rssi = parts[2].toIntOrNull() ?: -70
+                            // Skip rows whose frequency/RSSI do not parse instead of inventing them.
+                            val freq = parts[1].toIntOrNull() ?: continue
+                            val rssi = parts[2].toIntOrNull() ?: continue
                             val flags = parts[3]
                             val ssid = parts.subList(4, parts.size).joinToString(" ")
                             if (ssid.isNotBlank() && !ssid.startsWith("[") && apList.none { it.ssid == ssid }) {
@@ -556,30 +562,45 @@ object MikuNetworkService {
 
         val isWifi = isWifiEnabled && (hasWifiCap || hasWlanIp || (wifiInfo != null && wifiInfo.networkId != -1 && wifiInfo.bssid != null))
 
-        val wifiRssi = if (isWifi) (wifiInfo?.rssi?.takeIf { it in -100..0 } ?: -60) else -100
-        val wifiPct = ((wifiRssi + 100) * 2).coerceIn(0, 100)
+        // RSSI: only what WifiInfo reports. -100 is the "not reported" floor (level 0, no dBm text),
+        // never a presumed -60 "decent signal".
+        val rssiKnown = isWifi && (wifiInfo?.rssi?.let { it in -100..0 } == true)
+        val wifiRssi = if (rssiKnown) wifiInfo!!.rssi else -100
+        val wifiPct = if (rssiKnown) ((wifiRssi + 100) * 2).coerceIn(0, 100) else 0
         val wifiLevel5 = when {
+            !rssiKnown -> 0
             wifiRssi >= -55 -> 5
             wifiRssi >= -65 -> 4
             wifiRssi >= -75 -> 3
             wifiRssi >= -85 -> 2
             wifiRssi >= -95 -> 1
-            else -> if (isWifi) 3 else 0
+            else -> 0
         }
 
-        val freq = if (isWifi) (wifiInfo?.frequency?.takeIf { it > 0 } ?: 5200) else 0
+        // Frequency/band/channel: reported or blank. No default 5.2 GHz.
+        val freq = if (isWifi) (wifiInfo?.frequency?.takeIf { it > 0 } ?: 0) else 0
         val channel = frequencyToChannel(freq)
         val band = when {
             freq >= 5925 -> "6GHz"
             freq >= 4900 -> "5GHz"
             freq in 2400..2500 -> "2.4GHz"
-            else -> if (isWifi) "5GHz" else "Wi-Fi"
+            else -> ""
         }
+        // 802.11 generation from the framework (API 30+); blank when it is not reported.
+        val wifiStandard = if (isWifi && Build.VERSION.SDK_INT >= 30) {
+            when (wifiInfo?.wifiStandard) {
+                ScanResult.WIFI_STANDARD_11AX -> "Wi-Fi 6 (ax)"
+                ScanResult.WIFI_STANDARD_11AC -> "Wi-Fi 5 (ac)"
+                ScanResult.WIFI_STANDARD_11N -> "Wi-Fi 4 (n)"
+                ScanResult.WIFI_STANDARD_LEGACY -> "Legacy"
+                else -> ""
+            }
+        } else ""
 
+        // SSID: what the framework reports, or blank when it is hidden from us (location
+        // permission / privacy). Never substitute a saved SSID or an invented name.
         var cleanSsid = if (isWifi) (wifiInfo?.ssid?.replace("\"", "") ?: "") else ""
-        if (cleanSsid.isBlank() || cleanSsid == "<unknown ssid>") {
-            cleanSsid = if (isWifi) (MikuWifiVault.getAllSavedSsids(ctx).firstOrNull() ?: "Miku Wi-Fi") else ""
-        }
+        if (cleanSsid == "<unknown ssid>") cleanSsid = ""
 
         val ipInt = if (isWifi) (wifiInfo?.ipAddress ?: 0) else 0
         val calcIpStr = if (ipInt != 0) {
@@ -593,10 +614,11 @@ object MikuNetworkService {
         } else wlanIpStr
         val ipStr = if (calcIpStr.isNotEmpty() && calcIpStr != "0.0.0.0") calcIpStr else ""
 
-        // Gateway & DNS inspection from active network link (neutral empty start; filled at runtime)
+        // Gateway & DNS inspection from active network link (blank until the link reports them —
+        // no presumed public resolvers)
         var gateway = ""
-        var dns1 = "1.1.1.1"
-        var dns2 = "8.8.8.8"
+        var dns1 = ""
+        var dns2 = ""
         try {
             val net = cm?.activeNetwork
             val linkProps = cm?.getLinkProperties(net)
@@ -621,16 +643,20 @@ object MikuNetworkService {
             frequencyMhz = freq,
             channel = channel,
             bandLabel = band,
+            standard = wifiStandard,
             ipAddress = ipStr,
             gateway = gateway,
             dns1 = dns1,
-            dns2 = dns2
+            dns2 = dns2,
+            isPowerSaveOn = _state.value.wifi.isPowerSaveOn,
+            bandPreference = _state.value.wifi.bandPreference
         )
 
         val simState = tm?.simState ?: TelephonyManager.SIM_STATE_UNKNOWN
         val isSimReady = simState == TelephonyManager.SIM_STATE_READY
-        var cellLevel5 = 4
-        var cellDbm = -95
+        // 0 bars / 0 dBm until the modem reports a SignalStrength — no presumed 4-bar -95 dBm.
+        var cellLevel5 = 0
+        var cellDbm = 0
         // Real network type from the modem (READ_PHONE_STATE granted) — was hardcoded "LTE+ 4G".
         var cellNetworkType = try {
             val nt = tm?.let { if (android.os.Build.VERSION.SDK_INT >= 30) it.dataNetworkType else @Suppress("DEPRECATION") it.networkType } ?: 0
@@ -660,7 +686,7 @@ object MikuNetworkService {
             }
         } catch (_: Throwable) {}
 
-        val cellPct = ((cellDbm + 120) * (100.0 / 70.0)).toInt().coerceIn(0, 100)
+        val cellPct = if (cellDbm < 0) ((cellDbm + 120) * (100.0 / 70.0)).toInt().coerceIn(0, 100) else 0
 
         // Real mobile-DATA connection state — registered-with-signal-but-no-data (the AOSP "!") is
         // exactly what our badge previously couldn't show because isInternetReachable was hardcoded.
@@ -676,24 +702,37 @@ object MikuNetworkService {
                 ?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
         } catch (_: Throwable) { isWifi || dataConnected }
 
-        val simOperator = tm?.simOperatorName?.ifEmpty { tm?.networkOperatorName }?.ifEmpty { "Google Fi" } ?: "Google Fi"
+        // Carrier from the SIM/network; blank when neither reports one (no presumed carrier).
+        val simOperator = (tm?.simOperatorName?.takeIf { it.isNotBlank() }
+            ?: tm?.networkOperatorName?.takeIf { it.isNotBlank() }) ?: ""
         val cellState = CellularGranularState(
             isConnected = isSimReady,
             hasSignal = hasCellSignal,
             dataConnected = dataConnected,
-            isDataOnlySim = true,
+            // Not derivable from the framework; leave unknown rather than assert a data-only plan.
+            isDataOnlySim = false,
             carrierName = simOperator,
             networkType = cellNetworkType,
             signalDbm = cellDbm,
             signalLevel5 = cellLevel5,
             signalPct = cellPct,
-            lteBand = cellNetworkType,
+            // lteBand stays blank: the framework exposes no band number here. It used to be filled
+            // with the network TYPE ("LTE"/"5G"), which would print a technology name in a field
+            // labelled "band" — a measurement that was never taken.
+            lteBand = "",
             simStateLabel = if (hasCellSignal && !dataConnected) "SIGNAL OK · NO DATA (check APN)"
                             else if (dataConnected) "DATA ACTIVE"
                             else "NO SERVICE"
         )
 
-        val activeTransport = if (isWifi) "WIFI" else "CELLULAR"
+        // "CELLULAR" was asserted whenever Wi-Fi was not the transport — including airplane mode and
+        // with no SIM at all, which then went into the metric history DB as a real sample. Only claim
+        // a transport that is actually carrying data.
+        val activeTransport = when {
+            isWifi -> "WIFI"
+            dataConnected -> "CELLULAR"
+            else -> "NONE"
+        }
 
         _state.value = _state.value.copy(
             wifi = wifiState,

@@ -34,12 +34,15 @@ class MikuBpmDatabase private constructor(context: Context) :
         val title: String,
         val album: String = "",
         val canonicalBpm: Float,
-        val rawDetectedBpm: Float = canonicalBpm,
-        val userTappedBpm: Float = canonicalBpm,
+        // Honest defaults. These used to mirror canonicalBpm and claim confidence 1.0 from
+        // "USER_CALIBRATED" with tapCount 1, so ANY caller that omitted them silently recorded a
+        // fabricated user calibration — and "USER CAL" in the stats row counts exactly that source.
+        val rawDetectedBpm: Float = 0f,      // 0 = nothing was auto-detected
+        val userTappedBpm: Float = 0f,       // 0 = nobody tapped this track
         val tempoMultiplier: Float = 1.0f,
-        val confidence: Float = 1.0f,
-        val source: String = "USER_CALIBRATED",
-        val tapCount: Int = 1,
+        val confidence: Float = 0f,          // 0 = no confidence was ever computed
+        val source: String = "UNKNOWN",
+        val tapCount: Int = 0,
         val lastCalibratedEpoch: Long = System.currentTimeMillis()
     )
 
@@ -203,9 +206,11 @@ class MikuBpmDatabase private constructor(context: Context) :
                 artist = artist,
                 title = title,
                 canonicalBpm = preseeded,
-                rawDetectedBpm = preseeded,
-                userTappedBpm = preseeded,
-                confidence = 0.99f,
+                // Nothing was detected and nobody tapped — a dictionary constant is not a
+                // measurement, and 0.99 "confidence" was invented out of nothing.
+                rawDetectedBpm = 0f,
+                userTappedBpm = 0f,
+                confidence = 0f,
                 source = "PRESEEDED_DICTIONARY"
             )
             saveTrackBpm(record)
@@ -219,9 +224,10 @@ class MikuBpmDatabase private constructor(context: Context) :
                 artist = artist,
                 title = title,
                 canonicalBpm = onlineBpm,
-                rawDetectedBpm = onlineBpm,
-                userTappedBpm = onlineBpm,
-                confidence = 0.95f,
+                // A remote lookup is not a local detection and not a user tap.
+                rawDetectedBpm = 0f,
+                userTappedBpm = 0f,
+                confidence = 0f,
                 source = "ONLINE_MUSICBRAINZ"
             )
             saveTrackBpm(record)
@@ -304,7 +310,9 @@ class MikuBpmDatabase private constructor(context: Context) :
                 "totalTracks" to totalTracks,
                 "userCalibrated" to userCalibrated,
                 "totalTaps" to totalTaps,
-                "perfectAccuracyPct" to if (totalTaps > 0) (perfectTaps.toFloat() / totalTaps * 100).toInt() else 100
+                // -1 = no taps logged, so there is no accuracy to report. It used to return 100,
+                // which the ACCURACY badge rendered as a flawless "100%" for an empty table.
+                "perfectAccuracyPct" to if (totalTaps > 0) (perfectTaps.toFloat() / totalTaps * 100).toInt() else -1
             )
         }
     }

@@ -83,16 +83,24 @@ fun MikuBpmObservatoryModal(
     // Modal Mode: 0 = Kawaii Beat Match, 1 = Sweet Leek Clicker, 2 = Producer Skills, 3 = Skins & Textures, 4 = Quests & DB, 5 = Seasons
     var selectedMode by remember { mutableIntStateOf(0) }
 
-    val liveBpm = if (bpmState.bpm.isFinite() && bpmState.bpm in 20f..999f) bpmState.bpm else 120f
+    // hasLiveTempo gates every READOUT; the 120 fallback below only feeds the rhythm-game engine's
+    // default tempo and is never printed as a measurement.
+    val hasLiveTempo = bpmState.bpm.isFinite() && bpmState.bpm in 20f..999f
+    val liveBpm = if (hasLiveTempo) bpmState.bpm else 120f
     val isPlaying = bpmState.isPlaying
     val beatIntervalMs = bpmState.beatIntervalMs.coerceIn(60L, 3000L)
 
     val cr = ctx.contentResolver
-    val trackTitle = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
-        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_title") ?: "World is Mine" } catch (_: Throwable) { "World is Mine" }
+    // NULLABLE — no invented now-playing track. These used to default to "World is Mine" /
+    // "supercell feat. Hatsune Miku", which was not just printed on screen while something else
+    // (Spotify, YouTube) played: it was fed to resolveCanonicalBpm(), hit the preseeded dictionary
+    // entry for that song, and then WROTE Settings.Global miku_live_bpm = 165 and broadcast
+    // com.miku.action.BPM_UPDATE — poisoning the live tempo for every BPM surface in the OS.
+    val trackTitle: String? = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
+        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_title")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
     }
-    val trackArtist = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
-        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_artist") ?: "supercell feat. Hatsune Miku" } catch (_: Throwable) { "supercell feat. Hatsune Miku" }
+    val trackArtist: String? = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
+        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_artist")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
     }
 
     var calculatedTapBpm by remember { mutableStateOf<Float?>(null) }
@@ -101,6 +109,9 @@ fun MikuBpmObservatoryModal(
     // Auto-resolve canonical BPM from SQLite / Preseeded dictionary on track change
     LaunchedEffect(trackArtist, trackTitle) {
         dbStats = bpmDb.getCalibrationStats()
+        // No published track = nothing to look up. Never resolve (or broadcast) a tempo for a
+        // track identity we invented.
+        if (trackTitle == null || trackArtist == null) return@LaunchedEffect
         val rec = bpmDb.resolveCanonicalBpm(trackArtist, trackTitle)
         if (rec != null && rec.canonicalBpm > 0f) {
             calculatedTapBpm = rec.canonicalBpm
@@ -360,7 +371,7 @@ fun MikuBpmObservatoryModal(
                                     Text(if (isPlaying) "💖" else "⏸️", fontSize = 16.sp)
                                     Spacer(Modifier.width(4.dp))
                                     Text(
-                                        text = if (isPlaying) String.format(Locale.US, "%.0f", liveBpm) else "--",
+                                        text = if (isPlaying && hasLiveTempo) String.format(Locale.US, "%.0f", liveBpm) else "--",
                                         color = Color.White,
                                         fontSize = 35.sp,
                                         fontWeight = FontWeight.Black,
@@ -375,7 +386,11 @@ fun MikuBpmObservatoryModal(
                                     fontFamily = AudiowideFont
                                 )
                                 Text(
-                                    text = if (isPlaying) "${liveBpm.toInt()} BPM · ${beatIntervalMs}ms" else "ALSA Standby",
+                                    text = when {
+                                        isPlaying && hasLiveTempo -> "${liveBpm.toInt()} BPM · ${beatIntervalMs}ms"
+                                        isPlaying -> "Tempo not detected yet"
+                                        else -> "ALSA Standby"
+                                    },
                                     color = KawaiiSoftTeal,
                                     fontSize = 10.5.sp,
                                     fontWeight = FontWeight.Bold
@@ -401,7 +416,13 @@ fun MikuBpmObservatoryModal(
                             ) {
                                 Column(Modifier.weight(1f)) {
                                     Text(
-                                        text = if (isPlaying) "♪ $trackTitle" else "🌸 MikuOS Player",
+                                        // Audio can be playing from an app that publishes no metadata
+                                        // (Spotify, YouTube). Say "Unknown track" rather than naming one.
+                                        text = when {
+                                            !isPlaying -> "🌸 MikuOS Player"
+                                            trackTitle != null -> "♪ $trackTitle"
+                                            else -> "♪ Unknown track"
+                                        },
                                         color = Color.White,
                                         fontSize = 15.sp,
                                         fontWeight = FontWeight.Black,
@@ -409,7 +430,11 @@ fun MikuBpmObservatoryModal(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = if (isPlaying) trackArtist else "Bit-Perfect DTA Direct",
+                                        text = when {
+                                            !isPlaying -> "Nothing playing"
+                                            trackArtist != null -> trackArtist
+                                            else -> "External audio source · no metadata published"
+                                        },
                                         color = KawaiiMikuMint,
                                         fontSize = 12.5.sp,
                                         fontWeight = FontWeight.Bold,
@@ -444,7 +469,9 @@ fun MikuBpmObservatoryModal(
                                     Text(
                                         if (lastTapTimeMs > 0) {
                                             when {
-                                                abs(timingOffsetMs) <= 35 -> "💖 EXACT (0ms)"
+                                                // Print the measured deviation; "(0ms)" was a literal
+                                                // covering everything within ±35 ms.
+                                                abs(timingOffsetMs) <= 35 -> "💖 ${if (timingOffsetMs < 0) "" else "+"}${timingOffsetMs}ms"
                                                 timingOffsetMs < 0 -> "⚠️ ${timingOffsetMs}ms EARLY"
                                                 else -> "⚠️ +${timingOffsetMs}ms LATE"
                                             }
@@ -614,11 +641,12 @@ fun MikuBpmObservatoryModal(
                             val totalCal = dbStats["totalTracks"] ?: 0
                             val userCal = dbStats["userCalibrated"] ?: 0
                             val totalTaps = dbStats["totalTaps"] ?: 0
-                            val accPct = dbStats["perfectAccuracyPct"] ?: 100
+                            // -1 (or dbStats not loaded yet) = no taps logged → "—", not a fake 100 %.
+                            val accPct = (dbStats["perfectAccuracyPct"] as? Int) ?: -1
                             KawaiiStatBadge("DB TRACKS", "$totalCal", KawaiiSoftTeal)
                             KawaiiStatBadge("USER CAL", "$userCal", KawaiiSakuraPink)
                             KawaiiStatBadge("LOGGED TAPS", "$totalTaps", KawaiiGoldenHoney)
-                            KawaiiStatBadge("ACCURACY", "$accPct%", KawaiiMikuMint)
+                            KawaiiStatBadge("ACCURACY", if (accPct >= 0) "$accPct%" else "—", KawaiiMikuMint)
                         }
                     }
                 } else {
@@ -730,7 +758,12 @@ fun MikuBpmObservatoryModal(
 
                             // Calculate Exact Millisecond Timing Offset (Early vs Late)
                             val accuracy: HitAccuracy
-                            if (isPlaying && lastBeatEpochMs > 0L) {
+                            // With no beat to compare against there is no deviation to measure. This
+                            // used to fabricate `timingOffsetMs = 0` + a GOOD judgment and write that
+                            // row to bpm_tap_telemetry, inflating the rendered ACCURACY / LOGGED TAPS
+                            // / lifetime goodHits stats with taps that were never judged at all.
+                            val hasBeatReference = isPlaying && lastBeatEpochMs > 0L
+                            if (hasBeatReference) {
                                 val cycle = (now - lastBeatEpochMs).mod(beatIntervalMs)
                                 val signedOffset = if (cycle > beatIntervalMs / 2) {
                                     (cycle - beatIntervalMs).toInt()
@@ -766,30 +799,49 @@ fun MikuBpmObservatoryModal(
                                 HitAccuracy.GOOD -> 50L + clickerCombo * 5L
                                 HitAccuracy.MISS -> 0L
                             }
-                            MikuBpmSeasonsEngine.recordTap(accuracy, clickerCombo, pts, liveBpm)
+                            // Only a REAL detected tempo may reach the seasons engine: it feeds
+                            // lifetimeStats.highestBpmLocked, which the "HIGH BPM" badge renders. The
+                            // 120f rhythm-game default used to be persisted there as a measurement.
+                            MikuBpmSeasonsEngine.recordTap(
+                                accuracy, clickerCombo, pts,
+                                if (hasLiveTempo) liveBpm else 0f
+                            )
 
-                            // Telemetry Logging to SQLite Database
-                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                bpmDb.logTapTelemetry(
-                                    MikuBpmDatabase.TapTelemetryRecord(
-                                        artist = trackArtist,
-                                        title = trackTitle,
-                                        tapEpochMs = System.currentTimeMillis(),
-                                        targetBeatMs = beatIntervalMs,
-                                        deviationMs = timingOffsetMs,
-                                        accuracy = accuracy.name,
-                                        instantaneousBpm = liveBpm,
-                                        comboAtTap = clickerCombo,
-                                        isFever = feverSeconds > 0
+                            // Telemetry Logging to SQLite Database — judged taps only.
+                            if (hasBeatReference) {
+                                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    bpmDb.logTapTelemetry(
+                                        MikuBpmDatabase.TapTelemetryRecord(
+                                            artist = trackArtist ?: "",
+                                            title = trackTitle ?: "",
+                                            tapEpochMs = System.currentTimeMillis(),
+                                            targetBeatMs = beatIntervalMs,
+                                            deviationMs = timingOffsetMs,
+                                            accuracy = accuracy.name,
+                                            // 0 = tempo not detected; never the 120f game default.
+                                            instantaneousBpm = if (hasLiveTempo) liveBpm else 0f,
+                                            comboAtTap = clickerCombo,
+                                            isFever = feverSeconds > 0
+                                        )
                                     )
-                                )
-                                MikuBeatClickerEngine.checkAchievements()
-                                dbStats = bpmDb.getCalibrationStats()
+                                    MikuBeatClickerEngine.checkAchievements()
+                                    dbStats = bpmDb.getCalibrationStats()
+                                }
+                            } else {
+                                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    MikuBeatClickerEngine.checkAchievements()
+                                }
                             }
 
-                            when (accuracy) {
+                            if (!hasBeatReference) {
+                                judgmentTitle = "FREE TAP · no beat reference"
+                                judgmentColor = KawaiiSoftTeal
+                            } else when (accuracy) {
                                 HitAccuracy.PERFECT -> {
-                                    judgmentTitle = "💖 PERFECT!! (0ms)"
+                                    // Print the deviation that was actually measured. "(0ms)" was a
+                                    // literal, while the PERFECT window is up to beatInterval/8.
+                                    val sign = if (timingOffsetMs < 0) "-" else "+"
+                                    judgmentTitle = "💖 PERFECT!! ($sign${abs(timingOffsetMs)}ms)"
                                     judgmentColor = KawaiiHotPink
                                     perfectShockwaveTrigger++
                                 }
@@ -1035,22 +1087,33 @@ fun MikuBpmObservatoryModal(
                                                 ctx.sendBroadcast(intent)
                                             } catch (_: Throwable) {}
 
-                                            // Save to SQLite Database
-                                            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                                bpmDb.saveTrackBpm(
-                                                    MikuBpmDatabase.TrackBpmRecord(
-                                                        artist = trackArtist,
-                                                        title = trackTitle,
-                                                        canonicalBpm = tapVal,
-                                                        rawDetectedBpm = liveBpm,
-                                                        userTappedBpm = tapVal,
-                                                        tempoMultiplier = if (tapVal > liveBpm * 1.5f) 2.0f else (if (tapVal < liveBpm * 0.75f) 0.5f else 1.0f),
-                                                        confidence = 1.0f,
-                                                        source = "USER_CALIBRATED",
-                                                        tapCount = tapCounter
+                                            // Save to SQLite Database — only for a track we can actually
+                                            // name. A calibration row keyed on an invented title would
+                                            // be served back later as a real user calibration.
+                                            if (trackArtist != null && trackTitle != null) {
+                                                coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                                    bpmDb.saveTrackBpm(
+                                                        MikuBpmDatabase.TrackBpmRecord(
+                                                            artist = trackArtist,
+                                                            title = trackTitle,
+                                                            canonicalBpm = tapVal,
+                                                            // 0 = nothing was auto-detected for this
+                                                            // track; don't store the game's 120f default
+                                                            // as a "raw detected" measurement.
+                                                            rawDetectedBpm = if (hasLiveTempo) liveBpm else 0f,
+                                                            userTappedBpm = tapVal,
+                                                            tempoMultiplier = if (hasLiveTempo) {
+                                                                if (tapVal > liveBpm * 1.5f) 2.0f
+                                                                else if (tapVal < liveBpm * 0.75f) 0.5f
+                                                                else 1.0f
+                                                            } else 1.0f,
+                                                            confidence = 1.0f,
+                                                            source = "USER_CALIBRATED",
+                                                            tapCount = tapCounter
+                                                        )
                                                     )
-                                                )
-                                                dbStats = bpmDb.getCalibrationStats()
+                                                    dbStats = bpmDb.getCalibrationStats()
+                                                }
                                             }
                                         }
                                         .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -1094,12 +1157,17 @@ fun MikuBpmObservatoryModal(
                                         .clickable {
                                             com.miku.launcher.haptics.MikuHaptics.tick(ctx)
                                             coroutineScope.launch {
+                                                if (trackArtist == null || trackTitle == null) {
+                                                    android.widget.Toast.makeText(ctx, "No track metadata published — nothing to look up", android.widget.Toast.LENGTH_SHORT).show()
+                                                    return@launch
+                                                }
                                                 val online = bpmDb.resolveCanonicalBpm(trackArtist, trackTitle)
                                                 if (online != null && online.canonicalBpm > 0f) {
                                                     calculatedTapBpm = online.canonicalBpm
                                                     android.widget.Toast.makeText(ctx, "🌐 DB Resolved: ${online.canonicalBpm.toInt()} BPM (${online.source})", android.widget.Toast.LENGTH_SHORT).show()
                                                 } else {
-                                                    android.widget.Toast.makeText(ctx, "🌐 Queried DB (DSP fallback active)", android.widget.Toast.LENGTH_SHORT).show()
+                                                    // There is no DSP analyser to fall back to; don't claim one.
+                                                    android.widget.Toast.makeText(ctx, "No BPM found in the local DB or dictionary", android.widget.Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }

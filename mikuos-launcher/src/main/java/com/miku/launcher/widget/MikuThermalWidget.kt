@@ -63,19 +63,20 @@ class MikuThermalWidget : AppWidgetProvider() {
                 if (rawB > 0) bat = rawB / 10f
             } catch (_: Throwable) {}
 
-            if (cpu == 0f && bat > 0f) cpu = bat + 4.5f   // derive from REAL battery temp only; no flat fake
-            if (bat == 0f) bat = cpu - 4.0f
+            // 0 = that sensor could not be read. It is shown as "—", never derived from the other one.
+            val haveAny = cpu > 0f || bat > 0f
 
             // Teal nominal, amber warm, red hot — keyed to the hotter of the two sensors.
             val maxTemp = maxOf(cpu, bat)
             val tint = when {
+                !haveAny -> 0x80FFFFFF.toInt()
                 maxTemp >= 60f -> 0xFFFF5252.toInt()
                 maxTemp >= 45f -> 0xFFFFD600.toInt()
                 else -> 0xFF39C5BB.toInt()
             }
-            v.setTextViewText(R.id.widget_thermal_cpu, "${cpu.toInt()}°C")
+            v.setTextViewText(R.id.widget_thermal_cpu, if (cpu > 0f) "${cpu.toInt()}°C" else "—°C")
             v.setTextColor(R.id.widget_thermal_cpu, tint)
-            v.setTextViewText(R.id.widget_thermal_bat, "BAT ${bat.toInt()}°C")
+            v.setTextViewText(R.id.widget_thermal_bat, if (bat > 0f) "BAT ${bat.toInt()}°C" else "BAT —°C")
 
             v.setOnClickPendingIntent(R.id.widget_thermal_root, MikuBatteryWidget.launchLauncher(ctx))
             mgr.updateAppWidget(id, v)

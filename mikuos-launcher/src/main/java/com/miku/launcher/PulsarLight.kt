@@ -26,13 +26,24 @@ object PulsarLight {
         val CRIMSON_RED = DualColor(255, 0, "Crimson Red")
     }
 
+    /**
+     * IMPORTANT — HONESTY NOTE: the M500's RGB "Pulsar Light" indicator is confirmed NON-FUNCTIONAL
+     * on this unit. The LED sysfs nodes are SELinux-denied to this process, there is no consumer LED
+     * service to ask, and the vendor factory-test config that drove it is absent. Every write below
+     * is therefore a no-op in practice, so NO mode description may promise a visible effect.
+     *
+     * The descriptions used to advertise breathing / BPM pulsing / a battery gauge / a continuous
+     * chroma crossfade. Two of those were never even implemented (applyMode writes ONE static colour
+     * pair per mode, it does not crossfade or breathe), and none of them can light anything on this
+     * hardware. They now state the stored intent and that the hardware does not respond.
+     */
     enum class Mode(val id: String, val label: String, val description: String) {
-        AUDIOPHILE_AUTO("audiophile_auto", "Audiophile BPM Pulse", "Colors LED by audio format tier & pulses to track tempo"),
-        CHROMA_RAINBOW("chroma_rainbow", "Dual-Die Chroma Wave", "Hypnotic continuous crossfade through Red ↔ Magenta ↔ Purple ↔ Blue"),
-        CYBER_HEARTBEAT("cyber_heartbeat", "Cyber Heartbeat", "Dual-pulse heartbeat glow in cyber violet/magenta"),
-        SMOOTH_BREATHING("smooth_breathing", "Analog Breathing Glow", "Deep analog sine-wave brightness breathing in Miku Blue"),
-        SIGNATURE_TEAL("signature_teal", "Signature Miku Blue", "Solid futuristic Miku Cyan-Blue"),
-        BATTERY_MONITOR("battery_monitor", "Battery & Charging Glow", "Continuous chromatic gauge from Red (empty) to Cyan-Blue (full)"),
+        AUDIOPHILE_AUTO("audiophile_auto", "Audiophile BPM Pulse", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        CHROMA_RAINBOW("chroma_rainbow", "Dual-Die Chroma Wave", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        CYBER_HEARTBEAT("cyber_heartbeat", "Cyber Heartbeat", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        SMOOTH_BREATHING("smooth_breathing", "Analog Breathing Glow", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        SIGNATURE_TEAL("signature_teal", "Signature Miku Blue", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        BATTERY_MONITOR("battery_monitor", "Battery & Charging Glow", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
         OFF("off", "Off", "Pulsar indicator disabled")
     }
 
@@ -40,6 +51,17 @@ object PulsarLight {
         val sp = ctx.getSharedPreferences("m500_hardware_prefs", Context.MODE_PRIVATE)
         val id = sp.getString(PREFS_KEY_MODE, Mode.AUDIOPHILE_AUTO.id) ?: Mode.AUDIOPHILE_AUTO.id
         return Mode.values().firstOrNull { it.id == id } ?: Mode.AUDIOPHILE_AUTO
+    }
+
+    /**
+     * null = the user has never chosen a pattern. DISPLAY surfaces must use this: [getMode] falls
+     * back to AUDIOPHILE_AUTO so the engine has something to run, and the hardware card was printing
+     * that fallback as the user's "Configured Pattern".
+     */
+    fun getModeOrNull(ctx: Context): Mode? {
+        val sp = ctx.getSharedPreferences("m500_hardware_prefs", Context.MODE_PRIVATE)
+        val id = sp.getString(PREFS_KEY_MODE, null) ?: return null
+        return Mode.values().firstOrNull { it.id == id }
     }
 
     fun setMode(ctx: Context, mode: Mode) {
@@ -116,9 +138,6 @@ object PulsarLight {
         )
     }
 
-    private var hddJob: Job? = null
-    private val hddScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
     private var bpmJob: Job? = null
     private val bpmScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -191,32 +210,8 @@ object PulsarLight {
         }
     }
 
-    fun startHddActivity() {
-        if (hddJob?.isActive == true) return
-        hddJob = hddScope.launch {
-            while (isActive) {
-                val isBurst = (1..100).random() < 70
-                val blips = if (isBurst) (2..6).random() else 1
-                for (i in 0 until blips) {
-                    val r = if ((1..2).random() == 1) 220 else 40
-                    val b = if (r > 100) 40 else 255
-                    writeDual(r, b, 240)
-                    delay((10..35).random().toLong())
-                    writeDual(0, 0, 0)
-                    delay((15..45).random().toLong())
-                }
-                delay((40..250).random().toLong())
-            }
-        }
-    }
-
-    fun stopHddActivity(ctx: Context? = null) {
-        hddJob?.cancel()
-        hddJob = null
-        if (ctx != null) {
-            applyMode(ctx, getMode(ctx), getBrightness(ctx))
-        } else {
-            writeDual(0, 255, 200)
-        }
-    }
+    // REMOVED: startHddActivity()/stopHddActivity(). They drove the indicator with Random blip
+    // bursts presented as "HDD activity" while being tied to no actual storage I/O counter at all —
+    // pure fabricated telemetry. Both were unreferenced. If a real activity light is ever wanted it
+    // must be driven from a real source (e.g. deltas of the device's own diskstats), not Random.
 }

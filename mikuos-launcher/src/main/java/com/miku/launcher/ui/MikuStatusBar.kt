@@ -80,10 +80,11 @@ data class MikuStatusBarState(
     val cellType: String = "",         // "LTE", "5G"…
     val bluetoothConnected: Boolean = false,
     val vpnUp: Boolean = false,
-    val volumePct: Int = 50,
+    val volumePct: Int = 0,
+    val volumeKnown: Boolean = false, // false until MikuVolumeManager has read AudioManager once
     val isMuted: Boolean = false,
-    val thermalC: Float = 0f,
-    val batteryPct: Int = 100,
+    val thermalC: Float = 0f,          // 0 = no sensor read yet → rendered as "—°"
+    val batteryPct: Int = -1,          // -1 = not read yet → rendered as "—%" with an empty cell
     val isCharging: Boolean = false
 )
 
@@ -127,7 +128,9 @@ fun rememberMikuStatusBarState(
             if (lvl >= 0 && scl > 0) lvl * 100 / scl else -1
         } catch (_: Throwable) { -1 }
     }
-    var batteryPct by remember { mutableIntStateOf(initialBattery.coerceAtLeast(0)) }
+    // -1 is kept as the honest "could not read" sentinel (the old .coerceAtLeast(0) turned a failed
+    // read into a confident, alarming "0%"). MikuStatusBar renders "—%" for a negative value.
+    var batteryPct by remember { mutableIntStateOf(initialBattery) }
     var charging by remember { mutableStateOf(false) }
     var quality by remember { mutableStateOf("") }
     var batteryTempC by remember { mutableStateOf(0f) }
@@ -183,11 +186,16 @@ fun rememberMikuStatusBarState(
         wifiDbm = net.wifi.rssiDbm,
         wifiLevel = if (net.wifi.isConnected) levelFromDbm(net.wifi.rssiDbm, -90, -55) else 0,
         cellConnected = net.cellular.isConnected && net.cellular.hasSignal,
-        cellLevel = if (net.cellular.hasSignal) levelFromDbm(net.cellular.signalDbm, -115, -80) else 0,
+        // The modem's OWN level (SignalStrength.level, 0..4) is the real measurement. Deriving bars
+        // from signalDbm was a fake-full-bars bug: signalDbm is 0 when the dBm was never reported
+        // (pre-API-29, null SignalStrength, out-of-range cellSignalStrengths) and levelFromDbm(0, …)
+        // returns 4 — painting a FULL signal icon for a reading that does not exist.
+        cellLevel = if (net.cellular.hasSignal) net.cellular.signalLevel5.coerceIn(0, 4) else 0,
         cellType = net.cellular.networkType.substringBefore(' ').take(4),
         bluetoothConnected = btConnected,
         vpnUp = vpnUp,
         volumePct = vol.volumePct,
+        volumeKnown = vol.maxVolume > 0,
         isMuted = vol.isMuted,
         thermalC = if (thermalC > 0f) thermalC else batteryTempC,
         batteryPct = batteryPct,
@@ -247,7 +255,8 @@ fun MikuStatusBar(
         // ---- fit pass: estimate widths (10.5sp condensed ≈ 6.2dp/char, glyph 13dp, gap 5dp) ----
         val avail = maxWidth.value
         var showVpn = state.vpnUp
-        var showDbm = state.wifiConnected
+        // dBm only when the radio actually reported one (-100 is the service's "unknown" floor).
+        var showDbm = state.wifiConnected && state.wifiDbm > -100
         var showQuality = state.quality.isNotEmpty()
         var showBpm = state.bpm > 0 && state.isPlaying
         fun estimate(): Float {
@@ -300,7 +309,7 @@ fun MikuStatusBar(
             }
             // RIGHT
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("${thermalShown.toInt()}°", color = thermalTint, fontSize = 10.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
+                Text(if (state.thermalC > 0f) "${thermalShown.toInt()}°" else "—°", color = if (state.thermalC > 0f) thermalTint else MikuTextSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Black, maxLines = 1, softWrap = false)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         if (state.isMuted || state.volumePct == 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
@@ -308,7 +317,7 @@ fun MikuStatusBar(
                         tint = if (state.isMuted) MikuNeonPink else MikuCyan,
                         modifier = Modifier.size(glyph)
                     )
-                    Text("${volumeShown}", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
+                    Text(if (state.volumeKnown) "${volumeShown}" else "—", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, maxLines = 1, softWrap = false)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
@@ -329,13 +338,21 @@ fun MikuStatusBar(
                 }
                 if (state.bluetoothConnected) Icon(Icons.Default.Bluetooth, contentDescription = "Bluetooth", tint = MikuCyan, modifier = Modifier.size(glyph))
                 if (showVpn) Icon(Icons.Default.VpnLock, contentDescription = "VPN", tint = MikuCyan, modifier = Modifier.size(glyph))
+                // batteryPct < 0 = the sticky ACTION_BATTERY_CHANGED could not be read. Show "—%" in a
+                // neutral tint and an empty cell rather than a red "0%" that reads as an emergency.
+                val batteryKnown = state.batteryPct >= 0
                 val batteryColor = when {
+                    !batteryKnown -> MikuTextSecondary
                     state.isCharging -> com.miku.launcher.ui.MikuIdentity.Leek
                     state.batteryPct > 50 -> MikuCyan
                     state.batteryPct > 20 -> com.miku.launcher.ui.MikuIdentity.Gold
                     else -> com.miku.launcher.ui.MikuIdentity.Coral
                 }
-                Text("${batteryShown}%", color = textColor, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, maxLines = 1, softWrap = false)
+                Text(
+                    if (batteryKnown) "${batteryShown}%" else "—%",
+                    color = if (batteryKnown) textColor else MikuTextSecondary,
+                    fontSize = 10.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont, maxLines = 1, softWrap = false
+                )
                 run {
                     Spacer(Modifier.width(5.dp))
                     // Power: mode glyph (⚡ perf / ☾ save / auto = live profile ♪ ☾ ⚡ ✦).
@@ -366,7 +383,9 @@ fun MikuStatusBar(
                         drawRoundRect(color = batteryColor.copy(alpha = 0.85f), size = Size(bodyW, size.height), cornerRadius = r, style = Stroke(1.2.dp.toPx()))
                         drawRoundRect(color = batteryColor.copy(alpha = 0.85f), topLeft = Offset(bodyW + 0.5.dp.toPx(), size.height * 0.3f), size = Size(2.dp.toPx(), size.height * 0.4f), cornerRadius = CornerRadius(1f, 1f))
                         val inset = 2.dp.toPx()
-                        val fillW = ((bodyW - inset * 2) * (state.batteryPct / 100f)).coerceAtLeast(0f)
+                        // No fill at all when the level is unknown (negative) — an empty cell, not 0 %.
+                        val fillW = if (batteryKnown)
+                            ((bodyW - inset * 2) * (state.batteryPct / 100f)).coerceAtLeast(0f) else 0f
                         drawRoundRect(color = batteryColor, topLeft = Offset(inset, inset), size = Size(fillW, size.height - inset * 2), cornerRadius = CornerRadius(1.dp.toPx(), 1.dp.toPx()))
                     }
                     if (state.isCharging) Icon(Icons.Default.Bolt, contentDescription = "Charging", tint = Color.White, modifier = Modifier.size(9.dp))

@@ -165,6 +165,11 @@ fun MikuGpsTacticalMapModal(
     val ctx = LocalContext.current
     val weatherState by MikuWeatherService.state.collectAsState()
     val gps = weatherState.gps
+    // Speed / bearing / altitude / accuracy only exist for a GNSS or network *Location* fix.
+    // IP-geolocation, manual override and last-known restores carry coordinates only, so those
+    // fields must read "—" there rather than 0 m / 0.0 mph / 0° N.
+    val isSensorFix = gps.isLocked && gps.lastFixTime > 0L &&
+        gps.provider !in setOf("None", "IP Geolocation", "Manual", "Manual Override", "Last Known", "Auto GPS")
 
     var selectedTab by remember { mutableIntStateOf(0) } // 0: Tactical Map, 1: Telemetry HUD
     var mapZoom by remember { mutableIntStateOf(12) }
@@ -251,7 +256,9 @@ fun MikuGpsTacticalMapModal(
                                     letterSpacing = 0.8.sp
                                 )
                                 Text(
-                                    text = if (gps.isLocked) "50KM TOPO OFFLINE CACHE · SATELLITE 3D FIX" else "ACQUIRING SATELLITE CONSTELLATION...",
+                                    // Names the REAL fix source (GPS / network / IP geolocation / manual);
+                                    // never claims a satellite 3D fix it cannot verify.
+                                    text = if (gps.isLocked) "FIX SOURCE: ${gps.provider.uppercase()}" else "NO LOCATION FIX YET",
                                     color = if (gps.isLocked) Color(0xFF00FFCC) else Color(0xFFFFB300),
                                     fontSize = 7.5.sp,
                                     fontWeight = FontWeight.Bold,
@@ -306,6 +313,7 @@ fun MikuGpsTacticalMapModal(
                         if (selectedTab == 0) {
                             TacticalMapView(
                                 gps = gps,
+                                isSensorFix = isSensorFix,
                                 zoom = mapZoom,
                                 panX = panOffsetX,
                                 panY = panOffsetY,
@@ -321,7 +329,7 @@ fun MikuGpsTacticalMapModal(
                                 }
                             )
                         } else {
-                            GpsTelemetryHudView(gps = gps)
+                            GpsTelemetryHudView(gps = gps, isSensorFix = isSensorFix)
                         }
                     }
 
@@ -346,8 +354,12 @@ fun MikuGpsTacticalMapModal(
                             fontFamily = OrbitronFont
                         )
                         Text(
-                            text = if (gps.accuracyM > 0) "ACCURACY: ±${"%.1f".format(gps.accuracyM)}M" else "SEARCHING FIX",
-                            color = if (gps.accuracyM in 0.1f..15f) Color(0xFF00FFCC) else Color(0xFFFFB300),
+                            text = when {
+                                isSensorFix && gps.accuracyM > 0 -> "ACCURACY: ±${"%.1f".format(gps.accuracyM)}M"
+                                gps.isLocked -> "ACCURACY: — (${gps.provider.uppercase()})"
+                                else -> "SEARCHING FIX"
+                            },
+                            color = if (isSensorFix && gps.accuracyM in 0.1f..15f) Color(0xFF00FFCC) else Color(0xFFFFB300),
                             fontSize = 7.5.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = OrbitronFont
@@ -359,9 +371,14 @@ fun MikuGpsTacticalMapModal(
     }
 }
 
+/** "12.34567° N" style: hemisphere from the sign, never a hard-coded N/W. */
+private fun fmtLat(v: Double) = "${"%.5f".format(kotlin.math.abs(v))}° ${if (v >= 0) "N" else "S"}"
+private fun fmtLon(v: Double) = "${"%.5f".format(kotlin.math.abs(v))}° ${if (v >= 0) "E" else "W"}"
+
 @Composable
 private fun TacticalMapView(
     gps: MikuWeatherService.GpsTelemetry,
+    isSensorFix: Boolean,
     zoom: Int,
     panX: Float,
     panY: Float,
@@ -401,6 +418,10 @@ private fun TacticalMapView(
             val h = size.height
             val cx = w / 2f + panX
             val cy = h / 2f + panY
+            // A real fix is required before ANY position-implying mark is drawn. Without this the map
+            // painted range rings, a crosshair and a pulsing pink "you are here" beacon dead centre
+            // while the device had no fix at all — a fabricated position on a tactical map.
+            val hasFix = gps.isLocked && (gps.latitude != 0.0 || gps.longitude != 0.0)
 
             // 1. Draw Tactical Topo Grid
             val gridSize = 40f
@@ -444,47 +465,53 @@ private fun TacticalMapView(
                 }
             }
 
-            // 3. Draw Procedural Topo Contour Rings
-            for (ring in 1..4) {
-                val r = ring * 60f
+            // 3/4/5 are ALL position marks: range rings, the reticle and the beacon. None of them may
+            // be drawn without a real fix — with no fix the canvas shows only the bare tactical grid,
+            // and the overlays above/below already say "LAT: — | LON: — | ALT: — (no fix)" /
+            // "SEARCHING FIX".
+            if (hasFix) {
+                // 3. Draw Procedural Topo Contour Rings
+                for (ring in 1..4) {
+                    val r = ring * 60f
+                    drawCircle(
+                        color = Color(0xFF00E5FF).copy(alpha = 0.12f),
+                        radius = r,
+                        center = Offset(cx, cy),
+                        style = Stroke(width = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+                    )
+                }
+
+                // 4. Draw Crosshair Reticle
+                drawLine(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.4f),
+                    start = Offset(cx - 20f, cy),
+                    end = Offset(cx + 20f, cy),
+                    strokeWidth = 1.2f
+                )
+                drawLine(
+                    color = Color(0xFF00E5FF).copy(alpha = 0.4f),
+                    start = Offset(cx, cy - 20f),
+                    end = Offset(cx, cy + 20f),
+                    strokeWidth = 1.2f
+                )
+
+                // 5. GPS Pulse Accuracy Disc & Hero Beacon
                 drawCircle(
-                    color = Color(0xFF00E5FF).copy(alpha = 0.12f),
-                    radius = r,
-                    center = Offset(cx, cy),
-                    style = Stroke(width = 1f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 6f)))
+                    color = Color(0xFF00E5FF).copy(alpha = 0.25f * (1f - (pulseRadius - 12f) / 16f)),
+                    radius = pulseRadius,
+                    center = Offset(cx, cy)
+                )
+                drawCircle(
+                    color = Color(0xFFFF4081),
+                    radius = 6.5f,
+                    center = Offset(cx, cy)
+                )
+                drawCircle(
+                    color = Color.White,
+                    radius = 3f,
+                    center = Offset(cx, cy)
                 )
             }
-
-            // 4. Draw Crosshair Reticle
-            drawLine(
-                color = Color(0xFF00E5FF).copy(alpha = 0.4f),
-                start = Offset(cx - 20f, cy),
-                end = Offset(cx + 20f, cy),
-                strokeWidth = 1.2f
-            )
-            drawLine(
-                color = Color(0xFF00E5FF).copy(alpha = 0.4f),
-                start = Offset(cx, cy - 20f),
-                end = Offset(cx, cy + 20f),
-                strokeWidth = 1.2f
-            )
-
-            // 5. GPS Pulse Accuracy Disc & Hero Beacon
-            drawCircle(
-                color = Color(0xFF00E5FF).copy(alpha = 0.25f * (1f - (pulseRadius - 12f) / 16f)),
-                radius = pulseRadius,
-                center = Offset(cx, cy)
-            )
-            drawCircle(
-                color = Color(0xFFFF4081),
-                radius = 6.5f,
-                center = Offset(cx, cy)
-            )
-            drawCircle(
-                color = Color.White,
-                radius = 3f,
-                center = Offset(cx, cy)
-            )
         }
 
         // Top Overlay: Live Mini Coordinates
@@ -498,7 +525,9 @@ private fun TacticalMapView(
                 .padding(horizontal = 8.dp, vertical = 3.dp)
         ) {
             Text(
-                text = "LAT: ${"%.5f".format(gps.latitude)}° | LON: ${"%.5f".format(gps.longitude)}° | ALT: ${gps.altitudeM.toInt()}M",
+                text = if (gps.isLocked && (gps.latitude != 0.0 || gps.longitude != 0.0))
+                    "LAT: ${fmtLat(gps.latitude)} | LON: ${fmtLon(gps.longitude)} | ALT: ${if (isSensorFix && gps.hasAltitude && gps.altitudeM != 0.0) "${gps.altitudeM.toInt()}M" else "—"}"
+                else "LAT: — | LON: — | ALT: — (no fix)",
                 color = Color.White,
                 fontSize = 8.5.sp,
                 fontWeight = FontWeight.Bold,
@@ -527,7 +556,8 @@ private fun TacticalMapView(
 }
 
 @Composable
-private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
+private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry, isSensorFix: Boolean) {
+    val hasCoords = gps.isLocked && (gps.latitude != 0.0 || gps.longitude != 0.0)
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -541,29 +571,31 @@ private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             GpsMetricCard(
                 title = "LATITUDE",
-                value = if (gps.latitude != 0.0) "${"%.5f".format(gps.latitude)}° N" else "—",
+                value = if (hasCoords) fmtLat(gps.latitude) else "—",
                 color = Color(0xFF00E5FF),
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(
                 title = "LONGITUDE",
-                value = if (gps.longitude != 0.0) "${"%.5f".format(gps.longitude)}° W" else "—",
+                value = if (hasCoords) fmtLon(gps.longitude) else "—",
                 color = Color(0xFF00E5FF),
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // Row 2: Altitude & Ground Speed
+        // Row 2: Altitude & Ground Speed — sensor fixes only; 0 from a non-sensor source is "—".
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             GpsMetricCard(
                 title = "ELEVATION / ALTITUDE",
-                value = "${gps.altitudeM.toInt()} m (${(gps.altitudeM * 3.28084).toInt()} ft)",
+                value = if (isSensorFix && gps.hasAltitude && gps.altitudeM != 0.0) "${gps.altitudeM.toInt()} m (${(gps.altitudeM * 3.28084).toInt()} ft)" else "—",
                 color = Color(0xFF00FFCC),
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(
                 title = "GROUND SPEED",
-                value = "${"%.1f".format(gps.speedMph)} mph (${(gps.speedMph * 1.60934).toInt()} km/h)",
+                // gps.hasSpeed mirrors Location.hasSpeed(): a network/fused fix carries no speed, and
+                // this card used to print a confident "0.0 mph (0 km/h)" for it.
+                value = if (isSensorFix && gps.hasSpeed) "${"%.1f".format(gps.speedMph)} mph (${(gps.speedMph * 1.60934).toInt()} km/h)" else "—",
                 color = Color(0xFFFF4081),
                 modifier = Modifier.weight(1f)
             )
@@ -573,13 +605,13 @@ private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             GpsMetricCard(
                 title = "BEARING / HEADING",
-                value = "${gps.bearing.toInt()}° (${degreesToCompassText(gps.bearing.toInt())})",
+                value = if (isSensorFix && gps.hasBearing && gps.hasSpeed && gps.speedMph > 0.5f) "${gps.bearing.toInt()}° (${degreesToCompassText(gps.bearing.toInt())})" else "—",
                 color = com.miku.launcher.ui.MikuIdentity.Gold,
                 modifier = Modifier.weight(1f)
             )
             GpsMetricCard(
                 title = "FIX ACCURACY",
-                value = "±${"%.1f".format(gps.accuracyM)} meters",
+                value = if (isSensorFix && gps.accuracyM > 0f) "±${"%.1f".format(gps.accuracyM)} meters" else "—",
                 color = Color(0xFF80DEEA),
                 modifier = Modifier.weight(1f)
             )
@@ -604,7 +636,13 @@ private fun GpsTelemetryHudView(gps: MikuWeatherService.GpsTelemetry) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = if (gps.city.isNotEmpty()) "${gps.city}, ${gps.county} · ${gps.state} ${gps.country}" else gps.fuzzyLocation,
+                    text = when {
+                        gps.city.isNotEmpty() -> listOf(gps.city, gps.county).filter { it.isNotBlank() }.joinToString(", ") +
+                            listOf(gps.state, gps.country).filter { it.isNotBlank() }.joinToString(" ").let { if (it.isBlank()) "" else " · $it" }
+                        gps.fuzzyLocation.isNotEmpty() -> gps.fuzzyLocation
+                        gps.isLocked -> "Fix acquired · place not resolved yet"
+                        else -> "No location fix yet"
+                    },
                     color = Color.White,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,

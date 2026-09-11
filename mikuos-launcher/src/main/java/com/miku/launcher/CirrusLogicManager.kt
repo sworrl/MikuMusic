@@ -24,8 +24,10 @@ object CirrusLogicManager {
     }
 
     enum class GainMode(val id: String, val label: String, val sysfsValue: String, val description: String) {
-        LOW("low", "Low Gain (0 dB)", "low", "Optimized for high-sensitivity IEMs and low-impedance earphones"),
-        HIGH("high", "High Gain (+6 dB)", "high", "High-voltage rail swing for demanding planar magnetic and high-impedance headphones")
+        // No dB figures in the labels: the actual gain step of this unit is never read from anything,
+        // so "(0 dB)" / "(+6 dB)" were unverified numbers rendered next to a live-looking readout.
+        LOW("low", "Low Gain", "low", "Intended for high-sensitivity IEMs and low-impedance earphones"),
+        HIGH("high", "High Gain", "high", "Intended for high-impedance / planar headphones")
     }
 
     enum class OutputMode(val id: String, val label: String, val sysfsValue: String, val icon: String, val description: String) {
@@ -317,6 +319,46 @@ object CirrusLogicManager {
         val v = if (enabled) 1 else 0
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dsd_gain_comp", v) }
         RootShell.execFast("settings put global vendor.audio.hiby.hw.dsd_gain_comp $v; setprop vendor.audio.hiby.hw.dsd_gain_comp $v")
+    }
+
+    // ---- Honest (nullable) readers for DISPLAY surfaces ------------------------------------
+    // The getters above fall back to a preset (FAST_LINEAR / HIGH / false) so the control UI has
+    // something to select. Telemetry/status displays must use these instead: null = the value
+    // could not be read from sysfs, the Miku prefs mirror, or Settings.Global — render "—".
+
+    fun getDigitalFilterOrNull(ctx: Context): DigitalFilter? {
+        readSysfs(ctx, "digital_filter")?.takeIf { it.isNotBlank() }?.let { v ->
+            DigitalFilter.values().firstOrNull { it.id == v.lowercase() }?.let { return it }
+        }
+        val cr = ctx.contentResolver
+        val raw = try {
+            Settings.Global.getString(cr, "vendor.audio.hiby.hw.digital_filter")
+                ?: Settings.Global.getString(cr, "vendor.audio.hiby.digital_filter")
+                ?: Settings.Global.getString(cr, "hw.digital_filter")
+        } catch (_: Throwable) { null } ?: return null
+        return DigitalFilter.values().firstOrNull { it.id == raw.trim().lowercase() }
+    }
+
+    fun getGainModeOrNull(ctx: Context): GainMode? {
+        readSysfs(ctx, "gain")?.takeIf { it.isNotBlank() }?.let { v ->
+            GainMode.values().firstOrNull { it.sysfsValue == v.lowercase() }?.let { return it }
+        }
+        val cr = ctx.contentResolver
+        val raw = try {
+            Settings.Global.getString(cr, "vendor.audio.hiby.hw.gain")
+                ?: Settings.Global.getString(cr, "vendor.audio.hiby.gain")
+        } catch (_: Throwable) { null } ?: return null
+        return GainMode.values().firstOrNull { it.sysfsValue == raw.trim().lowercase() }
+    }
+
+    fun isDreEnabledOrNull(ctx: Context): Boolean? {
+        readSysfs(ctx, "dre_mode")?.let { v ->
+            return v == "dremode_enable" || v == "1" || v.equals("on", true)
+        }
+        val cr = ctx.contentResolver
+        return try {
+            Settings.Global.getString(cr, "vendor.audio.hiby.hw.dre")?.trim()?.let { it == "1" }
+        } catch (_: Throwable) { null }
     }
 
     fun getLiveHardwareAudit(ctx: Context): Map<String, String> {

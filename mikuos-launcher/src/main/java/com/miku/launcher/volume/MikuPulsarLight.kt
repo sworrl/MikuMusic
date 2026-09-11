@@ -12,12 +12,13 @@ import kotlinx.coroutines.launch
 /**
  * SGM31324 "Pulsar Light" RGB driver — volume-level color feedback.
  *
- * History: under stock firmware this LED was fully dead — sysfs nodes SELinux-denied even to the
- * adb shell, no light service, no consumer path (the previous investigation ruled it out WITHOUT
- * root). MikuOS is rooted and owns policy, which was explicitly the "new information" condition:
- * all writes go through the root shell, and the boot rc opens the node permissions.
+ * STATUS: the RGB indicator is CONFIRMED NON-FUNCTIONAL on this unit. The sysfs nodes are
+ * SELinux-denied, there is no light service and no consumer path, and MikuOS does not run as root
+ * (platform-signing is the privilege model here, and it does not grant these node writes). [probe]
+ * therefore fails and every write below is skipped — the feature stays dark. Nothing in this file
+ * may be described to the user as a working light.
  *
- * Behavior (user spec): while the volume HUD is (or would be) on screen, the LED shows the level
+ * Intended behavior, IF the hardware ever becomes driveable: while the volume HUD is on screen, show the level
  * as color — BLUE low → PURPLE mid → RED high, smoothly interpolated — then turns off when the
  * HUD window ends.
  *

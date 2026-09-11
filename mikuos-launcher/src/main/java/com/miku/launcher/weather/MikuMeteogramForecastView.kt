@@ -53,34 +53,11 @@ fun MikuMeteogramForecastView(
     val palette by MikuDiurnalTheme.rememberDiurnalPalette()
     val scrollState = rememberScrollState()
 
-    // Hourly points (sample starting from NOW)
+    // Hourly points come ONLY from the fetched Open-Meteo hourly series. With no series there is
+    // no forecast to draw — the strip shows an honest empty row instead of a synthesized curve.
+    val hasData = weather.lastUpdatedTime > 0L
     val points = remember(weather.hourlyMeteogram) {
-        if (weather.hourlyMeteogram.isNotEmpty()) {
-            if (isCompact) weather.hourlyMeteogram.take(12)
-            else weather.hourlyMeteogram.take(24)
-        } else {
-            (0..11).map { i ->
-                val hour = (12 + i * 2) % 24
-                val isDay = hour in 6..19
-                val (sum, ic) = MikuWeatherService.mapWeatherCode(weather.code, isDay)
-                MikuWeatherService.HourlyMeteogramPoint(
-                    timeLabel = String.format("%02d:00", hour),
-                    dayLabel = if (hour < 6) "Tomorrow" else "Today",
-                    tempF = (weather.tempF + (if (hour in 10..18) 6f else -6f) - (i * 0.4f)),
-                    feelsLikeF = weather.feelsLikeF,
-                    precipInches = (weather.precipitationIn * (1f - i * 0.08f)).coerceAtLeast(0f),
-                    precipProbPct = (weather.precipitationProbPct - i * 4).coerceIn(0, 100),
-                    windSpeedMph = (weather.windSpeedMph + (i % 3) * 1.5f),
-                    windGustsMph = (weather.windSpeedMph + (i % 3) * 2f + 3f),
-                    windDirectionDeg = (weather.windDirectionDeg + i * 15) % 360,
-                    windDirectionCompass = weather.windDirectionCompass,
-                    weatherCode = weather.code,
-                    summary = sum,
-                    icon = ic,
-                    isDay = isDay
-                )
-            }
-        }
+        if (isCompact) weather.hourlyMeteogram.take(12) else weather.hourlyMeteogram.take(24)
     }
 
     val itemWidth = if (isCompact) 44.dp else 52.dp
@@ -139,7 +116,7 @@ fun MikuMeteogramForecastView(
                 }
 
                 Text(
-                    text = "${weather.tempF.roundToInt()}°F · ${if (gps.city.isNotEmpty()) gps.city else "Local"}",
+                    text = "${if (hasData) "${weather.tempF.roundToInt()}°F" else "—°F"} · ${if (gps.city.isNotEmpty()) gps.city else "No location"}",
                     color = Color.White,
                     fontSize = 8.sp,
                     fontWeight = FontWeight.Bold,
@@ -151,6 +128,22 @@ fun MikuMeteogramForecastView(
 
             // Horizontally Scrollable Meteogram Strip Table
             Box(Modifier.fillMaxWidth()) {
+                if (points.isEmpty()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (hasData) "No hourly series in the last fetch" else "No forecast fetched yet",
+                            color = Color.White.copy(alpha = 0.55f),
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                }
                 Row(
                     Modifier
                         .horizontalScroll(scrollState)
@@ -326,6 +319,12 @@ fun MikuSolarArcTrack(
             .background(Color(0x33020A0F))
             .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
+        // Blank sunrise/sunset = no fetched astronomy. Hoisted out of the Row so the Canvas below
+        // shares the gate: it used to draw a gold "daytime sun" parked at sunrise (solarFraction
+        // defaults to 0f and isDay to true) right next to the label "NO SOLAR DATA". Note that
+        // lastUpdatedTime > 0 is NOT enough here — restoreLastWeather() republishes a cached
+        // condition with blank sunrise/sunset and solarFraction 0f.
+        val hasAstro = sunrise.isNotBlank() && sunset.isNotBlank()
         Column {
             Row(
                 Modifier.fillMaxWidth(),
@@ -333,21 +332,25 @@ fun MikuSolarArcTrack(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "☀️ RISE: $sunrise",
+                    text = "☀️ RISE: ${sunrise.ifBlank { "—" }}",
                     color = Color(0xFFFFB300),
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = AudiowideFont
                 )
                 Text(
-                    text = if (isDay) "SOLAR TRANSIT · ${(solarFraction * 100).roundToInt()}%" else "LUNAR TRANSIT",
-                    color = if (isDay) MikuCyan else Color(0xFFB388FF),
+                    text = when {
+                        !hasAstro -> "NO SOLAR DATA"
+                        isDay -> "SOLAR TRANSIT · ${(solarFraction * 100).roundToInt()}%"
+                        else -> "LUNAR TRANSIT"
+                    },
+                    color = if (!hasAstro) Color.White.copy(alpha = 0.5f) else if (isDay) MikuCyan else Color(0xFFB388FF),
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = AudiowideFont
                 )
                 Text(
-                    text = "🌙 SET: $sunset",
+                    text = "🌙 SET: ${sunset.ifBlank { "—" }}",
                     color = Color(0xFFFF80AB),
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Bold,
@@ -376,38 +379,41 @@ fun MikuSolarArcTrack(
                     cap = StrokeCap.Round
                 )
 
-                // Day Gradient Track
-                val gradientBrush = Brush.horizontalGradient(
-                    listOf(
-                        Color(0xFFFF6D00),
-                        com.miku.launcher.ui.MikuIdentity.Gold,
-                        Color(0xFF00E5FF),
-                        Color(0xFFFF80AB)
+                // Progress fill + sun/moon marker ONLY with real astronomy. Without it the strip is
+                // just the empty base track — no marker is placed at a transit that was never known.
+                if (hasAstro) {
+                    val gradientBrush = Brush.horizontalGradient(
+                        listOf(
+                            Color(0xFFFF6D00),
+                            com.miku.launcher.ui.MikuIdentity.Gold,
+                            Color(0xFF00E5FF),
+                            Color(0xFFFF80AB)
+                        )
                     )
-                )
 
-                drawLine(
-                    brush = gradientBrush,
-                    start = Offset(0f, trackY),
-                    end = Offset(w * solarFraction.coerceIn(0f, 1f), trackY),
-                    strokeWidth = h,
-                    cap = StrokeCap.Round
-                )
+                    drawLine(
+                        brush = gradientBrush,
+                        start = Offset(0f, trackY),
+                        end = Offset(w * solarFraction.coerceIn(0f, 1f), trackY),
+                        strokeWidth = h,
+                        cap = StrokeCap.Round
+                    )
 
-                // Sun / Moon Indicator Dot with Glow
-                val dotX = (w * solarFraction.coerceIn(0f, 1f)).coerceIn(h, w - h)
-                val dotColor = if (isDay) com.miku.launcher.ui.MikuIdentity.Gold else Color(0xFFB388FF)
+                    // Sun / Moon Indicator Dot with Glow
+                    val dotX = (w * solarFraction.coerceIn(0f, 1f)).coerceIn(h, w - h)
+                    val dotColor = if (isDay) com.miku.launcher.ui.MikuIdentity.Gold else Color(0xFFB388FF)
 
-                drawCircle(
-                    color = dotColor.copy(alpha = 0.35f),
-                    radius = h * 1.8f,
-                    center = Offset(dotX, trackY)
-                )
-                drawCircle(
-                    color = dotColor,
-                    radius = h * 0.9f,
-                    center = Offset(dotX, trackY)
-                )
+                    drawCircle(
+                        color = dotColor.copy(alpha = 0.35f),
+                        radius = h * 1.8f,
+                        center = Offset(dotX, trackY)
+                    )
+                    drawCircle(
+                        color = dotColor,
+                        radius = h * 0.9f,
+                        center = Offset(dotX, trackY)
+                    )
+                }
             }
         }
     }

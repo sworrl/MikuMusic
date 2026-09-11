@@ -348,8 +348,9 @@ class MikuMetricDatabase private constructor(context: Context) :
         val latitude: Double,
         val longitude: Double,
         val locationCity: String,
-        val dacSampleRate: Int = 44100,
-        val dacGain: String = "HIGH",
+        // 0 / blank = not reported by the player for this play; never a presumed 44.1k/HIGH.
+        val dacSampleRate: Int = 0,
+        val dacGain: String = "",
         val playbackDurationMs: Long = 0L
     )
 
@@ -412,7 +413,7 @@ class MikuMetricDatabase private constructor(context: Context) :
                                 longitude = c.getDouble(14),
                                 locationCity = c.getString(15) ?: "",
                                 dacSampleRate = c.getInt(16),
-                                dacGain = c.getString(17) ?: "HIGH",
+                                dacGain = c.getString(17) ?: "",
                                 playbackDurationMs = c.getLong(18)
                             )
                         )

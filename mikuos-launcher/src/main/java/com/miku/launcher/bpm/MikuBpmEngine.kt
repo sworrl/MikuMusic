@@ -34,7 +34,8 @@ object MikuBpmEngine {
     private const val MAX_INTERVAL_MS = 4000L
 
     data class BpmState(
-        val bpm: Float = 120f,
+        // 0 = no tempo has been reported yet. Readouts must treat anything outside 20..999 as "—".
+        val bpm: Float = 0f,
         val beatIntervalMs: Long = 500L,
         val isPlaying: Boolean = false,
         val dominantColor: Int = 0xFF00E5FF.toInt(),
@@ -50,9 +51,11 @@ object MikuBpmEngine {
     private fun sanitizeBpm(candidate: Float, fallback: Float): Float =
         if (candidate.isFinite() && candidate in MIN_BPM..MAX_BPM) candidate else fallback
 
-    /** Positive, sane beat interval, else derived from the (already sanitized) tempo. */
+    /** Positive, sane beat interval, else derived from the (already sanitized) tempo; a 0 tempo
+     *  (nothing reported yet) keeps the animation-only 500 ms default. */
     private fun sanitizeInterval(candidate: Long, bpm: Float): Long =
         if (candidate in MIN_INTERVAL_MS..MAX_INTERVAL_MS) candidate
+        else if (bpm <= 0f) 500L
         else (60_000f / bpm).toLong().coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
 
     /** Live output-mix detector reports a beat at [bpm] — authoritative "audio is playing". */
@@ -79,9 +82,10 @@ object MikuBpmEngine {
 
         // Initial state from Settings.Global — reads sanitized like broadcasts (stale keys
         // from older builds may hold values in the wrong unit).
+        // Missing/garbage key = 0 (no tempo yet), NOT a presumed 120.
         val initBpm = sanitizeBpm(
-            try { Settings.Global.getFloat(cr, "miku_live_bpm", 120f) } catch (_: Throwable) { 120f },
-            120f
+            try { Settings.Global.getFloat(cr, "miku_live_bpm", 0f) } catch (_: Throwable) { 0f },
+            0f
         )
         val initInterval = sanitizeInterval(
             try { Settings.Global.getInt(cr, "miku_beat_interval_ms", 500).toLong() } catch (_: Throwable) { 500L },
