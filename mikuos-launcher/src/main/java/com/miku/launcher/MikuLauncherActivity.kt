@@ -5122,76 +5122,6 @@ fun CyberNotificationShadeModal(
     currentTime: String,
     currentDate: String
 ) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // Hardware Audio States
-    var gainMode by remember { mutableStateOf(CirrusLogicManager.getGainMode(ctx)) }
-    var filterMode by remember { mutableStateOf(CirrusLogicManager.getDigitalFilter(ctx)) }
-    var dreEnabled by remember { mutableStateOf(CirrusLogicManager.isDreEnabled(ctx)) }
-    // The getters above fall back to a preset (HIGH / FAST_LINEAR / false) so the tiles have a
-    // selection to toggle. These say whether that selection was ever actually READ from a real
-    // source — if not, the tile subtitle shows "—" instead of asserting "HIGH (+6dB)".
-    var gainKnown by remember { mutableStateOf(CirrusLogicManager.getGainModeOrNull(ctx) != null) }
-    var filterKnown by remember { mutableStateOf(CirrusLogicManager.getDigitalFilterOrNull(ctx) != null) }
-    var dreKnown by remember { mutableStateOf(CirrusLogicManager.isDreEnabledOrNull(ctx) != null) }
-    // Real saved Pulsar mode, not an assumed "on". The M500's RGB indicator is non-functional on
-    // this unit (SELinux-locked, no consumer LED service), so this is only the stored preference.
-    var pulsarMode by remember { mutableStateOf(runCatching { PulsarLight.getMode(ctx) }.getOrDefault(PulsarLight.Mode.OFF)) }
-
-    // Telemetry & Weather
-    val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
-    // Real radio telemetry (MikuNetworkService polls TelephonyManager/WifiManager). Before the
-    // first poll every field is blank/false, so the subtitles below read "Offline"/"—", never a
-    // fabricated "5GHz Wi-Fi + LTE".
-    val netState by com.miku.launcher.network.MikuNetworkService.state.collectAsState()
-
-    // Brightness Controller
-    val cr = ctx.contentResolver
-    var brightness by remember {
-        mutableStateOf(
-            try {
-                android.provider.Settings.System.getInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS)
-            } catch (_: Throwable) { 128 }
-        )
-    }
-
-    // Volume Controller
-    val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager }
-    var streamVol by remember {
-        mutableStateOf(am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: 8)
-    }
-    val maxVol = remember { am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 15 }
-
-    // REAL Bluetooth audio state. The card used to claim "LDAC Hi-Res 990k" unconditionally — even
-    // with the radio off and nothing paired, and the active codec is not readable unprivileged.
-    // AudioManager's output-device list is the real source: it reports an A2DP/LE/SCO sink only when
-    // one is actually connected, and carries its product name.
-    val btAudioLabel = remember(am) {
-        runCatching {
-            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
-            when {
-                adapter == null -> "No Bluetooth radio"
-                !adapter.isEnabled -> "Off"
-                else -> {
-                    val sink = am?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
-                        ?.firstOrNull {
-                            it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                                it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
-                                it.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
-                        }
-                    val name = sink?.productName?.toString()?.trim().orEmpty()
-                    when {
-                        sink == null -> "On · no audio device"
-                        name.isNotEmpty() -> name
-                        else -> "On · audio device connected"
-                    }
-                }
-            }
-        }.getOrDefault("—")
-    }
-
     Box(
         Modifier
             .fillMaxSize()
@@ -5317,554 +5247,19 @@ fun CyberNotificationShadeModal(
 
                 Spacer(Modifier.height(10.dp))
 
-                // Pixel-Style Large Dual Network / Bluetooth Connectivity Pills
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    // Internet Card (Wi-Fi + 4G LTE)
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(if (isWifiConnected) MikuCyan.copy(alpha = 0.2f) else Color(0xFF081820))
-                            .border(1.dp, if (isWifiConnected) MikuCyan else Color(0xFF1E3A45), RoundedCornerShape(16.dp))
-                            .clickable {
-                                try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
-                            }
-                            .padding(10.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                if (isWifiConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
-                                contentDescription = null,
-                                tint = if (isWifiConnected) MikuCyan else Color.Gray,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text("Internet", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                                // Derived from the real Wi-Fi/cellular telemetry — SSID + the band the
-                                // radio actually reports, or the real mobile radio technology. The old
-                                // text asserted "5GHz Wi-Fi + LTE" / "LTE Connected" regardless.
-                                val internetSubtitle = run {
-                                    val w = netState.wifi
-                                    val c = netState.cellular
-                                    when {
-                                        w.isConnected -> listOf(
-                                            w.ssid.ifBlank { "Wi-Fi" },
-                                            w.bandLabel
-                                        ).filter { it.isNotBlank() }.joinToString(" · ")
-                                        c.dataConnected -> c.networkType.ifBlank { "Mobile data" }
-                                        c.hasSignal -> "No mobile data"
-                                        netState.lastUpdated == 0L -> "—"
-                                        else -> "Offline"
-                                    }
-                                }
-                                Text(internetSubtitle, color = MikuCyan, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-
-                    // Bluetooth Card (LDAC Hi-Res)
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Color(0xFF0A1828))
-                            .border(1.dp, Color(0xFF2979FF).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
-                            .clickable {
-                                try {
-                                    val intent = Intent().setClassName("com.miku.settings", "com.miku.settings.MikuSettingsActivity").apply {
-                                        putExtra("extra_section", "bluetooth")
-                                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                                    }
-                                    ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
-                                } catch (_: Throwable) {
-                                    try { ctx.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
-                                }
-                            }
-                            .padding(10.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Default.Bluetooth,
-                                contentDescription = null,
-                                // Dimmed when the radio is off / absent, so the glyph cannot imply a
-                                // live link the label denies.
-                                tint = if (btAudioLabel == "Off" || btAudioLabel == "No Bluetooth radio" || btAudioLabel == "—")
-                                    Color.Gray else Color(0xFF2979FF),
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text("Bluetooth", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                                Text(btAudioLabel, color = Color(0xFF82B1FF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                }
+                CyberShadeConnectivitySection(isWifiConnected = isWifiConnected)
 
                 Spacer(Modifier.height(10.dp))
 
-                // Interactive Haptic Brightness Slider (Pixel-Style AOSP Bar)
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF081C24))
-                        .border(1.dp, MikuCyan.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.BrightnessMedium, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Slider(
-                            value = brightness.toFloat(),
-                            onValueChange = { newB ->
-                                brightness = newB.toInt()
-                                try {
-                                    android.provider.Settings.System.putInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS, brightness)
-                                } catch (_: Throwable) {}
-                            },
-                            valueRange = 10f..255f,
-                            colors = SliderDefaults.colors(
-                                thumbColor = MikuCyan,
-                                activeTrackColor = MikuCyan,
-                                inactiveTrackColor = Color(0xFF0D2C35)
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // Master Audio Output & Volume Slider
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFF0A1420))
-                        .border(1.dp, Color(0xFF7C4DFF).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFFB388FF), modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Slider(
-                            value = streamVol.toFloat(),
-                            onValueChange = { newV ->
-                                streamVol = newV.toInt()
-                                try {
-                                    am?.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, streamVol, 0)
-                                } catch (_: Throwable) {}
-                            },
-                            valueRange = 0f..maxVol.toFloat(),
-                            colors = SliderDefaults.colors(
-                                thumbColor = Color(0xFFB388FF),
-                                activeTrackColor = Color(0xFF7C4DFF),
-                                inactiveTrackColor = Color(0xFF140D26)
-                            ),
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text("${((streamVol.toFloat() / maxVol.toFloat()) * 100).toInt()}%", color = Color(0xFFB388FF), fontSize = 11.sp, fontFamily = AudiowideFont)
-                    }
-                }
+                CyberShadeSliderSection()
 
                 Spacer(Modifier.height(10.dp))
 
-                // 8 Cyber Quick Hardware Tiles (2x4 Grid)
-                Text(
-                    text = "MAGICAL MIRAI SOUNDBOARD",
-                    color = MikuCyan,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont,
-                    letterSpacing = 1.sp
-                )
-
-                Spacer(Modifier.height(6.dp))
-
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    // Row 1: CS43131 Gain + Filter Mode
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "MASTER DYN / GAIN",
-                            subtitle = if (!gainKnown) "—  (gain not readable)"
-                                else if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH" else "LOW",
-                            icon = Icons.Default.VolumeUp,
-                            accentColor = if (gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH) MikuNeonPink else MikuCyan,
-                            isActive = gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH,
-                            onClick = {
-                                val next = if (gainMode == CirrusLogicManager.GainMode.LOW) CirrusLogicManager.GainMode.HIGH else CirrusLogicManager.GainMode.LOW
-                                gainMode = next
-                                gainKnown = true
-                                scope.launch(Dispatchers.IO) {
-                                    CirrusLogicManager.setGainMode(ctx, next)
-                                }
-                            }
-                        )
-
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "VOCAL FILTER",
-                            subtitle = if (filterKnown) filterMode.label else "—  (filter not readable)",
-                            icon = Icons.Default.Tune,
-                            accentColor = MikuCyan,
-                            isActive = filterKnown,
-                            onClick = {
-                                val all = CirrusLogicManager.DigitalFilter.values()
-                                val next = all[(filterMode.ordinal + 1) % all.size]
-                                filterMode = next
-                                filterKnown = true
-                                scope.launch(Dispatchers.IO) {
-                                    CirrusLogicManager.setDigitalFilter(ctx, next)
-                                }
-                            }
-                        )
-                    }
-
-                    // Row 2: Pulsar RGB + Direct ALSA Bypass
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "PULSAR RGB",
-                            // The M500's RGB indicator is confirmed NON-FUNCTIONAL on this unit: the
-                            // LED sysfs nodes are SELinux-locked and there is no consumer LED service,
-                            // so nothing here can light up. The tile used to claim "BPM SYNC (ON)"
-                            // from a hardcoded `true`. It now only reports the stored preference and
-                            // says plainly that the hardware does not respond.
-                            subtitle = if (pulsarMode == PulsarLight.Mode.OFF)
-                                "OFF · NO LED ON THIS UNIT" else "SET: ${pulsarMode.label} · NO LED ON THIS UNIT",
-                            icon = Icons.Default.Lightbulb,
-                            accentColor = MikuTextSecondary,
-                            isActive = false,
-                            onClick = {
-                                val next = if (pulsarMode == PulsarLight.Mode.OFF)
-                                    PulsarLight.Mode.AUDIOPHILE_AUTO else PulsarLight.Mode.OFF
-                                pulsarMode = next
-                                scope.launch(Dispatchers.IO) {
-                                    PulsarLight.setMode(ctx, next)
-                                }
-                                android.widget.Toast.makeText(
-                                    ctx,
-                                    "Pulsar preference saved — the M500's RGB indicator is not driveable on this unit",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        )
-
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "DRE (DYNAMIC RANGE)",
-                            subtitle = if (!dreKnown) "—  (DRE not readable)"
-                                else if (dreEnabled) "ON" else "OFF",
-                            icon = Icons.Default.Headphones,
-                            accentColor = com.miku.launcher.ui.MikuIdentity.Leek,
-                            isActive = dreKnown && dreEnabled,
-                            onClick = {
-                                dreEnabled = !dreEnabled
-                                dreKnown = true
-                                scope.launch(Dispatchers.IO) {
-                                    CirrusLogicManager.setDreEnabled(ctx, dreEnabled)
-                                }
-                            }
-                        )
-                    }
-
-                    // Row 3: Wireless ADB + System Tools
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val adbIp = remember(isWifiConnected) {
-                            try {
-                                val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                                val ipInt = wm?.connectionInfo?.ipAddress ?: 0
-                                if (ipInt != 0) {
-                                    String.format(
-                                        Locale.US,
-                                        "%d.%d.%d.%d",
-                                        ipInt and 0xff,
-                                        ipInt shr 8 and 0xff,
-                                        ipInt shr 16 and 0xff,
-                                        ipInt shr 24 and 0xff
-                                    )
-                                } else ""
-                            } catch (_: Throwable) { "" }
-                        }
-                        var isAdbEnabled by remember {
-                            mutableStateOf(
-                                try {
-                                    val p = Runtime.getRuntime().exec("getprop service.adb.tcp.port")
-                                    p.inputStream.bufferedReader().readText().trim() == "5555"
-                                } catch (_: Throwable) { false }
-                            )
-                        }
-
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "WIRELESS ADB",
-                            subtitle = if (isAdbEnabled) "$adbIp:5555" else "PORT 5555",
-                            icon = Icons.Default.DeveloperMode,
-                            accentColor = if (isAdbEnabled) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
-                            isActive = isAdbEnabled,
-                            onClick = {
-                                val next = !isAdbEnabled
-                                isAdbEnabled = next
-                                scope.launch(Dispatchers.IO) {
-                                    // persist.adb.tcp.port, NOT service.adb.tcp.port — the service.
-                                    // prop flips adbd TCP-ONLY and kills USB adb (bit us hard once);
-                                    // persist. adds TCP alongside USB and survives reboots.
-                                    val cmd = if (next) {
-                                        "setprop persist.adb.tcp.port 5555 && stop adbd && start adbd"
-                                    } else {
-                                        "setprop persist.adb.tcp.port -1 && stop adbd && start adbd"
-                                    }
-                                    try {
-                                        Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
-                                    } catch (_: Throwable) {}
-                                }
-                                android.widget.Toast.makeText(
-                                    ctx,
-                                    if (next) "⚡ Wireless ADB Active on $adbIp:5555" else "Wireless ADB Disabled",
-                                    android.widget.Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        )
-
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "DEV OPTIONS",
-                            subtitle = "SYSTEM & TOOLS",
-                            icon = Icons.Default.Build,
-                            accentColor = MikuCyan,
-                            isActive = true,
-                            onClick = {
-                                onClose()
-                                val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
-                            }
-                        )
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // Pause-on-unplug — mirrors the toggle in Miku Music's Sound Settings page
-                        // (quick settings + sound page only; deliberately NOT in the volume modal).
-                        // State lives in Settings.Global "miku_pause_on_unplug"; the broadcast lets
-                        // the player apply it live to the running ExoPlayer.
-                        var pauseOnUnplug by remember {
-                            mutableStateOf(
-                                android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_pause_on_unplug", 1) == 1
-                            )
-                        }
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "PAUSE ON UNPLUG",
-                            subtitle = if (pauseOnUnplug) "STOCK BEHAVIOR" else "KEEP PLAYING",
-                            icon = Icons.Default.HeadsetOff,
-                            accentColor = if (pauseOnUnplug) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
-                            isActive = pauseOnUnplug,
-                            onClick = {
-                                val next = !pauseOnUnplug
-                                pauseOnUnplug = next
-                                scope.launch(Dispatchers.IO) {
-                                    runCatching {
-                                        android.provider.Settings.Global.putInt(
-                                            ctx.contentResolver, "miku_pause_on_unplug", if (next) 1 else 0
-                                        )
-                                    }.getOrNull() ?: RootShell.execFast(
-                                        "settings put global miku_pause_on_unplug ${if (next) 1 else 0}"
-                                    )
-                                }
-                                ctx.sendBroadcast(
-                                    Intent("com.miku.player.SET_PAUSE_ON_UNPLUG")
-                                        .setPackage("com.miku.player")
-                                        .putExtra("enabled", next)
-                                )
-                            }
-                        )
-                        // Ingress engine (network rsync ingest) — OFF by default; while off only local
-                        // SD-card scan updates run. State = Settings.Global "miku_ingest_enabled";
-                        // the FS & Ingestion modal shows the same switch and reflects this live.
-                        var ingestOn by remember {
-                            mutableStateOf(com.miku.launcher.ingest.MikuIngestEngine.isEngineEnabled(ctx))
-                        }
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "INGRESS ENGINE",
-                            subtitle = if (ingestOn) "RSYNC INGEST ON" else "LOCAL SD ONLY",
-                            icon = Icons.Default.Sync,
-                            accentColor = if (ingestOn) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
-                            isActive = ingestOn,
-                            onClick = {
-                                val next = !ingestOn
-                                ingestOn = next
-                                com.miku.launcher.ingest.MikuIngestEngine.setEngineEnabled(ctx, next)
-                            }
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        // System-wide track-change popup (SystemUI draws it; Miku Music stops broadcasting
-                        // when 0). State = Settings.Global "miku_track_hud_enabled", default 1.
-                        var trackHudOn by remember {
-                            mutableStateOf(
-                                try { android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_track_hud_enabled", 1) == 1 } catch (_: Throwable) { true }
-                            )
-                        }
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "NOW PLAYING HUD",
-                            subtitle = if (trackHudOn) "TRACK POPUP ON" else "TRACK POPUP OFF",
-                            icon = Icons.Default.MusicNote,
-                            accentColor = if (trackHudOn) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
-                            isActive = trackHudOn,
-                            onClick = {
-                                val next = !trackHudOn
-                                trackHudOn = next
-                                scope.launch(Dispatchers.IO) {
-                                    runCatching {
-                                        android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_track_hud_enabled", if (next) 1 else 0)
-                                    }.getOrNull() ?: RootShell.execFast("settings put global miku_track_hud_enabled ${if (next) 1 else 0}")
-                                }
-                            }
-                        )
-                        // POWER MODE: Settings.Global miku_power_mode auto → perf → save (Miku Music's
-                        // governor honours it); subtitle shows the live profile while in AUTO.
-                        val powerMode by com.miku.launcher.ui.rememberPowerMode()
-                        val liveProfile by com.miku.launcher.ui.rememberPowerProfile()
-                        CyberQuickTile(
-                            modifier = Modifier.weight(1f),
-                            title = "POWER MODE",
-                            subtitle = com.miku.launcher.ui.MikuPowerProfile.modeGlyph(powerMode, liveProfile) + " " +
-                                com.miku.launcher.ui.MikuPowerProfile.modeLabel(powerMode, liveProfile),
-                            icon = when (powerMode) { "perf" -> Icons.Default.Bolt; "save" -> Icons.Default.DarkMode; else -> Icons.Default.AutoAwesome },
-                            accentColor = when (powerMode) {
-                                "perf" -> com.miku.launcher.ui.MikuIdentity.PinkNeon
-                                "save" -> com.miku.launcher.ui.MikuIdentity.Lavender
-                                else -> com.miku.launcher.ui.MikuIdentity.Teal
-                            },
-                            isActive = powerMode != "auto",
-                            onClick = {
-                                com.miku.launcher.ui.MikuPowerProfile.cycleMode(ctx)
-                                com.miku.launcher.haptics.MikuHaptics.confirm(ctx)
-                            },
-                            onLongClick = { com.miku.launcher.ui.MikuPowerProfile.openGovernor(ctx) }
-                        )
-                    }
-                }
+                CyberShadeSoundboardSection(isWifiConnected = isWifiConnected, onClose = onClose)
 
                 Spacer(Modifier.height(10.dp))
 
-                // Data-Only SIM Shield Banner
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0x3300E676))
-                        .border(1.dp, com.miku.launcher.ui.MikuIdentity.Leek, RoundedCornerShape(12.dp))
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(6.dp).clip(CircleShape).background(com.miku.launcher.ui.MikuIdentity.Leek))
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = "🛡️ DATA-ONLY SIM SHIELD: GOOGLE FI & IMS NAGS SUPPRESSED",
-                            color = com.miku.launcher.ui.MikuIdentity.Leek,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = AudiowideFont
-                        )
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // Weather & Conditions Card
-                val w = weatherState.weather
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0x3300E5FF))
-                        .border(1.dp, MikuCyan, RoundedCornerShape(16.dp))
-                        .padding(10.dp)
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(w.icon, fontSize = 24.sp)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(
-                                text = "${w.tempF.toInt()}°F · ${w.summary} (Feels ${w.feelsLikeF.toInt()}°F)",
-                                color = Color.White,
-                                fontSize = 15.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = AudiowideFont
-                            )
-                            Text(
-                                text = "💧 Humidity: ${w.humidityPct}% · 💨 Wind: ${w.windSpeedMph.toInt()}mph ${w.windDirectionCompass} · ☔ Precip: ${w.precipitationProbPct}%",
-                                color = MikuTextSecondary,
-                                fontSize = 13.sp
-                            )
-                        }
-                    }
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                // Footer Action Bar: Power Menu (Reboot / Power Off / Dismiss)
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot")).waitFor()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
-                        border = BorderStroke(1.dp, MikuCyan),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f).height(42.dp)
-                    ) {
-                        Text("⚡ REBOOT", color = MikuCyan, fontSize = 14.sp, fontFamily = AudiowideFont)
-                    }
-
-                    Button(
-                        onClick = {
-                            scope.launch(Dispatchers.IO) {
-                                Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot -p")).waitFor()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
-                        border = BorderStroke(1.dp, MikuNeonPink),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f).height(42.dp)
-                    ) {
-                        Text("💤 POWER OFF", color = MikuNeonPink, fontSize = 14.sp, fontFamily = AudiowideFont)
-                    }
-
-                    Button(
-                        onClick = onClose,
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF)),
-                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f).height(42.dp)
-                    ) {
-                        Text("✕ CLOSE", color = Color.White, fontSize = 14.sp, fontFamily = AudiowideFont)
-                    }
-                }
-
-                Spacer(Modifier.height(8.dp))
+                CyberShadeFooterSection(onClose = onClose)
             }
         }
     }
@@ -5984,3 +5379,666 @@ fun CyberQuickTile(
 
 
 
+/**
+ * Dual Internet / Bluetooth connectivity pills of the notification shade.
+ *
+ * Extracted out of [CyberNotificationShadeModal] because that composable compiled to
+ * ~18k dex instructions — past ART's 16384-instruction JIT ceiling — so it was refused
+ * by the JIT and re-interpreted on every recomposition, pinning the main thread.
+ * Behaviour, ordering and modifiers are identical to the inlined version; the network
+ * telemetry collection and the Bluetooth-sink lookup simply live here now, next to
+ * their only consumer.
+ */
+@Composable
+private fun CyberShadeConnectivitySection(isWifiConnected: Boolean) {
+    val ctx = LocalContext.current
+    val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager }
+    // Real radio telemetry (MikuNetworkService polls TelephonyManager/WifiManager). Before the
+    // first poll every field is blank/false, so the subtitles below read "Offline"/"—", never a
+    // fabricated "5GHz Wi-Fi + LTE".
+    val netState by com.miku.launcher.network.MikuNetworkService.state.collectAsState()
+
+    // REAL Bluetooth audio state. The card used to claim "LDAC Hi-Res 990k" unconditionally — even
+    // with the radio off and nothing paired, and the active codec is not readable unprivileged.
+    // AudioManager's output-device list is the real source: it reports an A2DP/LE/SCO sink only when
+    // one is actually connected, and carries its product name.
+    val btAudioLabel = remember(am) {
+        runCatching {
+            val adapter = (ctx.getSystemService(Context.BLUETOOTH_SERVICE) as? android.bluetooth.BluetoothManager)?.adapter
+            when {
+                adapter == null -> "No Bluetooth radio"
+                !adapter.isEnabled -> "Off"
+                else -> {
+                    val sink = am?.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS)
+                        ?.firstOrNull {
+                            it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
+                        }
+                    val name = sink?.productName?.toString()?.trim().orEmpty()
+                    when {
+                        sink == null -> "On · no audio device"
+                        name.isNotEmpty() -> name
+                        else -> "On · audio device connected"
+                    }
+                }
+            }
+        }.getOrDefault("—")
+    }
+
+    // Pixel-Style Large Dual Network / Bluetooth Connectivity Pills
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Internet Card (Wi-Fi + 4G LTE)
+        Box(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(if (isWifiConnected) MikuCyan.copy(alpha = 0.2f) else Color(0xFF081820))
+                .border(1.dp, if (isWifiConnected) MikuCyan else Color(0xFF1E3A45), RoundedCornerShape(16.dp))
+                .clickable {
+                    try { ctx.startActivity(Intent(android.provider.Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
+                }
+                .padding(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (isWifiConnected) Icons.Default.Wifi else Icons.Default.WifiOff,
+                    contentDescription = null,
+                    tint = if (isWifiConnected) MikuCyan else Color.Gray,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Internet", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                    // Derived from the real Wi-Fi/cellular telemetry — SSID + the band the
+                    // radio actually reports, or the real mobile radio technology. The old
+                    // text asserted "5GHz Wi-Fi + LTE" / "LTE Connected" regardless.
+                    val internetSubtitle = run {
+                        val w = netState.wifi
+                        val c = netState.cellular
+                        when {
+                            w.isConnected -> listOf(
+                                w.ssid.ifBlank { "Wi-Fi" },
+                                w.bandLabel
+                            ).filter { it.isNotBlank() }.joinToString(" · ")
+                            c.dataConnected -> c.networkType.ifBlank { "Mobile data" }
+                            c.hasSignal -> "No mobile data"
+                            netState.lastUpdated == 0L -> "—"
+                            else -> "Offline"
+                        }
+                    }
+                    Text(internetSubtitle, color = MikuCyan, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+
+        // Bluetooth Card (LDAC Hi-Res)
+        Box(
+            Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xFF0A1828))
+                .border(1.dp, Color(0xFF2979FF).copy(alpha = 0.7f), RoundedCornerShape(16.dp))
+                .clickable {
+                    try {
+                        val intent = Intent().setClassName("com.miku.settings", "com.miku.settings.MikuSettingsActivity").apply {
+                            putExtra("extra_section", "bluetooth")
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                        }
+                        ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
+                    } catch (_: Throwable) {
+                        try { ctx.startActivity(Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK }, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS)) } catch (_: Throwable) {}
+                    }
+                }
+                .padding(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.Bluetooth,
+                    contentDescription = null,
+                    // Dimmed when the radio is off / absent, so the glyph cannot imply a
+                    // live link the label denies.
+                    tint = if (btAudioLabel == "Off" || btAudioLabel == "No Bluetooth radio" || btAudioLabel == "—")
+                        Color.Gray else Color(0xFF2979FF),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column {
+                    Text("Bluetooth", color = Color.White, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                    Text(btAudioLabel, color = Color(0xFF82B1FF), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Brightness + master-volume slider rows of the notification shade.
+ *
+ * Extracted out of [CyberNotificationShadeModal]: the parent exceeded ART's 16384-dex-
+ * instruction JIT limit and therefore ran interpreted on every recomposition. The
+ * slider state is only ever read and written here, so it moved down with the UI.
+ */
+@Composable
+private fun CyberShadeSliderSection() {
+    val ctx = LocalContext.current
+    // Brightness Controller
+    val cr = ctx.contentResolver
+    var brightness by remember {
+        mutableStateOf(
+            try {
+                android.provider.Settings.System.getInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS)
+            } catch (_: Throwable) { 128 }
+        )
+    }
+
+    // Volume Controller
+    val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager }
+    var streamVol by remember {
+        mutableStateOf(am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: 8)
+    }
+    val maxVol = remember { am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 15 }
+
+    // Interactive Haptic Brightness Slider (Pixel-Style AOSP Bar)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF081C24))
+            .border(1.dp, MikuCyan.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.BrightnessMedium, contentDescription = null, tint = MikuCyan, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Slider(
+                value = brightness.toFloat(),
+                onValueChange = { newB ->
+                    brightness = newB.toInt()
+                    try {
+                        android.provider.Settings.System.putInt(cr, android.provider.Settings.System.SCREEN_BRIGHTNESS, brightness)
+                    } catch (_: Throwable) {}
+                },
+                valueRange = 10f..255f,
+                colors = SliderDefaults.colors(
+                    thumbColor = MikuCyan,
+                    activeTrackColor = MikuCyan,
+                    inactiveTrackColor = Color(0xFF0D2C35)
+                ),
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    // Master Audio Output & Volume Slider
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0A1420))
+            .border(1.dp, Color(0xFF7C4DFF).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Default.VolumeUp, contentDescription = null, tint = Color(0xFFB388FF), modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Slider(
+                value = streamVol.toFloat(),
+                onValueChange = { newV ->
+                    streamVol = newV.toInt()
+                    try {
+                        am?.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, streamVol, 0)
+                    } catch (_: Throwable) {}
+                },
+                valueRange = 0f..maxVol.toFloat(),
+                colors = SliderDefaults.colors(
+                    thumbColor = Color(0xFFB388FF),
+                    activeTrackColor = Color(0xFF7C4DFF),
+                    inactiveTrackColor = Color(0xFF140D26)
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("${((streamVol.toFloat() / maxVol.toFloat()) * 100).toInt()}%", color = Color(0xFFB388FF), fontSize = 11.sp, fontFamily = AudiowideFont)
+        }
+    }
+}
+
+/**
+ * "MAGICAL MIRAI SOUNDBOARD" quick-tile grid of the notification shade.
+ *
+ * Extracted out of [CyberNotificationShadeModal]: that function compiled to ~18k dex
+ * instructions, over ART's 16384 JIT ceiling, so it was never JIT-compiled and every
+ * recomposition was interpreted on the main thread. The DAC/pulsar tile state is
+ * used nowhere else, so it is remembered here.
+ */
+@Composable
+private fun CyberShadeSoundboardSection(
+    isWifiConnected: Boolean,
+    onClose: () -> Unit
+) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    // Hardware Audio States
+    var gainMode by remember { mutableStateOf(CirrusLogicManager.getGainMode(ctx)) }
+    var filterMode by remember { mutableStateOf(CirrusLogicManager.getDigitalFilter(ctx)) }
+    var dreEnabled by remember { mutableStateOf(CirrusLogicManager.isDreEnabled(ctx)) }
+    // The getters above fall back to a preset (HIGH / FAST_LINEAR / false) so the tiles have a
+    // selection to toggle. These say whether that selection was ever actually READ from a real
+    // source — if not, the tile subtitle shows "—" instead of asserting "HIGH (+6dB)".
+    var gainKnown by remember { mutableStateOf(CirrusLogicManager.getGainModeOrNull(ctx) != null) }
+    var filterKnown by remember { mutableStateOf(CirrusLogicManager.getDigitalFilterOrNull(ctx) != null) }
+    var dreKnown by remember { mutableStateOf(CirrusLogicManager.isDreEnabledOrNull(ctx) != null) }
+    // Real saved Pulsar mode, not an assumed "on". The M500's RGB indicator is non-functional on
+    // this unit (SELinux-locked, no consumer LED service), so this is only the stored preference.
+    var pulsarMode by remember { mutableStateOf(runCatching { PulsarLight.getMode(ctx) }.getOrDefault(PulsarLight.Mode.OFF)) }
+
+    // 8 Cyber Quick Hardware Tiles (2x4 Grid)
+    Text(
+        text = "MAGICAL MIRAI SOUNDBOARD",
+        color = MikuCyan,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        fontFamily = AudiowideFont,
+        letterSpacing = 1.sp
+    )
+
+    Spacer(Modifier.height(6.dp))
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Row 1: CS43131 Gain + Filter Mode
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "MASTER DYN / GAIN",
+                subtitle = if (!gainKnown) "—  (gain not readable)"
+                    else if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH" else "LOW",
+                icon = Icons.Default.VolumeUp,
+                accentColor = if (gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH) MikuNeonPink else MikuCyan,
+                isActive = gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH,
+                onClick = {
+                    val next = if (gainMode == CirrusLogicManager.GainMode.LOW) CirrusLogicManager.GainMode.HIGH else CirrusLogicManager.GainMode.LOW
+                    gainMode = next
+                    gainKnown = true
+                    scope.launch(Dispatchers.IO) {
+                        CirrusLogicManager.setGainMode(ctx, next)
+                    }
+                }
+            )
+
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "VOCAL FILTER",
+                subtitle = if (filterKnown) filterMode.label else "—  (filter not readable)",
+                icon = Icons.Default.Tune,
+                accentColor = MikuCyan,
+                isActive = filterKnown,
+                onClick = {
+                    val all = CirrusLogicManager.DigitalFilter.values()
+                    val next = all[(filterMode.ordinal + 1) % all.size]
+                    filterMode = next
+                    filterKnown = true
+                    scope.launch(Dispatchers.IO) {
+                        CirrusLogicManager.setDigitalFilter(ctx, next)
+                    }
+                }
+            )
+        }
+
+        // Row 2: Pulsar RGB + Direct ALSA Bypass
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "PULSAR RGB",
+                // The M500's RGB indicator is confirmed NON-FUNCTIONAL on this unit: the
+                // LED sysfs nodes are SELinux-locked and there is no consumer LED service,
+                // so nothing here can light up. The tile used to claim "BPM SYNC (ON)"
+                // from a hardcoded `true`. It now only reports the stored preference and
+                // says plainly that the hardware does not respond.
+                subtitle = if (pulsarMode == PulsarLight.Mode.OFF)
+                    "OFF · NO LED ON THIS UNIT" else "SET: ${pulsarMode.label} · NO LED ON THIS UNIT",
+                icon = Icons.Default.Lightbulb,
+                accentColor = MikuTextSecondary,
+                isActive = false,
+                onClick = {
+                    val next = if (pulsarMode == PulsarLight.Mode.OFF)
+                        PulsarLight.Mode.AUDIOPHILE_AUTO else PulsarLight.Mode.OFF
+                    pulsarMode = next
+                    scope.launch(Dispatchers.IO) {
+                        PulsarLight.setMode(ctx, next)
+                    }
+                    android.widget.Toast.makeText(
+                        ctx,
+                        "Pulsar preference saved — the M500's RGB indicator is not driveable on this unit",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "DRE (DYNAMIC RANGE)",
+                subtitle = if (!dreKnown) "—  (DRE not readable)"
+                    else if (dreEnabled) "ON" else "OFF",
+                icon = Icons.Default.Headphones,
+                accentColor = com.miku.launcher.ui.MikuIdentity.Leek,
+                isActive = dreKnown && dreEnabled,
+                onClick = {
+                    dreEnabled = !dreEnabled
+                    dreKnown = true
+                    scope.launch(Dispatchers.IO) {
+                        CirrusLogicManager.setDreEnabled(ctx, dreEnabled)
+                    }
+                }
+            )
+        }
+
+        // Row 3: Wireless ADB + System Tools
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val adbIp = remember(isWifiConnected) {
+                try {
+                    val wm = ctx.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                    val ipInt = wm?.connectionInfo?.ipAddress ?: 0
+                    if (ipInt != 0) {
+                        String.format(
+                            Locale.US,
+                            "%d.%d.%d.%d",
+                            ipInt and 0xff,
+                            ipInt shr 8 and 0xff,
+                            ipInt shr 16 and 0xff,
+                            ipInt shr 24 and 0xff
+                        )
+                    } else ""
+                } catch (_: Throwable) { "" }
+            }
+            var isAdbEnabled by remember {
+                mutableStateOf(
+                    try {
+                        val p = Runtime.getRuntime().exec("getprop service.adb.tcp.port")
+                        p.inputStream.bufferedReader().readText().trim() == "5555"
+                    } catch (_: Throwable) { false }
+                )
+            }
+
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "WIRELESS ADB",
+                subtitle = if (isAdbEnabled) "$adbIp:5555" else "PORT 5555",
+                icon = Icons.Default.DeveloperMode,
+                accentColor = if (isAdbEnabled) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
+                isActive = isAdbEnabled,
+                onClick = {
+                    val next = !isAdbEnabled
+                    isAdbEnabled = next
+                    scope.launch(Dispatchers.IO) {
+                        // persist.adb.tcp.port, NOT service.adb.tcp.port — the service.
+                        // prop flips adbd TCP-ONLY and kills USB adb (bit us hard once);
+                        // persist. adds TCP alongside USB and survives reboots.
+                        val cmd = if (next) {
+                            "setprop persist.adb.tcp.port 5555 && stop adbd && start adbd"
+                        } else {
+                            "setprop persist.adb.tcp.port -1 && stop adbd && start adbd"
+                        }
+                        try {
+                            Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
+                        } catch (_: Throwable) {}
+                    }
+                    android.widget.Toast.makeText(
+                        ctx,
+                        if (next) "⚡ Wireless ADB Active on $adbIp:5555" else "Wireless ADB Disabled",
+                        android.widget.Toast.LENGTH_SHORT
+                    ).show()
+                }
+            )
+
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "DEV OPTIONS",
+                subtitle = "SYSTEM & TOOLS",
+                icon = Icons.Default.Build,
+                accentColor = MikuCyan,
+                isActive = true,
+                onClick = {
+                    onClose()
+                    val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
+                }
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Pause-on-unplug — mirrors the toggle in Miku Music's Sound Settings page
+            // (quick settings + sound page only; deliberately NOT in the volume modal).
+            // State lives in Settings.Global "miku_pause_on_unplug"; the broadcast lets
+            // the player apply it live to the running ExoPlayer.
+            var pauseOnUnplug by remember {
+                mutableStateOf(
+                    android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_pause_on_unplug", 1) == 1
+                )
+            }
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "PAUSE ON UNPLUG",
+                subtitle = if (pauseOnUnplug) "STOCK BEHAVIOR" else "KEEP PLAYING",
+                icon = Icons.Default.HeadsetOff,
+                accentColor = if (pauseOnUnplug) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
+                isActive = pauseOnUnplug,
+                onClick = {
+                    val next = !pauseOnUnplug
+                    pauseOnUnplug = next
+                    scope.launch(Dispatchers.IO) {
+                        runCatching {
+                            android.provider.Settings.Global.putInt(
+                                ctx.contentResolver, "miku_pause_on_unplug", if (next) 1 else 0
+                            )
+                        }.getOrNull() ?: RootShell.execFast(
+                            "settings put global miku_pause_on_unplug ${if (next) 1 else 0}"
+                        )
+                    }
+                    ctx.sendBroadcast(
+                        Intent("com.miku.player.SET_PAUSE_ON_UNPLUG")
+                            .setPackage("com.miku.player")
+                            .putExtra("enabled", next)
+                    )
+                }
+            )
+            // Ingress engine (network rsync ingest) — OFF by default; while off only local
+            // SD-card scan updates run. State = Settings.Global "miku_ingest_enabled";
+            // the FS & Ingestion modal shows the same switch and reflects this live.
+            var ingestOn by remember {
+                mutableStateOf(com.miku.launcher.ingest.MikuIngestEngine.isEngineEnabled(ctx))
+            }
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "INGRESS ENGINE",
+                subtitle = if (ingestOn) "RSYNC INGEST ON" else "LOCAL SD ONLY",
+                icon = Icons.Default.Sync,
+                accentColor = if (ingestOn) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
+                isActive = ingestOn,
+                onClick = {
+                    val next = !ingestOn
+                    ingestOn = next
+                    com.miku.launcher.ingest.MikuIngestEngine.setEngineEnabled(ctx, next)
+                }
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // System-wide track-change popup (SystemUI draws it; Miku Music stops broadcasting
+            // when 0). State = Settings.Global "miku_track_hud_enabled", default 1.
+            var trackHudOn by remember {
+                mutableStateOf(
+                    try { android.provider.Settings.Global.getInt(ctx.contentResolver, "miku_track_hud_enabled", 1) == 1 } catch (_: Throwable) { true }
+                )
+            }
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "NOW PLAYING HUD",
+                subtitle = if (trackHudOn) "TRACK POPUP ON" else "TRACK POPUP OFF",
+                icon = Icons.Default.MusicNote,
+                accentColor = if (trackHudOn) com.miku.launcher.ui.MikuIdentity.Leek else MikuNeonPink,
+                isActive = trackHudOn,
+                onClick = {
+                    val next = !trackHudOn
+                    trackHudOn = next
+                    scope.launch(Dispatchers.IO) {
+                        runCatching {
+                            android.provider.Settings.Global.putInt(ctx.contentResolver, "miku_track_hud_enabled", if (next) 1 else 0)
+                        }.getOrNull() ?: RootShell.execFast("settings put global miku_track_hud_enabled ${if (next) 1 else 0}")
+                    }
+                }
+            )
+            // POWER MODE: Settings.Global miku_power_mode auto → perf → save (Miku Music's
+            // governor honours it); subtitle shows the live profile while in AUTO.
+            val powerMode by com.miku.launcher.ui.rememberPowerMode()
+            val liveProfile by com.miku.launcher.ui.rememberPowerProfile()
+            CyberQuickTile(
+                modifier = Modifier.weight(1f),
+                title = "POWER MODE",
+                subtitle = com.miku.launcher.ui.MikuPowerProfile.modeGlyph(powerMode, liveProfile) + " " +
+                    com.miku.launcher.ui.MikuPowerProfile.modeLabel(powerMode, liveProfile),
+                icon = when (powerMode) { "perf" -> Icons.Default.Bolt; "save" -> Icons.Default.DarkMode; else -> Icons.Default.AutoAwesome },
+                accentColor = when (powerMode) {
+                    "perf" -> com.miku.launcher.ui.MikuIdentity.PinkNeon
+                    "save" -> com.miku.launcher.ui.MikuIdentity.Lavender
+                    else -> com.miku.launcher.ui.MikuIdentity.Teal
+                },
+                isActive = powerMode != "auto",
+                onClick = {
+                    com.miku.launcher.ui.MikuPowerProfile.cycleMode(ctx)
+                    com.miku.launcher.haptics.MikuHaptics.confirm(ctx)
+                },
+                onLongClick = { com.miku.launcher.ui.MikuPowerProfile.openGovernor(ctx) }
+            )
+        }
+    }
+}
+
+/**
+ * SIM-shield banner, weather card and power/close footer of the notification shade.
+ *
+ * Extracted out of [CyberNotificationShadeModal] to get the parent back under ART's
+ * 16384-dex-instruction JIT limit; over that limit the method is refused by the JIT
+ * and interpreted on every recomposition.
+ */
+@Composable
+private fun CyberShadeFooterSection(onClose: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
+
+    // Data-Only SIM Shield Banner
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0x3300E676))
+            .border(1.dp, com.miku.launcher.ui.MikuIdentity.Leek, RoundedCornerShape(12.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(com.miku.launcher.ui.MikuIdentity.Leek))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "🛡️ DATA-ONLY SIM SHIELD: GOOGLE FI & IMS NAGS SUPPRESSED",
+                color = com.miku.launcher.ui.MikuIdentity.Leek,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = AudiowideFont
+            )
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+
+    // Weather & Conditions Card
+    val w = weatherState.weather
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0x3300E5FF))
+            .border(1.dp, MikuCyan, RoundedCornerShape(16.dp))
+            .padding(10.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(w.icon, fontSize = 24.sp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "${w.tempF.toInt()}°F · ${w.summary} (Feels ${w.feelsLikeF.toInt()}°F)",
+                    color = Color.White,
+                    fontSize = 15.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = AudiowideFont
+                )
+                Text(
+                    text = "💧 Humidity: ${w.humidityPct}% · 💨 Wind: ${w.windSpeedMph.toInt()}mph ${w.windDirectionCompass} · ☔ Precip: ${w.precipitationProbPct}%",
+                    color = MikuTextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(12.dp))
+
+    // Footer Action Bar: Power Menu (Reboot / Power Off / Dismiss)
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Button(
+            onClick = {
+                scope.launch(Dispatchers.IO) {
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot")).waitFor()
+                }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0x3300E5FF)),
+            border = BorderStroke(1.dp, MikuCyan),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.weight(1f).height(42.dp)
+        ) {
+            Text("⚡ REBOOT", color = MikuCyan, fontSize = 14.sp, fontFamily = AudiowideFont)
+        }
+
+        Button(
+            onClick = {
+                scope.launch(Dispatchers.IO) {
+                    Runtime.getRuntime().exec(arrayOf("su", "-c", "reboot -p")).waitFor()
+                }
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0x33FF4081)),
+            border = BorderStroke(1.dp, MikuNeonPink),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.weight(1f).height(42.dp)
+        ) {
+            Text("💤 POWER OFF", color = MikuNeonPink, fontSize = 14.sp, fontFamily = AudiowideFont)
+        }
+
+        Button(
+            onClick = onClose,
+            colors = ButtonDefaults.buttonColors(containerColor = Color(0x22FFFFFF)),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.weight(1f).height(42.dp)
+        ) {
+            Text("✕ CLOSE", color = Color.White, fontSize = 14.sp, fontFamily = AudiowideFont)
+        }
+    }
+
+    Spacer(Modifier.height(8.dp))
+}
