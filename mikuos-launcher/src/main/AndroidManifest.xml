@@ -151,6 +151,16 @@
 
         <!-- Bench/dev WiFi provisioning over adb (see MikuDevWifiReceiver). Gated behind
              WRITE_SECURE_SETTINGS: only shell/system can send it. -->
+        <!-- OS-level owner of the front Pulsar indicator. Miku Music broadcasts here instead of
+             driving the diode itself; exported so the (platform-signed) player can reach it. -->
+        <receiver
+            android:name=".PulsarReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.miku.launcher.action.PULSAR" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".network.MikuDevWifiReceiver"
             android:exported="true"

@@ -57,7 +57,6 @@ class LibraryScanService : Service() {
         File("/storage").listFiles()?.forEach { if (it.isDirectory && it.name != "self" && it.name != "emulated") roots.add(it.absolutePath) }
         File("/mnt/media_rw").listFiles()?.forEach { if (it.isDirectory) roots.add(it.absolutePath) }
         ScanProgress.reset()
-        PulsarLight.startHddActivity()
 
         Thread {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND + android.os.Process.THREAD_PRIORITY_LESS_FAVORABLE)
@@ -269,7 +268,6 @@ class LibraryScanService : Service() {
             }
 
             MikuBrain.heartbeat(MikuBrain.BoneType.LIBRARY_SCANNER, MikuBrain.BoneState.IDLE, "Scan Complete")
-            PulsarLight.stopHddActivity(app)
             reportFinish(completed = true)
             main.postDelayed({ reportFinish(completed = false) }, 30 * 60_000L)
         }.start()
@@ -295,7 +293,6 @@ class LibraryScanService : Service() {
     }
 
     override fun onDestroy() {
-        PulsarLight.stopHddActivity(this)
         wakeLock?.let { if (it.isHeld) it.release() }
         wakeLock = null
         super.onDestroy()

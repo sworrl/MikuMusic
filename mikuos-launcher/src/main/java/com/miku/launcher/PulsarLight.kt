@@ -250,4 +250,54 @@ object PulsarLight {
     // bursts presented as "HDD activity" while being tied to no actual storage I/O counter at all —
     // pure fabricated telemetry. Both were unreferenced. If a real activity light is ever wanted it
     // must be driven from a real source (e.g. deltas of the device's own diskstats), not Random.
+
+    // ================================================================= OS-level Pulsar API
+    // Miku Music no longer drives the diode; it broadcasts to PulsarReceiver, which calls these.
+    // Every one is a no-op unless the indicator is genuinely writable, so a dead LED costs nothing.
+
+    /** Is the diode actually drivable by this process? Published to clients as miku_pulsar_hw_writable. */
+    fun isHardwareWritable(): Boolean = ledWritable
+
+    /** Momentary double-pulse when a track is liked/unliked. */
+    fun indicateHearted(ctx: Context, hearted: Boolean) {
+        if (!ledWritable) return
+        val (r, b) = if (hearted) Pair(255, 100) else Pair(85, 255)
+        bpmScope.launch {
+            writeDual(r, b, 255); delay(100)
+            writeDual(r, b, 50);  delay(80)
+            writeDual(r, b, 255); delay(120)
+            writeDual(0, 0, 0);   delay(100)
+            applyMode(ctx, getMode(ctx), getBrightness(ctx))
+        }
+    }
+
+    /** Three short blinks when the pocket/button lock is engaged or released. */
+    fun indicatePocketLock(ctx: Context, locked: Boolean) {
+        if (!ledWritable) return
+        val (r, b) = if (locked) Pair(255, 0) else Pair(0, 255)
+        bpmScope.launch {
+            repeat(3) {
+                writeDual(r, b, 255); delay(70)
+                writeDual(0, 0, 0);   delay(70)
+            }
+            applyMode(ctx, getMode(ctx), getBrightness(ctx))
+        }
+    }
+
+    /**
+     * The player reports what it is playing and how it classified the format; the colour decision
+     * lives here. [tierName] is a com.miku.player AudioFormatTier name, or "NONE".
+     */
+    fun onPlaybackState(ctx: Context, isPlaying: Boolean, tierName: String) {
+        if (!ledWritable) return
+        if (!isPlaying) { applyMode(ctx, getMode(ctx), getBrightness(ctx)); return }
+        val color = when (tierName) {
+            "DSD" -> DualPalette.CYBER_MAGENTA
+            "MQA_STUDIO", "HI_RES" -> DualPalette.VIOLET_LAVENDER
+            "ULTRA_HI_RES" -> DualPalette.ROYAL_PURPLE
+            "CD_LOSSLESS" -> DualPalette.MIKU_BLUE
+            else -> DualColor(0, 150, "Soft Blue")
+        }
+        if (getMode(ctx) == Mode.AUDIOPHILE_AUTO) writeDual(color.r, color.b, getBrightness(ctx))
+    }
 }
