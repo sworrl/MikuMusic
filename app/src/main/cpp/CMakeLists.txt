@@ -14,6 +14,12 @@ set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(ENABLE_GLES ON CACHE BOOL "" FORCE)
 set(ENABLE_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
 
+# NOTE: vendor/projectm is a SYMLINK to an external checkout (~/Documents/GitHub/projectm).
+# Gradle's up-to-date check does NOT traverse it, so after pulling a new projectM revision the
+# native task is reported UP-TO-DATE and ninja is never invoked - you get a silently stale .so
+# (hit 2026-09-12 updating 4.2.0-dev -> master 1e7ef780). After ANY projectM update run:
+#     rm -rf app/.cxx app/build/intermediates/cmake
+# then rebuild, and confirm a fresh PCM.cpp.o timestamp before trusting the result.
 add_subdirectory(vendor/projectm ${CMAKE_BINARY_DIR}/projectm_build)
 
 add_library(
