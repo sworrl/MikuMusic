@@ -81,7 +81,8 @@ fun MikuBpmObservatoryModal(
     }
 
     // Modal Mode: 0 = Kawaii Beat Match, 1 = Sweet Leek Clicker, 2 = Producer Skills, 3 = Skins & Textures, 4 = Quests & DB, 5 = Seasons
-    var selectedMode by remember { mutableIntStateOf(0) }
+    val selectedModeState = remember { mutableIntStateOf(0) }
+    val selectedMode by selectedModeState
 
     // hasLiveTempo gates every READOUT; the 120 fallback below only feeds the rhythm-game engine's
     // default tempo and is never printed as a measurement.
@@ -267,85 +268,14 @@ fun MikuBpmObservatoryModal(
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 // 1. TOP HEADER & CUTE MODE PILLS + FEVER GAUGE
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    // Cute Cloud Pill Handle
-                    Box(
-                        Modifier
-                            .width(46.dp)
-                            .height(5.5.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(KawaiiSakuraPink.copy(alpha = 0.7f))
-                    )
-                    Spacer(Modifier.height(6.dp))
-
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // 6 Gamified Mode Tabs (Horizontally Scrollable)
-                        LazyRow(
-                            Modifier
-                                .weight(1f)
-                                .padding(end = 8.dp)
-                                .clip(RoundedCornerShape(16.dp))
-                                .background(Color(0x40000000))
-                                .border(1.2.dp, activeSkinPrimary.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
-                                .padding(3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            item {
-                                KawaiiModeTabPill("🌸 RHYTHM", selectedMode == 0, activeSkinPrimary) { selectedMode = 0 }
-                            }
-                            item {
-                                KawaiiModeTabPill("🥬 HARVEST", selectedMode == 1, KawaiiGoldenHoney) { selectedMode = 1 }
-                            }
-                            item {
-                                KawaiiModeTabPill("🧲 SKILLS", selectedMode == 2, KawaiiSoftTeal) { selectedMode = 2 }
-                            }
-                            item {
-                                KawaiiModeTabPill("🎨 SKINS", selectedMode == 3, KawaiiLavender) { selectedMode = 3 }
-                            }
-                            item {
-                                KawaiiModeTabPill("🏆 QUESTS", selectedMode == 4, Color(0xFFFFD700)) { selectedMode = 4 }
-                            }
-                            item {
-                                KawaiiModeTabPill("${currentSeason.rank.badge} SEASONS", selectedMode == 5, Color(currentSeason.rank.colorHex)) { selectedMode = 5 }
-                            }
-                        }
-
-                        // Close button
-                        IconButton(
-                            onClick = {
-                                MikuBeatClickerEngine.saveState()
-                                onClose()
-                            },
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(Color(0x33FF85B3))
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = activeSkinPrimary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-
-                    Spacer(Modifier.height(6.dp))
-
-                    // Rainbow Sugar Fever Gauge
-                    KawaiiSugarFeverGauge(
-                        feverEnergy = feverEnergy,
-                        feverSeconds = feverSeconds,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
+                BpmObservatoryHeader(
+                    selectedModeState = selectedModeState,
+                    currentSeason = currentSeason,
+                    activeSkinPrimary = activeSkinPrimary,
+                    feverEnergy = feverEnergy,
+                    feverSeconds = feverSeconds,
+                    onClose = onClose
+                )
 
                 // 2. HERO SECTION: TIMING & TRACK CARDS
                 if (selectedMode == 0) {
@@ -1826,6 +1756,107 @@ private fun BpmCalibrationFooter(
             fontSize = 11.5.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = AudiowideFont
+        )
+    }
+}
+
+
+/**
+ * Top header: drag handle, the six gamified mode tab pills, close button and the rainbow
+ * sugar fever gauge.
+ *
+ * Extracted from [MikuBpmObservatoryModal] because that composable compiled to ~25.8k dex
+ * instructions — over ART's 16384-instruction JIT ceiling — so it was re-interpreted on every
+ * recomposition and pinned the main thread. Keep each piece well under that limit.
+ */
+@Composable
+private fun BpmObservatoryHeader(
+    selectedModeState: MutableIntState,
+    currentSeason: MikuBpmSeasonsEngine.SeasonStats,
+    activeSkinPrimary: Color,
+    feverEnergy: Float,
+    feverSeconds: Int,
+    onClose: () -> Unit
+) {
+    var selectedMode by selectedModeState
+
+    Column(
+        Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Cute Cloud Pill Handle
+        Box(
+            Modifier
+                .width(46.dp)
+                .height(5.5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(KawaiiSakuraPink.copy(alpha = 0.7f))
+        )
+        Spacer(Modifier.height(6.dp))
+
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 6 Gamified Mode Tabs (Horizontally Scrollable)
+            LazyRow(
+                Modifier
+                    .weight(1f)
+                    .padding(end = 8.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0x40000000))
+                    .border(1.2.dp, activeSkinPrimary.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                    .padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                item {
+                    KawaiiModeTabPill("🌸 RHYTHM", selectedMode == 0, activeSkinPrimary) { selectedMode = 0 }
+                }
+                item {
+                    KawaiiModeTabPill("🥬 HARVEST", selectedMode == 1, KawaiiGoldenHoney) { selectedMode = 1 }
+                }
+                item {
+                    KawaiiModeTabPill("🧲 SKILLS", selectedMode == 2, KawaiiSoftTeal) { selectedMode = 2 }
+                }
+                item {
+                    KawaiiModeTabPill("🎨 SKINS", selectedMode == 3, KawaiiLavender) { selectedMode = 3 }
+                }
+                item {
+                    KawaiiModeTabPill("🏆 QUESTS", selectedMode == 4, Color(0xFFFFD700)) { selectedMode = 4 }
+                }
+                item {
+                    KawaiiModeTabPill("${currentSeason.rank.badge} SEASONS", selectedMode == 5, Color(currentSeason.rank.colorHex)) { selectedMode = 5 }
+                }
+            }
+
+            // Close button
+            IconButton(
+                onClick = {
+                    MikuBeatClickerEngine.saveState()
+                    onClose()
+                },
+                modifier = Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(Color(0x33FF85B3))
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = "Close",
+                    tint = activeSkinPrimary,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        // Rainbow Sugar Fever Gauge
+        KawaiiSugarFeverGauge(
+            feverEnergy = feverEnergy,
+            feverSeconds = feverSeconds,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }
