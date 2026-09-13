@@ -393,6 +393,11 @@ class MainActivity : ComponentActivity() {
                 android.content.Intent.ACTION_SCREEN_ON -> IdleController.setDisplayOn(true)
                 else -> {
                     IdleController.setDisplayOn(false)
+                    // The shared output-mix Visualizer is bound by the scrubber/visualisers via
+                    // AudioCapture.ensure() from four call sites and was released by NONE of them,
+                    // so it kept capturing FFT + waveform for a dark screen. Nothing reads those
+                    // buffers while the panel is off; the next ensure() rebinds on wake.
+                    runCatching { AudioCapture.release() }
                     ScreenOffHelper.restore(context)
                 }
             }
