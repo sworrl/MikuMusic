@@ -384,9 +384,18 @@ class MainActivity : ComponentActivity() {
     // waiting for the app to be reopened. Without this, the shrunk timeout would keep applying
     // system-wide (every app, not just this one) until next launch. ACTION_SCREEN_OFF is a
     // protected broadcast — only deliverable to a dynamically-registered receiver, never manifest.
+    // Handles BOTH screen transitions. The OFF edge is what stops every per-frame UI loop in the
+    // app: IdleController.screenActive gates them, and it used to ignore the real display state
+    // entirely (see IdleController.displayOn) — leaving the main thread at ~67% against a dark panel.
     private val screenOffReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
-            ScreenOffHelper.restore(context)
+            when (intent.action) {
+                android.content.Intent.ACTION_SCREEN_ON -> IdleController.setDisplayOn(true)
+                else -> {
+                    IdleController.setDisplayOn(false)
+                    ScreenOffHelper.restore(context)
+                }
+            }
         }
     }
 
@@ -428,7 +437,13 @@ class MainActivity : ComponentActivity() {
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag") registerReceiver(updateStartingReceiver, updateFilter)
         }
-        registerReceiver(screenOffReceiver, android.content.IntentFilter(android.content.Intent.ACTION_SCREEN_OFF))
+        registerReceiver(screenOffReceiver, android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_SCREEN_OFF)
+            addAction(android.content.Intent.ACTION_SCREEN_ON)
+        })
+        // Seed from the platform: a broadcast missed while we were not registered must not leave
+        // the per-frame loops believing the panel is lit.
+        IdleController.syncDisplayState(this)
         val backFilter = android.content.IntentFilter().apply {
             addAction("com.miku.player.action.TRIGGER_BACK")
             addAction("com.miku.systemui.action.TRIGGER_BACK")
@@ -600,6 +615,7 @@ class MainActivity : ComponentActivity() {
         hideSystemBars()
         VisualizerMemoryGuard.release()
         IdleController.loadPrefs(this)
+        IdleController.syncDisplayState(this)   // resuming means the panel is lit; re-arm the loops
         IdleController.poke(this)
         try { com.miku.player.screentime.MikuSmartScreenTimeEngine.start(this) } catch (_: Throwable) {}
         ScreenOffHelper.restore(this)

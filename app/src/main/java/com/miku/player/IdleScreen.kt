@@ -65,6 +65,33 @@ object IdleController {
     @Volatile private var lastInteraction = android.os.SystemClock.elapsedRealtime()
     @Volatile private var offRequested = false
 
+    /**
+     * The REAL display state, from ACTION_SCREEN_ON/OFF (see MainActivity) — not the idle ladder.
+     *
+     * [tier] alone was never a safe gate: it only advances from [IdleWatcher]'s in-composition
+     * once-a-second tick, and a [KeepScreenAwake] hold pins it to ACTIVE and resets the inactivity
+     * clock every second. So with the panel physically off, `screenActive` stayed TRUE and every
+     * per-frame loop that checks it (wavy scrubber, tape reels, transport deck, liked-heart) kept
+     * running at 30-60 Hz against a display nobody could see. Measured: the player's MAIN THREAD
+     * pinned at 67% with the screen dozing and the activity paused, which is what made the whole
+     * device feel laggy while music played.
+     */
+    @Volatile private var displayOn = true
+
+    /** Wire from ACTION_SCREEN_ON/OFF, and seed from DisplayManager so a missed broadcast can't strand it. */
+    fun setDisplayOn(on: Boolean) {
+        displayOn = on
+        if (on) lastInteraction = android.os.SystemClock.elapsedRealtime()
+    }
+
+    /** Seed [displayOn] from the platform (call at startup / resume). */
+    fun syncDisplayState(ctx: Context) {
+        displayOn = runCatching {
+            val dm = ctx.getSystemService(Context.DISPLAY_SERVICE) as android.hardware.display.DisplayManager
+            dm.displays.any { it.state == android.view.Display.STATE_ON }
+        }.getOrDefault(true)
+    }
+
     fun loadPrefs(ctx: Context) {
         enabled = PlayerPreferences.loadIdleDimEnabled(ctx)
         ambientEnabled = PlayerPreferences.loadAmbientEnabled(ctx)
@@ -119,13 +146,13 @@ object IdleController {
     // The single switch every GPU/CPU-continuous piece of UI should check before doing work
     // nobody's watching — dimmed-in-place still counts as "not active" here since the point is
     // burning battery on invisible-or-barely-visible frames, not literally screen-off.
-    val screenActive: Boolean get() = tier == IdleTier.ACTIVE
+    val screenActive: Boolean get() = displayOn && tier == IdleTier.ACTIVE
 
     // Coarser cutoff for things that ARE still worth keeping live through DIMMED (the real screen
     // stays fully visible there, e.g. a seek-bar position) but genuinely pointless once the screen
     // is either replaced by the ambient overlay or physically dark — no reason to keep polling
     // player position at sub-second cadence against a display nobody can see at all.
-    val visuallyIdle: Boolean get() = tier == IdleTier.AMBIENT || tier == IdleTier.OFF
+    val visuallyIdle: Boolean get() = !displayOn || tier == IdleTier.AMBIENT || tier == IdleTier.OFF
 }
 
 /**
