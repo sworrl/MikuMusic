@@ -941,555 +941,19 @@ fun MikuKawaiiLockscreenScreen(
 
             Spacer(Modifier.height(2.dp))
 
-            // ================= UPGRADED NOW PLAYING LOCKSCREEN MUSIC WIDGET =================
+            // ================= NOW PLAYING LOCKSCREEN MUSIC WIDGET =================
             if (nowPlaying.hasSession) {
-                val heartAnimScale = remember { Animatable(1f) }
-                val historyList by MikuPlayHistoryStore.history.collectAsState()
-
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(CutCornerShape(14.dp))
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(Color(0xF00A2330), Color(0xF8051219), Color(0xFB020A0E))
-                            )
-                        )
-                        .border(
-                            1.2.dp,
-                            Brush.horizontalGradient(
-                                listOf(
-                                    if (localLikedState) Color(0xFFFF2277) else com.miku.launcher.ui.MikuNowPlayingAccent.blend(palette.primary, npAccentLock.full, if (npAccentLock.active) 0.3f else 0f).copy(alpha = 0.85f),
-                                    com.miku.launcher.ui.MikuNowPlayingAccent.blend(Color(0xFF39C5BB), npAccentLock.full, if (npAccentLock.active) 0.3f else 0f).copy(alpha = 0.5f),
-                                    MikuNeonPink.copy(alpha = 0.7f)
-                                )
-                            ),
-                            CutCornerShape(14.dp)
-                        )
-                        .padding(10.dp)
-                ) {
-                    Column(Modifier.fillMaxWidth()) {
-                        // 1. TOP HEADER: ARTWORK + TITLE + LIKE HEART + HISTORY TOGGLE
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            // Mini Vinyl Artwork Ring (Coil)
-                            Box(
-                                Modifier
-                                    .size(38.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(0xFF030D12))
-                                    .border(1.2.dp, if (localLikedState) Color(0xFFFF2277) else MikuNeonPink, CircleShape),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                // artwork is a fresh ByteArray/Uri object on EVERY controller poll (each
-                                // progress tick), so Coil saw a new model and re-decoded -> visible
-                                // flicker in time with the progress bar. Pin the model per track.
-                                val artTrackKey = "${nowPlaying.mediaId}|${nowPlaying.title}|${nowPlaying.artist}|${nowPlaying.album}"
-                                val stableArt = remember(artTrackKey) { mutableStateOf(nowPlaying.artwork) }
-                                if (stableArt.value == null && nowPlaying.artwork != null) stableArt.value = nowPlaying.artwork
-                                AsyncImage(
-                                    model = stableArt.value ?: R.drawable.miku_cover,
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(34.dp).clip(CircleShape)
-                                )
-                            }
-
-                            Spacer(Modifier.width(8.dp))
-
-                            // Track Title & Artist
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = nowPlaying.title ?: "Now Playing",
-                                    color = Color.White,
-                                    fontSize = 12.5.dampedSp(),
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = AudiowideFont,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    // Honest unknown — never an invented artist name.
-                                    text = nowPlaying.artist?.takeIf { it.isNotBlank() } ?: "Unknown artist",
-                                    color = palette.primary,
-                                    fontSize = 10.5.dampedSp(),
-                                    fontWeight = FontWeight.Bold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-
-                            // Interactive Like Heart Button with Cyber Glow & Textured Haptics
-                            Box(
-                                Modifier
-                                    .scale(heartAnimScale.value)
-                                    .size(30.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        if (localLikedState) {
-                                            Brush.radialGradient(
-                                                listOf(Color(0x66FF1774), Color(0x28FF1774), Color(0xFF15040D))
-                                            )
-                                        } else {
-                                            Brush.verticalGradient(
-                                                listOf(Color(0x2800E5FF), Color(0x0C00E5FF))
-                                            )
-                                        }
-                                    )
-                                    .border(
-                                        if (localLikedState) 1.2.dp else 0.8.dp,
-                                        if (localLikedState) {
-                                            Brush.linearGradient(
-                                                listOf(Color(0xFFFF1774), Color(0xFFFF5288), Color(0xFFFF0055))
-                                            )
-                                        } else {
-                                            Brush.linearGradient(
-                                                listOf(Color(0x6600E5FF), Color(0x2200E5FF))
-                                            )
-                                        },
-                                        CircleShape
-                                    )
-                                    .clickable {
-                                        lastInteractionMs = System.currentTimeMillis()
-                                        localLikedState = !localLikedState
-                                        coroutineScope.launch {
-                                            heartAnimScale.snapTo(0.65f)
-                                            heartAnimScale.animateTo(1.35f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                                            heartAnimScale.animateTo(1.0f, spring())
-                                        }
-                                        if (localLikedState) {
-                                            com.miku.launcher.haptics.MikuHaptics.like(context)
-                                        } else {
-                                            com.miku.launcher.haptics.MikuHaptics.reject(context)
-                                        }
-                                        try {
-                                            val i = Intent("com.miku.player.action.TOGGLE_LIKE").apply {
-                                                setPackage("com.miku.player")
-                                                nowPlaying.mediaId?.toLongOrNull()?.let { putExtra("track_id", it) }
-                                            }
-                                            context.sendBroadcast(i)
-                                        } catch (_: Throwable) {}
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (localLikedState) Icons.Filled.Favorite else Icons.Default.FavoriteBorder,
-                                    contentDescription = "Like Song",
-                                    tint = if (localLikedState) Color(0xFFFF1774) else Color(0xFF00E5FF),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-
-                            Spacer(Modifier.width(5.dp))
-
-                            // History Drawer Pill Toggle
-                            Box(
-                                Modifier
-                                    .clip(CutCornerShape(6.dp))
-                                    .background(if (showHistoryDrawer) Color(0x5500E5FF) else Color(0x2200E5FF))
-                                    .border(0.8.dp, palette.primary.copy(alpha = 0.6f), CutCornerShape(6.dp))
-                                    .clickable {
-                                        lastInteractionMs = System.currentTimeMillis()
-                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
-                                        showHistoryDrawer = !showHistoryDrawer
-                                    }
-                                    .padding(horizontal = 5.dp, vertical = 3.5.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.History,
-                                        contentDescription = "History",
-                                        tint = palette.primary,
-                                        modifier = Modifier.size(11.dp)
-                                    )
-                                    Spacer(Modifier.width(2.5.dp))
-                                    Text(
-                                        if (showHistoryDrawer) "HIDE" else "RECENTS",
-                                        color = Color.White,
-                                        fontSize = 9.5.dampedSp(),
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = AudiowideFont
-                                    )
-                                }
-                            }
-                        }
-
-                        // 2. TRACK METRICS TELEMETRY ROW
-                        Spacer(Modifier.height(4.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Quality Badge — only when the player published a real format string.
-                            if (nowPlaying.format.isNotBlank()) Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(Color(0x3300FF7F))
-                                    .border(0.6.dp, Color(0xFF00FF7F).copy(alpha = 0.7f), RoundedCornerShape(4.dp))
-                                    .padding(horizontal = 4.dp, vertical = 1.5.dp)
-                            ) {
-                                Text(
-                                    nowPlaying.format,
-                                    color = Color(0xFF00FF7F),
-                                    fontSize = 8.5.dampedSp(),
-                                    fontWeight = FontWeight.Bold,
-                                    fontFamily = AudiowideFont,
-                                    maxLines = 1
-                                )
-                            }
-
-                            // Gamified Mini Project DIVA Rhythm Widget with Approach Rings & Haptics
-                            var miniTapCount by remember { mutableIntStateOf(0) }
-                            var miniTappedBpm by remember { mutableStateOf<Float?>(null) }
-                            var miniJudgment by remember { mutableStateOf("TAP") }
-                            val miniTapTimestamps = remember { mutableStateListOf<Long>() }
-                            val miniTapAnimScale = remember { Animatable(1f) }
-                            val miniApproachAnim = remember { Animatable(1.5f) }
-
-                            val bpmDb = remember { com.miku.launcher.bpm.MikuBpmDatabase.getInstance(context) }
-                            val hasTempo = nowPlaying.bpm in 40f..300f
-                            val beatPeriodMs = if (hasTempo) (60_000f / nowPlaying.bpm).toLong() else 0L
-
-                            // Continuous approach ring animation synced to BPM — only with a real tempo
-                            LaunchedEffect(nowPlaying.isPlaying, nowPlaying.bpm) {
-                                if (nowPlaying.isPlaying && hasTempo) {
-                                    while (true) {
-                                        miniApproachAnim.snapTo(1.7f)
-                                        miniApproachAnim.animateTo(
-                                            targetValue = 1.0f,
-                                            animationSpec = tween(
-                                                durationMillis = beatPeriodMs.toInt().coerceIn(100, 2000),
-                                                easing = LinearEasing
-                                            )
-                                        )
-                                    }
-                                }
-                            }
-
-                            Box(
-                                Modifier
-                                    .scale(miniTapAnimScale.value)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(
-                                        Brush.horizontalGradient(
-                                            listOf(Color(0x66FF1177), Color(0x449D4EDD))
-                                        )
-                                    )
-                                    .border(0.8.dp, if (miniTapCount >= 10) Color(0xFFFFD700) else MikuNeonPink, RoundedCornerShape(6.dp))
-                                    .clickable {
-                                        lastInteractionMs = System.currentTimeMillis()
-                                        val now = SystemClock.elapsedRealtime()
-                                        if (miniTapTimestamps.isNotEmpty() && now - miniTapTimestamps.last() > 2200L) {
-                                            miniTapTimestamps.clear()
-                                            miniTapCount = 0
-                                        }
-                                        miniTapTimestamps.add(now)
-                                        miniTapCount++
-                                        if (miniTapTimestamps.size > 8) miniTapTimestamps.removeAt(0)
-
-                                        if (miniTapTimestamps.size >= 2) {
-                                            val intervals = (1 until miniTapTimestamps.size).map { (miniTapTimestamps[it] - miniTapTimestamps[it - 1]).toDouble() }
-                                            val avg = intervals.average()
-                                            if (avg > 0) {
-                                                val rawTapped = (60_000.0 / avg).toFloat().coerceIn(30f, 999f)
-                                                miniTappedBpm = rawTapped
-                                            }
-                                        }
-
-                                        // Rhythm Timing Offset & Accuracy Calculation
-                                        val offsetMs = if (beatPeriodMs > 0) ((now % beatPeriodMs) - (beatPeriodMs / 2)).toInt() else 0
-                                        val absOffset = Math.abs(offsetMs)
-                                        val accuracy = when {
-                                            absOffset <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
-                                            absOffset <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
-                                            else -> com.miku.launcher.bpm.HitAccuracy.MISS
-                                        }
-                                        miniJudgment = when (accuracy) {
-                                            com.miku.launcher.bpm.HitAccuracy.PERFECT -> "💖 PERFECT"
-                                            com.miku.launcher.bpm.HitAccuracy.GOOD -> "✨ GOOD"
-                                            com.miku.launcher.bpm.HitAccuracy.MISS -> "🎵 TAP"
-                                        }
-
-                                        coroutineScope.launch {
-                                            miniTapAnimScale.snapTo(0.78f)
-                                            miniTapAnimScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
-                                        }
-                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
-                                        val liveTapped = miniTappedBpm ?: nowPlaying.bpm
-
-                                        // Play ascending pentatonic chime melody synchronized with combo
-                                        com.miku.launcher.audio.MikuSeasonalAudioEngine.playComboMelody(miniTapCount, miniTapCount >= 20)
-
-                                        // Record Beat Clicker & Seasons Economy
-                                        com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
-                                        com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
-                                            accuracy = accuracy,
-                                            currentCombo = miniTapCount,
-                                            scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
-                                            currentBpm = liveTapped
-                                        )
-
-                                        // Log Calibration Telemetry to SQLite Database
-                                        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                            val trackArt = nowPlaying.artist ?: "Unknown Artist"
-                                            val trackTit = nowPlaying.title ?: "Unknown Track"
-                                            bpmDb.logTapTelemetry(
-                                                com.miku.launcher.bpm.MikuBpmDatabase.TapTelemetryRecord(
-                                                    artist = trackArt,
-                                                    title = trackTit,
-                                                    tapEpochMs = System.currentTimeMillis(),
-                                                    targetBeatMs = beatPeriodMs,
-                                                    deviationMs = offsetMs,
-                                                    accuracy = accuracy.name,
-                                                    instantaneousBpm = liveTapped,
-                                                    comboAtTap = miniTapCount,
-                                                    isFever = miniTapCount >= 20
-                                                )
-                                            )
-                                            if (miniTapCount >= 6 && miniTappedBpm != null) {
-                                                bpmDb.saveTrackBpm(
-                                                    com.miku.launcher.bpm.MikuBpmDatabase.TrackBpmRecord(
-                                                        artist = trackArt,
-                                                        title = trackTit,
-                                                        canonicalBpm = miniTappedBpm!!,
-                                                        rawDetectedBpm = nowPlaying.bpm,
-                                                        userTappedBpm = miniTappedBpm!!,
-                                                        tempoMultiplier = if (miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
-                                                        confidence = 0.98f,
-                                                        source = "USER_LOCKSCREEN_TAP",
-                                                        tapCount = miniTapCount
-                                                    )
-                                                )
-                                            }
-                                        }
-                                    }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        if (miniTapCount > 1) "🔥 x$miniTapCount $miniJudgment" else if (hasTempo) "⚡ ${nowPlaying.bpm.toInt()} BPM" else "⚡ — BPM",
-                                        color = if (miniTapCount > 5) Color(0xFFFFD700) else MikuNeonPink,
-                                        fontSize = 9.dampedSp(),
-                                        fontWeight = FontWeight.Black,
-                                        fontFamily = AudiowideFont
-                                    )
-                                }
-                            }
-                        }
-
-                        // 3. SLIM SEEK BAR SLIDER & TIMESTAMPS
-                        if (nowPlaying.durationMs > 0L) {
-                            var scrubbing by remember { mutableStateOf(false) }
-                            var scrubValue by remember { mutableFloatStateOf(0f) }
-                            val liveFrac = (nowPlaying.positionMs.toFloat() / nowPlaying.durationMs).coerceIn(0f, 1f)
-                            val posStr = formatTimeMs(if (scrubbing) (scrubValue * nowPlaying.durationMs).toLong() else nowPlaying.positionMs)
-                            val durStr = formatTimeMs(nowPlaying.durationMs)
-
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 2.dp)
-                            ) {
-                                Slider(
-                                    value = if (scrubbing) scrubValue else liveFrac,
-                                    onValueChange = {
-                                        scrubbing = true
-                                        scrubValue = it
-                                        lastInteractionMs = System.currentTimeMillis()
-                                    },
-                                    onValueChangeFinished = {
-                                        controller?.seekTo((scrubValue * nowPlaying.durationMs).toLong())
-                                        scrubbing = false
-                                    },
-                                    colors = SliderDefaults.colors(
-                                        thumbColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
-                                        activeTrackColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
-                                        inactiveTrackColor = Color(0x33FFFFFF)
-                                    ),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(10.dp)
-                                )
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        posStr,
-                                        color = Color(0xFFB0D0D8),
-                                        fontSize = 8.5.dampedSp(),
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = AudiowideFont
-                                    )
-                                    Text(
-                                        durStr,
-                                        color = Color(0xFFB0D0D8),
-                                        fontSize = 8.5.dampedSp(),
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = AudiowideFont
-                                    )
-                                }
-                            }
-                        }
-
-                        // 4. TRANSPORT CONTROLS ROW
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                Modifier
-                                    .size(30.dp)
-                                    .clip(CutCornerShape(6.dp))
-                                    .background(Color(0x3300E5FF))
-                                    .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
-                                    .clickable {
-                                        lastInteractionMs = System.currentTimeMillis()
-                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
-                                        controller?.seekToPreviousMediaItem()
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", tint = palette.primary, modifier = Modifier.size(16.dp))
-                            }
-                            Spacer(Modifier.width(14.dp))
-                            Box(
-                                Modifier
-                                    .size(36.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        Brush.radialGradient(
-                                            listOf(
-                                                if (localLikedState) Color(0xFFFF2277) else palette.primary,
-                                                if (localLikedState) Color(0xFFAA0044) else Color(0xFF0099AA)
-                                            )
-                                        )
-                                    )
-                                    .clickable {
-                                        lastInteractionMs = System.currentTimeMillis()
-                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
-                                        val c = controller
-                                        if (c?.isPlaying == true) c.pause() else c?.play()
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = if (nowPlaying.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = "Play/Pause",
-                                    tint = Color(0xFF030D12),
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                            Spacer(Modifier.width(14.dp))
-                            Box(
-                                Modifier
-                                    .size(30.dp)
-                                    .clip(CutCornerShape(6.dp))
-                                    .background(Color(0x3300E5FF))
-                                    .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
-                                    .clickable {
-                                        lastInteractionMs = System.currentTimeMillis()
-                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
-                                        controller?.seekToNextMediaItem()
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = palette.primary, modifier = Modifier.size(16.dp))
-                            }
-                        }
-
-                        // 5. EXPANDABLE PLAY HISTORY DRAWER
-                        AnimatedVisibility(
-                            visible = showHistoryDrawer,
-                            enter = expandVertically() + fadeIn(),
-                            exit = shrinkVertically() + fadeOut()
-                        ) {
-                            Column(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(top = 8.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0xEE030D14))
-                                    .border(1.dp, palette.primary.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                                    .padding(6.dp)
-                            ) {
-                                Text(
-                                    "PLAYBACK HISTORY",
-                                    color = palette.primary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = AudiowideFont
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                if (historyList.isEmpty()) {
-                                    Text(
-                                        "No recently played tracks",
-                                        color = Color.Gray,
-                                        fontSize = 12.sp,
-                                        modifier = Modifier.padding(vertical = 4.dp)
-                                    )
-                                } else {
-                                    LazyColumn(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .heightIn(max = 120.dp),
-                                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                                    ) {
-                                        items(historyList) { item ->
-                                            Row(
-                                                Modifier
-                                                    .fillMaxWidth()
-                                                    .clip(RoundedCornerShape(4.dp))
-                                                    .background(Color(0x33061C26))
-                                                    .clickable {
-                                                        lastInteractionMs = System.currentTimeMillis()
-                                                        com.miku.launcher.haptics.MikuHaptics.tick(context)
-                                                        controller?.seekToNextMediaItem()
-                                                    }
-                                                    .padding(horizontal = 7.dp, vertical = 4.dp),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Column(Modifier.weight(1f)) {
-                                                    Text(
-                                                        item.title,
-                                                        color = Color.White,
-                                                        fontSize = 13.5.sp,
-                                                        fontWeight = FontWeight.Bold,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis
-                                                    )
-                                                    Text(
-                                                        item.artist.ifBlank { "Unknown artist" },
-                                                        color = Color(0xFF88BAC6),
-                                                        fontSize = 12.sp,
-                                                        maxLines = 1
-                                                    )
-                                                }
-                                                // Blank = the entry carries no recorded format; show
-                                                // nothing rather than a claimed codec/bit-depth.
-                                                if (item.format.isNotBlank()) {
-                                                    Text(
-                                                        item.format.take(10),
-                                                        color = Color(0xFF00FF7F),
-                                                        fontSize = 11.sp,
-                                                        fontFamily = AudiowideFont
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                LockscreenNowPlayingWidget(
+                    nowPlaying = nowPlaying,
+                    controller = controller,
+                    palette = palette,
+                    npAccentLock = npAccentLock,
+                    localLikedState = localLikedState,
+                    onLikedChange = { localLikedState = it },
+                    showHistoryDrawer = showHistoryDrawer,
+                    onHistoryDrawerChange = { showHistoryDrawer = it },
+                    onInteraction = { lastInteractionMs = System.currentTimeMillis() },
+                )
             }
 
             // Gap above the bottom swipe zone
@@ -2018,4 +1482,582 @@ fun Miku5HourLockscreenTrendCapsule(
             } // end real-forecast branch
         }
     }
+}
+
+
+/**
+ * The lockscreen's Now Playing widget (art, transport, like, history drawer, BPM/format badges).
+ *
+ * Extracted from [MikuKawaiiLockscreenScreen] 2026-09-13 for a concrete reason: that one composable
+ * had grown to 18,785 instructions, past ART's JIT compiler limit, so it was REJECTED for compilation
+ * ("Method exceeds compiler instruction limit") and ran interpreted on every recomposition — forever.
+ * Keep the pieces of this screen small enough to compile; a single giant composable silently costs
+ * far more than its line count suggests.
+ */
+@Composable
+private fun LockscreenNowPlayingWidget(
+    nowPlaying: MikuNowPlaying,
+    controller: MikuMediaLink?,
+    palette: com.miku.launcher.theme.MikuDiurnalTheme.DiurnalPalette,
+    npAccentLock: com.miku.launcher.ui.NpAccent,
+    localLikedState: Boolean,
+    onLikedChange: (Boolean) -> Unit,
+    showHistoryDrawer: Boolean,
+    onHistoryDrawerChange: (Boolean) -> Unit,
+    onInteraction: () -> Unit,
+) {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+    // Same font-scale damping the parent screen applies, so extracted text matches it exactly.
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val fontScale = density.fontScale
+    val effectiveScale = 1.0f + (fontScale - 1.0f) * 0.15f
+    fun Number.dampedSp(): androidx.compose.ui.unit.TextUnit = (this.toFloat() / fontScale * effectiveScale).sp
+            val heartAnimScale = remember { Animatable(1f) }
+            val historyList by MikuPlayHistoryStore.history.collectAsState()
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(CutCornerShape(14.dp))
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(Color(0xF00A2330), Color(0xF8051219), Color(0xFB020A0E))
+                        )
+                    )
+                    .border(
+                        1.2.dp,
+                        Brush.horizontalGradient(
+                            listOf(
+                                if (localLikedState) Color(0xFFFF2277) else com.miku.launcher.ui.MikuNowPlayingAccent.blend(palette.primary, npAccentLock.full, if (npAccentLock.active) 0.3f else 0f).copy(alpha = 0.85f),
+                                com.miku.launcher.ui.MikuNowPlayingAccent.blend(Color(0xFF39C5BB), npAccentLock.full, if (npAccentLock.active) 0.3f else 0f).copy(alpha = 0.5f),
+                                MikuNeonPink.copy(alpha = 0.7f)
+                            )
+                        ),
+                        CutCornerShape(14.dp)
+                    )
+                    .padding(10.dp)
+            ) {
+                Column(Modifier.fillMaxWidth()) {
+                    // 1. TOP HEADER: ARTWORK + TITLE + LIKE HEART + HISTORY TOGGLE
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // Mini Vinyl Artwork Ring (Coil)
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFF030D12))
+                                .border(1.2.dp, if (localLikedState) Color(0xFFFF2277) else MikuNeonPink, CircleShape),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            // artwork is a fresh ByteArray/Uri object on EVERY controller poll (each
+                            // progress tick), so Coil saw a new model and re-decoded -> visible
+                            // flicker in time with the progress bar. Pin the model per track.
+                            val artTrackKey = "${nowPlaying.mediaId}|${nowPlaying.title}|${nowPlaying.artist}|${nowPlaying.album}"
+                            val stableArt = remember(artTrackKey) { mutableStateOf(nowPlaying.artwork) }
+                            if (stableArt.value == null && nowPlaying.artwork != null) stableArt.value = nowPlaying.artwork
+                            AsyncImage(
+                                model = stableArt.value ?: R.drawable.miku_cover,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(34.dp).clip(CircleShape)
+                            )
+                        }
+
+                        Spacer(Modifier.width(8.dp))
+
+                        // Track Title & Artist
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = nowPlaying.title ?: "Now Playing",
+                                color = Color.White,
+                                fontSize = 12.5.dampedSp(),
+                                fontWeight = FontWeight.Black,
+                                fontFamily = AudiowideFont,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                // Honest unknown — never an invented artist name.
+                                text = nowPlaying.artist?.takeIf { it.isNotBlank() } ?: "Unknown artist",
+                                color = palette.primary,
+                                fontSize = 10.5.dampedSp(),
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        // Interactive Like Heart Button with Cyber Glow & Textured Haptics
+                        Box(
+                            Modifier
+                                .scale(heartAnimScale.value)
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (localLikedState) {
+                                        Brush.radialGradient(
+                                            listOf(Color(0x66FF1774), Color(0x28FF1774), Color(0xFF15040D))
+                                        )
+                                    } else {
+                                        Brush.verticalGradient(
+                                            listOf(Color(0x2800E5FF), Color(0x0C00E5FF))
+                                        )
+                                    }
+                                )
+                                .border(
+                                    if (localLikedState) 1.2.dp else 0.8.dp,
+                                    if (localLikedState) {
+                                        Brush.linearGradient(
+                                            listOf(Color(0xFFFF1774), Color(0xFFFF5288), Color(0xFFFF0055))
+                                        )
+                                    } else {
+                                        Brush.linearGradient(
+                                            listOf(Color(0x6600E5FF), Color(0x2200E5FF))
+                                        )
+                                    },
+                                    CircleShape
+                                )
+                                .clickable {
+                                    onInteraction()
+                                    onLikedChange(!localLikedState)
+                                    coroutineScope.launch {
+                                        heartAnimScale.snapTo(0.65f)
+                                        heartAnimScale.animateTo(1.35f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                                        heartAnimScale.animateTo(1.0f, spring())
+                                    }
+                                    if (localLikedState) {
+                                        com.miku.launcher.haptics.MikuHaptics.like(context)
+                                    } else {
+                                        com.miku.launcher.haptics.MikuHaptics.reject(context)
+                                    }
+                                    try {
+                                        val i = Intent("com.miku.player.action.TOGGLE_LIKE").apply {
+                                            setPackage("com.miku.player")
+                                            nowPlaying.mediaId?.toLongOrNull()?.let { putExtra("track_id", it) }
+                                        }
+                                        context.sendBroadcast(i)
+                                    } catch (_: Throwable) {}
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (localLikedState) Icons.Filled.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = "Like Song",
+                                tint = if (localLikedState) Color(0xFFFF1774) else Color(0xFF00E5FF),
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+
+                        Spacer(Modifier.width(5.dp))
+
+                        // History Drawer Pill Toggle
+                        Box(
+                            Modifier
+                                .clip(CutCornerShape(6.dp))
+                                .background(if (showHistoryDrawer) Color(0x5500E5FF) else Color(0x2200E5FF))
+                                .border(0.8.dp, palette.primary.copy(alpha = 0.6f), CutCornerShape(6.dp))
+                                .clickable {
+                                    onInteraction()
+                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                    onHistoryDrawerChange(!showHistoryDrawer)
+                                }
+                                .padding(horizontal = 5.dp, vertical = 3.5.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = "History",
+                                    tint = palette.primary,
+                                    modifier = Modifier.size(11.dp)
+                                )
+                                Spacer(Modifier.width(2.5.dp))
+                                Text(
+                                    if (showHistoryDrawer) "HIDE" else "RECENTS",
+                                    color = Color.White,
+                                    fontSize = 9.5.dampedSp(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = AudiowideFont
+                                )
+                            }
+                        }
+                    }
+
+                    // 2. TRACK METRICS TELEMETRY ROW
+                    Spacer(Modifier.height(4.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Quality Badge — only when the player published a real format string.
+                        if (nowPlaying.format.isNotBlank()) Box(
+                            Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0x3300FF7F))
+                                .border(0.6.dp, Color(0xFF00FF7F).copy(alpha = 0.7f), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 4.dp, vertical = 1.5.dp)
+                        ) {
+                            Text(
+                                nowPlaying.format,
+                                color = Color(0xFF00FF7F),
+                                fontSize = 8.5.dampedSp(),
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = AudiowideFont,
+                                maxLines = 1
+                            )
+                        }
+
+                        // Gamified Mini Project DIVA Rhythm Widget with Approach Rings & Haptics
+                        var miniTapCount by remember { mutableIntStateOf(0) }
+                        var miniTappedBpm by remember { mutableStateOf<Float?>(null) }
+                        var miniJudgment by remember { mutableStateOf("TAP") }
+                        val miniTapTimestamps = remember { mutableStateListOf<Long>() }
+                        val miniTapAnimScale = remember { Animatable(1f) }
+                        val miniApproachAnim = remember { Animatable(1.5f) }
+
+                        val bpmDb = remember { com.miku.launcher.bpm.MikuBpmDatabase.getInstance(context) }
+                        val hasTempo = nowPlaying.bpm in 40f..300f
+                        val beatPeriodMs = if (hasTempo) (60_000f / nowPlaying.bpm).toLong() else 0L
+
+                        // Continuous approach ring animation synced to BPM — only with a real tempo
+                        LaunchedEffect(nowPlaying.isPlaying, nowPlaying.bpm) {
+                            if (nowPlaying.isPlaying && hasTempo) {
+                                while (true) {
+                                    miniApproachAnim.snapTo(1.7f)
+                                    miniApproachAnim.animateTo(
+                                        targetValue = 1.0f,
+                                        animationSpec = tween(
+                                            durationMillis = beatPeriodMs.toInt().coerceIn(100, 2000),
+                                            easing = LinearEasing
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        Box(
+                            Modifier
+                                .scale(miniTapAnimScale.value)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    Brush.horizontalGradient(
+                                        listOf(Color(0x66FF1177), Color(0x449D4EDD))
+                                    )
+                                )
+                                .border(0.8.dp, if (miniTapCount >= 10) Color(0xFFFFD700) else MikuNeonPink, RoundedCornerShape(6.dp))
+                                .clickable {
+                                    onInteraction()
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (miniTapTimestamps.isNotEmpty() && now - miniTapTimestamps.last() > 2200L) {
+                                        miniTapTimestamps.clear()
+                                        miniTapCount = 0
+                                    }
+                                    miniTapTimestamps.add(now)
+                                    miniTapCount++
+                                    if (miniTapTimestamps.size > 8) miniTapTimestamps.removeAt(0)
+
+                                    if (miniTapTimestamps.size >= 2) {
+                                        val intervals = (1 until miniTapTimestamps.size).map { (miniTapTimestamps[it] - miniTapTimestamps[it - 1]).toDouble() }
+                                        val avg = intervals.average()
+                                        if (avg > 0) {
+                                            val rawTapped = (60_000.0 / avg).toFloat().coerceIn(30f, 999f)
+                                            miniTappedBpm = rawTapped
+                                        }
+                                    }
+
+                                    // Rhythm Timing Offset & Accuracy Calculation
+                                    val offsetMs = if (beatPeriodMs > 0) ((now % beatPeriodMs) - (beatPeriodMs / 2)).toInt() else 0
+                                    val absOffset = Math.abs(offsetMs)
+                                    val accuracy = when {
+                                        absOffset <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
+                                        absOffset <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
+                                        else -> com.miku.launcher.bpm.HitAccuracy.MISS
+                                    }
+                                    miniJudgment = when (accuracy) {
+                                        com.miku.launcher.bpm.HitAccuracy.PERFECT -> "💖 PERFECT"
+                                        com.miku.launcher.bpm.HitAccuracy.GOOD -> "✨ GOOD"
+                                        com.miku.launcher.bpm.HitAccuracy.MISS -> "🎵 TAP"
+                                    }
+
+                                    coroutineScope.launch {
+                                        miniTapAnimScale.snapTo(0.78f)
+                                        miniTapAnimScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+                                    }
+                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                    val liveTapped = miniTappedBpm ?: nowPlaying.bpm
+
+                                    // Play ascending pentatonic chime melody synchronized with combo
+                                    com.miku.launcher.audio.MikuSeasonalAudioEngine.playComboMelody(miniTapCount, miniTapCount >= 20)
+
+                                    // Record Beat Clicker & Seasons Economy
+                                    com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
+                                    com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
+                                        accuracy = accuracy,
+                                        currentCombo = miniTapCount,
+                                        scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
+                                        currentBpm = liveTapped
+                                    )
+
+                                    // Log Calibration Telemetry to SQLite Database
+                                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                        val trackArt = nowPlaying.artist ?: "Unknown Artist"
+                                        val trackTit = nowPlaying.title ?: "Unknown Track"
+                                        bpmDb.logTapTelemetry(
+                                            com.miku.launcher.bpm.MikuBpmDatabase.TapTelemetryRecord(
+                                                artist = trackArt,
+                                                title = trackTit,
+                                                tapEpochMs = System.currentTimeMillis(),
+                                                targetBeatMs = beatPeriodMs,
+                                                deviationMs = offsetMs,
+                                                accuracy = accuracy.name,
+                                                instantaneousBpm = liveTapped,
+                                                comboAtTap = miniTapCount,
+                                                isFever = miniTapCount >= 20
+                                            )
+                                        )
+                                        if (miniTapCount >= 6 && miniTappedBpm != null) {
+                                            bpmDb.saveTrackBpm(
+                                                com.miku.launcher.bpm.MikuBpmDatabase.TrackBpmRecord(
+                                                    artist = trackArt,
+                                                    title = trackTit,
+                                                    canonicalBpm = miniTappedBpm!!,
+                                                    rawDetectedBpm = nowPlaying.bpm,
+                                                    userTappedBpm = miniTappedBpm!!,
+                                                    tempoMultiplier = if (miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
+                                                    confidence = 0.98f,
+                                                    source = "USER_LOCKSCREEN_TAP",
+                                                    tapCount = miniTapCount
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    if (miniTapCount > 1) "🔥 x$miniTapCount $miniJudgment" else if (hasTempo) "⚡ ${nowPlaying.bpm.toInt()} BPM" else "⚡ — BPM",
+                                    color = if (miniTapCount > 5) Color(0xFFFFD700) else MikuNeonPink,
+                                    fontSize = 9.dampedSp(),
+                                    fontWeight = FontWeight.Black,
+                                    fontFamily = AudiowideFont
+                                )
+                            }
+                        }
+                    }
+
+                    // 3. SLIM SEEK BAR SLIDER & TIMESTAMPS
+                    if (nowPlaying.durationMs > 0L) {
+                        var scrubbing by remember { mutableStateOf(false) }
+                        var scrubValue by remember { mutableFloatStateOf(0f) }
+                        val liveFrac = (nowPlaying.positionMs.toFloat() / nowPlaying.durationMs).coerceIn(0f, 1f)
+                        val posStr = formatTimeMs(if (scrubbing) (scrubValue * nowPlaying.durationMs).toLong() else nowPlaying.positionMs)
+                        val durStr = formatTimeMs(nowPlaying.durationMs)
+
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 2.dp)
+                        ) {
+                            Slider(
+                                value = if (scrubbing) scrubValue else liveFrac,
+                                onValueChange = {
+                                    scrubbing = true
+                                    scrubValue = it
+                                    onInteraction()
+                                },
+                                onValueChangeFinished = {
+                                    controller?.seekTo((scrubValue * nowPlaying.durationMs).toLong())
+                                    scrubbing = false
+                                },
+                                colors = SliderDefaults.colors(
+                                    thumbColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
+                                    activeTrackColor = if (localLikedState) Color(0xFFFF2277) else palette.primary,
+                                    inactiveTrackColor = Color(0x33FFFFFF)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(10.dp)
+                            )
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    posStr,
+                                    color = Color(0xFFB0D0D8),
+                                    fontSize = 8.5.dampedSp(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = AudiowideFont
+                                )
+                                Text(
+                                    durStr,
+                                    color = Color(0xFFB0D0D8),
+                                    fontSize = 8.5.dampedSp(),
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = AudiowideFont
+                                )
+                            }
+                        }
+                    }
+
+                    // 4. TRANSPORT CONTROLS ROW
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            Modifier
+                                .size(30.dp)
+                                .clip(CutCornerShape(6.dp))
+                                .background(Color(0x3300E5FF))
+                                .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
+                                .clickable {
+                                    onInteraction()
+                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                    controller?.seekToPreviousMediaItem()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.SkipPrevious, contentDescription = "Prev", tint = palette.primary, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Box(
+                            Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    Brush.radialGradient(
+                                        listOf(
+                                            if (localLikedState) Color(0xFFFF2277) else palette.primary,
+                                            if (localLikedState) Color(0xFFAA0044) else Color(0xFF0099AA)
+                                        )
+                                    )
+                                )
+                                .clickable {
+                                    onInteraction()
+                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                    val c = controller
+                                    if (c?.isPlaying == true) c.pause() else c?.play()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = if (nowPlaying.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = "Play/Pause",
+                                tint = Color(0xFF030D12),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Box(
+                            Modifier
+                                .size(30.dp)
+                                .clip(CutCornerShape(6.dp))
+                                .background(Color(0x3300E5FF))
+                                .mikuPressScale(pressedScale = 0.9f, glowColor = palette.primary, hapticFeedback = false)
+                                .clickable {
+                                    onInteraction()
+                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                    controller?.seekToNextMediaItem()
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = palette.primary, modifier = Modifier.size(16.dp))
+                        }
+                    }
+
+                    // 5. EXPANDABLE PLAY HISTORY DRAWER
+                    AnimatedVisibility(
+                        visible = showHistoryDrawer,
+                        enter = expandVertically() + fadeIn(),
+                        exit = shrinkVertically() + fadeOut()
+                    ) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color(0xEE030D14))
+                                .border(1.dp, palette.primary.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+                                .padding(6.dp)
+                        ) {
+                            Text(
+                                "PLAYBACK HISTORY",
+                                color = palette.primary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Black,
+                                fontFamily = AudiowideFont
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            if (historyList.isEmpty()) {
+                                Text(
+                                    "No recently played tracks",
+                                    color = Color.Gray,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+                            } else {
+                                LazyColumn(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(max = 120.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    items(historyList) { item ->
+                                        Row(
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0x33061C26))
+                                                .clickable {
+                                                    onInteraction()
+                                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                                    controller?.seekToNextMediaItem()
+                                                }
+                                                .padding(horizontal = 7.dp, vertical = 4.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(
+                                                    item.title,
+                                                    color = Color.White,
+                                                    fontSize = 13.5.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    item.artist.ifBlank { "Unknown artist" },
+                                                    color = Color(0xFF88BAC6),
+                                                    fontSize = 12.sp,
+                                                    maxLines = 1
+                                                )
+                                            }
+                                            // Blank = the entry carries no recorded format; show
+                                            // nothing rather than a claimed codec/bit-depth.
+                                            if (item.format.isNotBlank()) {
+                                                Text(
+                                                    item.format.take(10),
+                                                    color = Color(0xFF00FF7F),
+                                                    fontSize = 11.sp,
+                                                    fontFamily = AudiowideFont
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 }
