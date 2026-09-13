@@ -5298,6 +5298,8 @@ private fun CyberShadeSoundboardSection(
 @Composable
 private fun CyberShadeFooterSection(onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
+
+    // Telemetry & Weather
     val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
 
     // Data-Only SIM Shield Banner
