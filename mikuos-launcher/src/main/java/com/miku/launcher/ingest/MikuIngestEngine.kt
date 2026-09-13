@@ -78,6 +78,12 @@ object MikuIngestEngine {
     private var networkCallbackRegistered = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var watchdogJob: Job? = null
+    private var mediaReceiverRegistered = false
+    private var autoScanDebounceJob: Job? = null
+    private const val AUTO_PREFS = "miku_ingest_auto"
+    private const val KEY_LAST_AUTO_SCAN = "last_auto_force_scan_ms"
+    /** Unattended force-scan cadence: once a day, plus right after an SD card (re)mount. */
+    private const val AUTO_SCAN_INTERVAL_MS = 24L * 60 * 60 * 1000
 
     /** Settings.Global switch for the network/rsync ingest engine. 0 (default) = OFF: only local SD scans. */
     const val GLOBAL_ENABLED_KEY = "miku_ingest_enabled"
@@ -150,6 +156,54 @@ object MikuIngestEngine {
                     observer
                 )
             } catch (_: Throwable) {}
+        }
+        armAutomaticScans(appContext)
+    }
+
+    /**
+     * Unattended ingest — the relay node keeps the library current without anyone opening the
+     * observatory. Two triggers: (1) SD card mounted / platform MediaScanner finished → debounced
+     * force scan; (2) a daily catch-up force scan if none has run in the last 24h (also first run).
+     * Purely local (MediaScanner + Miku Music nudge); never touches the network engine switch.
+     */
+    private fun armAutomaticScans(appContext: Context) {
+        if (!mediaReceiverRegistered) {
+            mediaReceiverRegistered = true
+            try {
+                val filter = android.content.IntentFilter().apply {
+                    addAction(Intent.ACTION_MEDIA_MOUNTED)
+                    addAction(Intent.ACTION_MEDIA_SCANNER_FINISHED)
+                    addDataScheme("file")
+                }
+                val receiver = object : android.content.BroadcastReceiver() {
+                    override fun onReceive(c: Context?, intent: Intent?) {
+                        val action = intent?.action ?: return
+                        log("Storage event ${action.substringAfterLast('.')} · scheduling automatic force scan")
+                        scheduleAutoForceScan(appContext, "storage:${action.substringAfterLast('.')}")
+                    }
+                }
+                if (android.os.Build.VERSION.SDK_INT >= 33) {
+                    appContext.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+                } else {
+                    @Suppress("UnspecifiedRegisterReceiverFlag") appContext.registerReceiver(receiver, filter)
+                }
+            } catch (_: Throwable) { mediaReceiverRegistered = false }
+        }
+        val last = appContext.getSharedPreferences(AUTO_PREFS, Context.MODE_PRIVATE).getLong(KEY_LAST_AUTO_SCAN, 0L)
+        if (System.currentTimeMillis() - last > AUTO_SCAN_INTERVAL_MS) {
+            scheduleAutoForceScan(appContext, if (last == 0L) "first-run" else "daily")
+        }
+    }
+
+    private fun scheduleAutoForceScan(appContext: Context, reason: String) {
+        autoScanDebounceJob?.cancel()
+        autoScanDebounceJob = scope.launch {
+            delay(if (reason.startsWith("storage")) 8_000L else 20_000L)   // let the platform scanner / boot settle
+            if (_state.value.isScanning) { log("Auto scan ($reason) skipped · a scan is already running"); return@launch }
+            appContext.getSharedPreferences(AUTO_PREFS, Context.MODE_PRIVATE).edit()
+                .putLong(KEY_LAST_AUTO_SCAN, System.currentTimeMillis()).apply()
+            log("AUTO FORCE SCAN ($reason)")
+            triggerForceScan(appContext)
         }
     }
 
@@ -509,7 +563,8 @@ object MikuIngestEngine {
     fun triggerForceScan(context: Context) {
         val appContext = context.applicationContext
         log("FORCE SCAN · local SD + internal MediaScanner, then Miku Music library rescan")
-        nudgeMikuMusicLibrary(appContext)
+        // triggerRescan() nudges Miku Music itself once MediaScanner has finished — nudging here
+        // too made the player rescan a still-stale MediaStore and then rescan again seconds later.
         triggerRescan(appContext)
     }
 

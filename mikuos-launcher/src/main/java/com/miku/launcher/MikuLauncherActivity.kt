@@ -181,6 +181,8 @@ class MikuLauncherActivity : ComponentActivity() {
 
     companion object {
         var requestedRecentsOpen by mutableStateOf(false)
+        /** Set by an `open_ingest` launch extra (Miku Music's Ingress button) → opens the ingest observatory. */
+        var requestedIngestOpen by mutableStateOf(false)
     }
 
     private fun hideSystemBars() {
@@ -214,6 +216,9 @@ class MikuLauncherActivity : ComponentActivity() {
 
         if (intent?.getBooleanExtra("open_recents", false) == true) {
             requestedRecentsOpen = true
+        }
+        if (intent?.getBooleanExtra("open_ingest", false) == true) {
+            requestedIngestOpen = true
         }
 
         // Asynchronously initialize background system services, ADB & network daemons without blocking UI
@@ -408,6 +413,9 @@ class MikuLauncherActivity : ComponentActivity() {
         if (intent.getBooleanExtra("open_recents", false)) {
             requestedRecentsOpen = true
         }
+        if (intent.getBooleanExtra("open_ingest", false)) {
+            requestedIngestOpen = true
+        }
     }
 }
 
@@ -451,6 +459,13 @@ fun MikuLauncherScreen() {
             recentTasks = loadRecentTasks(ctx, allApps)
             isRecentsOpen = true
             MikuLauncherActivity.requestedRecentsOpen = false
+        }
+    }
+
+    LaunchedEffect(MikuLauncherActivity.requestedIngestOpen) {
+        if (MikuLauncherActivity.requestedIngestOpen) {
+            isFsIngestModalOpen = true
+            MikuLauncherActivity.requestedIngestOpen = false
         }
     }
 

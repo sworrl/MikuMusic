@@ -2226,8 +2226,28 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 }
             }
 
-            // Note: Ingress screen with Force Scan + automation is in the launcher, not here
-            // This app button will open the launcher's system ingress screen
+            Spacer(Modifier.height(8.dp))
+
+            // The SD-card scan controls (Quick / FORCE SCAN + unattended scans) live in the MikuOS
+            // launcher's ingest observatory — this button hands off to that system screen.
+            Button(
+                onClick = {
+                    val launch = ctx.packageManager.getLaunchIntentForPackage("com.miku.launcher")?.apply {
+                        putExtra("open_ingest", true)
+                        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    }
+                    if (launch == null) {
+                        android.widget.Toast.makeText(ctx, "MikuOS launcher not installed — ingress screen unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                    } else try { ctx.startActivity(launch) } catch (t: Throwable) {
+                        android.widget.Toast.makeText(ctx, "Couldn't open ingress screen: ${t.message}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = Color.White.copy(alpha = 0.08f)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("🛰 Open Ingress Engine (SD scan)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
         }
     }
 }

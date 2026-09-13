@@ -140,13 +140,38 @@ object CirrusLogicManager {
         }
     }
 
+    // ---- "All audio to max unless the user lowered it" (user directive 2026-09-13) ----
+    // These Global rows record an EXPLICIT user choice; the Miku player's best-audio enforcer
+    // (MikuDirectAudio.ensureBestAudio) pushes the maximum for every knob without a row and the
+    // user's value where one exists. Same keys as com.miku.player.MikuDirectAudio.
+    private const val KEY_USER_GAIN = "miku_audio_user_gain"
+    private const val KEY_USER_DRE = "miku_audio_user_dre"
+    private const val KEY_USER_HIGH_POWER = "miku_audio_user_high_power"
+
+    /**
+     * Push a vendor.audio.hiby.* value straight into the audio HAL via AudioManager.setParameters -
+     * the root-free channel that actually moves the DAC. The RootShell lines that follow it in the
+     * setters are kept for rooted builds only; on MikuOS (no su) they are no-ops.
+     */
+    private fun pushToHal(ctx: Context, key: String, value: String) {
+        runCatching {
+            val am = ctx.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            am?.setParameters("$key=$value")
+        }.onFailure { Log.w(TAG, "pushToHal $key failed: $it") }
+    }
+
     suspend fun setGainMode(ctx: Context, gain: GainMode) = withContext(Dispatchers.IO) {
         val cr = ctx.contentResolver
         val hp = if (gain == GainMode.HIGH) "hpower_enable" else "hpower_disable"
 
+        runCatching { Settings.Global.putString(cr, KEY_USER_GAIN, gain.id.lowercase()) }
+        runCatching { Settings.Global.putInt(cr, KEY_USER_HIGH_POWER, if (gain == GainMode.HIGH) 1 else 0) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", gain.id) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", gain.id) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power", hp) }
+        pushToHal(ctx, "vendor.audio.hiby.hw.gain", gain.id)
+        pushToHal(ctx, "vendor.audio.hiby.gain", gain.id)
+        pushToHal(ctx, "vendor.audio.hiby.hw.high_power_mode", hp)
 
         RootShell.execFast(
             "echo ${gain.id} > $SYSFS_BASE/gain; " +
@@ -181,7 +206,11 @@ object CirrusLogicManager {
         val cr = ctx.contentResolver
         val cmd = if (enabled) "dremode_enable" else "dremode_disable"
 
+        runCatching { Settings.Global.putInt(cr, KEY_USER_DRE, if (enabled) 1 else 0) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.dre_mode", cmd) }
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dre", if (enabled) 1 else 0) }
+        pushToHal(ctx, "vendor.audio.hiby.hw.dre", if (enabled) "1" else "0")
+        pushToHal(ctx, "vendor.audio.hiby.hw.dre_mode", cmd)
 
         RootShell.execFast(
             "echo $cmd > $SYSFS_BASE/dre_mode; " +
@@ -206,8 +235,12 @@ object CirrusLogicManager {
         val cr = ctx.contentResolver
         val cmd = if (enabled) "hpower_enable" else "hpower_disable"
 
+        runCatching { Settings.Global.putInt(cr, KEY_USER_HIGH_POWER, if (enabled) 1 else 0) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power", cmd) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power_mode", cmd) }
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.high_power", if (enabled) 1 else 0) }
+        pushToHal(ctx, "vendor.audio.hiby.hw.high_power", if (enabled) "1" else "0")
+        pushToHal(ctx, "vendor.audio.hiby.hw.high_power_mode", cmd)
 
         RootShell.execFast(
             "echo $cmd > $SYSFS_BASE/high_power_mode; " +

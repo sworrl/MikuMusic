@@ -102,8 +102,12 @@ object PlayerHolder {
         // Full-range volume: kill HiBy's "volume lock" (Settings.Global vendor.audio.hw.volume_lock)
         // which caps STREAM_MUSIC at index 35/40 on the phone-out jacks — see MikuDirectAudio.
         runCatching { MikuDirectAudio.ensureFullVolumeRange(app) }
-        // Best-audio mode: HIGH DAC gain, always (see MikuDirectAudio.ensureMaxGain).
-        runCatching { MikuDirectAudio.ensureMaxGain(app) }
+        // Best-audio mode: max gain / DRE / high-power unless the user lowered one in settings
+        // (see MikuDirectAudio.ensureBestAudio).
+        runCatching { MikuDirectAudio.ensureBestAudio(app) }
+        // BT: bind the A2DP proxy so the codec policy (LDAC 990 + best codec, unless lowered) is
+        // re-asserted on every connect while the player is alive.
+        runCatching { com.miku.player.bluetooth.MikuBluetoothController.init(app) }
         // Hi-fi pipeline is the ONLY pipeline: the bit-perfect DirectPCM sink (24/32-bit int
         // passthrough, float→24-bit, DTA DIRECT when allow-listed). The old "LibVLC / OpenSL ES"
         // engine preference was a 16-bit resampled path — it is no longer selectable, and any

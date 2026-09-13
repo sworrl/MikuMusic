@@ -1601,13 +1601,47 @@ fun BluetoothScreen(ctx: Context) {
     val pairedDevices by com.miku.settings.bluetooth.MikuBluetoothController.pairedDevices.collectAsState()
     val discoveredDevices by com.miku.settings.bluetooth.MikuBluetoothController.discoveredDevices.collectAsState()
 
-    val prefs = remember { ctx.getSharedPreferences("miku_bluetooth_prefs", Context.MODE_PRIVATE) }
-    // Codec preferences are read back from the REAL persist.* props applyCodecConfig writes —
-    // null = never set (the old code showed "990 kbps / aptX on / AAC on" from local defaults).
-    val codecPrefs = remember { com.miku.settings.bluetooth.MikuBluetoothController.readCodecPrefs() }
-    var ldacQuality by remember { mutableStateOf<String?>(codecPrefs.ldacQuality) }
-    var aptxEnabled by remember { mutableStateOf<Boolean?>(codecPrefs.aptx) }
-    var aacEnabled by remember { mutableStateOf<Boolean?>(codecPrefs.aac) }
+    // Codec policy (Settings.Global miku_bt_*): absent rows mean MAXIMUM, and the controller
+    // enforces this on every A2DP connect - so what is shown here is what the link gets.
+    val codecPolicy = remember { com.miku.settings.bluetooth.MikuBluetoothController.readCodecPolicy() }
+    var ldacQuality by remember { mutableStateOf(codecPolicy.ldacLabel) }
+    var aptxEnabled by remember { mutableStateOf(codecPolicy.aptx) }
+    var aacEnabled by remember { mutableStateOf(codecPolicy.aac) }
+    // AUDIO LOCKDOWN: any change BELOW maximum quality is held here until the user confirms it in
+    // the dialog below; raising quality applies immediately. Never a silent downgrade.
+    var pendingDowngrade by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    fun requestCodecChange(ldac: String, aptx: Boolean, aac: Boolean, what: String) {
+        val applied = com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldac, aptx, aac)
+        if (applied) {
+            ldacQuality = ldac; aptxEnabled = aptx; aacEnabled = aac
+        } else {
+            pendingDowngrade = what to {
+                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldac, aptx, aac, confirmed = true)
+                ldacQuality = ldac; aptxEnabled = aptx; aacEnabled = aac
+            }
+        }
+    }
+    pendingDowngrade?.let { (what, confirm) ->
+        AlertDialog(
+            onDismissRequest = { pendingDowngrade = null },
+            containerColor = MikuCardBg,
+            titleContentColor = Color.White,
+            textContentColor = MikuMuted,
+            title = { Text("Lower Bluetooth audio quality?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("$what\n\nMikuOS keeps Bluetooth on the highest quality your headphones support. " +
+                    "This change lets the link use a lower-quality codec or bitrate until you raise it again.")
+            },
+            confirmButton = {
+                TextButton(onClick = { confirm(); pendingDowngrade = null }) {
+                    Text("Lower quality", color = MikuPinkBright, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDowngrade = null }) { Text("Keep maximum", color = MikuTealBright) }
+            }
+        )
+    }
     // The codec A2DP is really negotiating right now (BluetoothA2dp.getCodecStatus) — null when idle.
     var activeCodec by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pairedDevices) {
@@ -1969,9 +2003,12 @@ fun BluetoothScreen(ctx: Context) {
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
                     )
-                    if (ldacQuality == null) {
-                        Text("Not set on this device — nothing is selected until you choose one", color = MikuMuted, fontSize = 11.sp)
-                    }
+                    Text(
+                        if (aptxEnabled && aacEnabled && ldacQuality.contains("990")) "Locked to maximum — re-applied on every connection"
+                        else "Lowered by you — MikuOS applies this instead of the maximum",
+                        color = if (aptxEnabled && aacEnabled && ldacQuality.contains("990")) MikuTealBright else MikuGold,
+                        fontSize = 11.sp
+                    )
                     Spacer(Modifier.height(6.dp))
 
                     val ldacOptions = listOf(
@@ -1988,21 +2025,13 @@ fun BluetoothScreen(ctx: Context) {
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (isSel) MikuTealBright.copy(alpha = 0.15f) else Color.Transparent)
-                                .clickable {
-                                    ldacQuality = opt
-                                    prefs.edit().putString("ldac_quality", opt).apply()
-                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled == true, aacEnabled == true)
-                                }
+                                .clickable { requestCodecChange(opt, aptxEnabled, aacEnabled, "LDAC bitrate → $opt") }
                                 .padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             RadioButton(
                                 selected = isSel,
-                                onClick = {
-                                    ldacQuality = opt
-                                    prefs.edit().putString("ldac_quality", opt).apply()
-                                    com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(opt, aptxEnabled == true, aacEnabled == true)
-                                },
+                                onClick = { requestCodecChange(opt, aptxEnabled, aacEnabled, "LDAC bitrate → $opt") },
                                 colors = RadioButtonDefaults.colors(
                                     selectedColor = MikuTealBright,
                                     unselectedColor = MikuMuted
@@ -2028,15 +2057,11 @@ fun BluetoothScreen(ctx: Context) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text("Qualcomm aptX / aptX HD", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                            Text(if (aptxEnabled == null) "Not set on this device (persist.vendor.bt.a2dp.aptx_hd unset)" else "Low-latency 24-bit audiophile streaming on supported gear", color = MikuMuted, fontSize = 11.5.sp)
+                            Text(if (aptxEnabled) "24-bit aptX HD / aptX on supported gear (off = falls back to AAC/SBC)" else "Disabled by you — aptX-only gear falls back to AAC/SBC", color = if (aptxEnabled) MikuMuted else MikuGold, fontSize = 11.5.sp)
                         }
                         Switch(
-                            checked = aptxEnabled == true,
-                            onCheckedChange = {
-                                aptxEnabled = it
-                                prefs.edit().putBoolean("aptx_enabled", it).apply()
-                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality ?: "", it, aacEnabled == true)
-                            },
+                            checked = aptxEnabled,
+                            onCheckedChange = { requestCodecChange(ldacQuality, it, aacEnabled, "Disable Qualcomm aptX / aptX HD") },
                             colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                         )
                     }
@@ -2051,15 +2076,11 @@ fun BluetoothScreen(ctx: Context) {
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text("AAC High Definition Audio", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                            Text(if (aacEnabled == null) "Not set on this device (persist.vendor.bt.a2dp.aac unset)" else "Advanced Audio Coding for Apple AirPods & Sony wireless gear", color = MikuMuted, fontSize = 11.5.sp)
+                            Text(if (aacEnabled) "Advanced Audio Coding for Apple AirPods & similar gear (off = SBC on AAC-only gear)" else "Disabled by you — AAC-only gear falls back to SBC", color = if (aacEnabled) MikuMuted else MikuGold, fontSize = 11.5.sp)
                         }
                         Switch(
-                            checked = aacEnabled == true,
-                            onCheckedChange = {
-                                aacEnabled = it
-                                prefs.edit().putBoolean("aac_enabled", it).apply()
-                                com.miku.settings.bluetooth.MikuBluetoothController.applyCodecConfig(ldacQuality ?: "", aptxEnabled == true, it)
-                            },
+                            checked = aacEnabled,
+                            onCheckedChange = { requestCodecChange(ldacQuality, aptxEnabled, it, "Disable AAC") },
                             colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
                         )
                     }

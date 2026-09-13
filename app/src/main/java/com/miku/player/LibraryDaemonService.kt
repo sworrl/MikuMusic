@@ -48,6 +48,11 @@ class LibraryDaemonService : Service() {
         try {
             com.miku.player.api.MikuApiServer.start(this)
         } catch (_: Throwable) {}
+        // Audio lockdown from boot: this daemon is the always-alive process, so it is where the
+        // "max unless the user lowered it" policy lives - best DAC gain/DRE/high-power now, and
+        // the BT codec policy (LDAC 990 + best codec) re-asserted on every A2DP connect.
+        runCatching { MikuDirectAudio.ensureBestAudio(this) }
+        runCatching { com.miku.player.bluetooth.MikuBluetoothController.init(this) }
 
         scope.launch {
             MikuSyncTransceiver.state.collect { sync ->

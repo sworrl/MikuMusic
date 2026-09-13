@@ -13,6 +13,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.miku.settings.RootShell
@@ -82,7 +83,11 @@ object MikuBluetoothController {
     private val profileListener = object : BluetoothProfile.ServiceListener {
         override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
             when (profile) {
-                BluetoothProfile.A2DP -> a2dpProfile = proxy
+                BluetoothProfile.A2DP -> {
+                    a2dpProfile = proxy
+                    // Sinks already connected when we bound get the codec policy re-asserted now.
+                    enforceCodecPolicy(reason = "a2dp proxy bound", delayMs = 500)
+                }
                 BluetoothProfile.HEADSET -> headsetProfile = proxy
                 4 -> hidHostProfile = proxy // HID_HOST = 4
                 21 -> hearingAidProfile = proxy // HEARING_AID = 21
@@ -181,6 +186,12 @@ object MikuBluetoothController {
                     val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, -1)
                     if (state == BluetoothProfile.STATE_CONNECTED || state == BluetoothProfile.STATE_DISCONNECTED) {
                         _connectingAddress.value = null
+                    }
+                    // Every A2DP connect re-asserts the codec policy (max unless the user lowered
+                    // it) so the link never sits on a silently-negotiated lower codec/bitrate.
+                    if (action == "android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED" &&
+                        state == BluetoothProfile.STATE_CONNECTED) {
+                        enforceCodecPolicy(reason = "a2dp connected", delayMs = 1500)
                     }
                     refreshDevices()
                 }
@@ -600,28 +611,6 @@ object MikuBluetoothController {
         }
     }
 
-    /** Read-only system property via SystemProperties (no root). Null when unset/unreadable. */
-    private fun sysProp(key: String): String? = try {
-        (Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
-            .invoke(null, key) as? String)?.trim()?.takeIf { it.isNotEmpty() }
-    } catch (_: Throwable) { null }
-
-    /** What [applyCodecConfig] actually persisted, read back from the REAL props (null = never set). */
-    data class CodecPrefs(val ldacQuality: String?, val aptx: Boolean?, val aac: Boolean?)
-
-    fun readCodecPrefs(): CodecPrefs {
-        val ldac = when (sysProp("persist.bluetooth.ldac.quality") ?: sysProp("persist.vendor.bt.a2dp.ldac.quality")) {
-            "1000" -> "Sound Quality (990 kbps)"
-            "1001" -> "Balanced (660 kbps)"
-            "1002" -> "Connection (330 kbps)"
-            "1003" -> "Adaptive Bitrate"
-            else -> null
-        }
-        val aptx = sysProp("persist.vendor.bt.a2dp.aptx_hd")?.let { it.equals("true", true) }
-        val aac = sysProp("persist.vendor.bt.a2dp.aac")?.let { it.equals("true", true) }
-        return CodecPrefs(ldac, aptx, aac)
-    }
-
     /**
      * The codec the A2DP stack is REALLY using right now for the active device, from
      * BluetoothA2dp.getCodecStatus() (SystemApi — reachable because we are platform-signed).
@@ -657,22 +646,203 @@ object MikuBluetoothController {
         }
     }
 
-    fun applyCodecConfig(ldacQuality: String, aptx: Boolean, aac: Boolean) {
+    // ------------------------------------------------------------------------------------------
+    // BT CODEC POLICY (AUDIO LOCKDOWN, user directive 2026-08-27 / 2026-09-13)
+    //
+    // "Force BT to the highest quality unless the user sets lower in settings." The policy is a
+    // handful of Settings.Global rows; a row that is ABSENT means "maximum". It is enforced (not
+    // merely selectable) on every A2DP connect and every A2DP proxy bind, through the root-free
+    // BluetoothA2dp.setCodecConfigPreference path (BLUETOOTH_PRIVILEGED, held by this
+    // platform-signed build). The stack's own local priority order is already
+    // LDAC > aptX HD > aptX > AAC > SBC, so re-asserting LDAC at HIGHEST priority with the
+    // 990 kbps quality mode pins the best codec the sink offers; a sink that only speaks SBC
+    // simply keeps SBC (the stack ignores a preference the peer cannot select).
+    // ------------------------------------------------------------------------------------------
+    const val KEY_BT_LOCKED = "miku_bt_quality_locked"   // 1 (default): downgrades need confirmed=true
+    const val KEY_BT_LDAC = "miku_bt_ldac_quality"       // 1000 990k (default) / 1001 660k / 1002 330k / 1003 ABR
+    const val KEY_BT_APTX = "miku_bt_aptx_enabled"       // 1 (default) / 0
+    const val KEY_BT_AAC = "miku_bt_aac_enabled"         // 1 (default) / 0
+
+    private const val CODEC_TYPE_SBC = 0
+    private const val CODEC_TYPE_AAC = 1
+    private const val CODEC_TYPE_APTX = 2
+    private const val CODEC_TYPE_APTX_HD = 3
+    private const val CODEC_TYPE_LDAC = 4                // BluetoothCodecConfig.SOURCE_CODEC_TYPE_LDAC
+    private const val CODEC_PRIORITY_DISABLED = -1
+    private const val CODEC_PRIORITY_DEFAULT = 0
+    private const val CODEC_PRIORITY_HIGHEST = 1000000
+    const val LDAC_990 = 1000L
+    const val LDAC_660 = 1001L
+    const val LDAC_330 = 1002L
+    const val LDAC_ABR = 1003L
+
+    data class CodecPolicy(val ldacSpecific1: Long, val aptx: Boolean, val aac: Boolean) {
+        val isMax: Boolean get() = ldacSpecific1 == LDAC_990 && aptx && aac
+        val ldacLabel: String get() = ldacLabelFor(ldacSpecific1)
+    }
+
+    fun ldacLabelFor(specific1: Long): String = when (specific1) {
+        LDAC_990 -> "Sound Quality (990 kbps)"
+        LDAC_660 -> "Balanced (660 kbps)"
+        LDAC_330 -> "Connection (330 kbps)"
+        else -> "Adaptive Bitrate"
+    }
+
+    fun ldacSpecific1For(label: String): Long = when {
+        label.contains("990") -> LDAC_990
+        label.contains("660") -> LDAC_660
+        label.contains("330") -> LDAC_330
+        label.contains("Adaptive", ignoreCase = true) -> LDAC_ABR
+        else -> LDAC_990
+    }
+
+    /** The policy the enforcer applies. Missing rows = maximum, so a fresh image is at max. */
+    fun readCodecPolicy(): CodecPolicy {
+        val cr = appContext?.contentResolver ?: return CodecPolicy(LDAC_990, aptx = true, aac = true)
+        val ldac = runCatching { Settings.Global.getLong(cr, KEY_BT_LDAC) }.getOrDefault(LDAC_990)
+            .takeIf { it in LDAC_990..LDAC_ABR } ?: LDAC_990
+        val aptx = runCatching { Settings.Global.getInt(cr, KEY_BT_APTX) }.getOrDefault(1) == 1
+        val aac = runCatching { Settings.Global.getInt(cr, KEY_BT_AAC) }.getOrDefault(1) == 1
+        return CodecPolicy(ldac, aptx, aac)
+    }
+
+    fun isQualityLocked(): Boolean {
+        val cr = appContext?.contentResolver ?: return true
+        return runCatching { Settings.Global.getInt(cr, KEY_BT_LOCKED, 1) == 1 }.getOrDefault(true)
+    }
+
+    /**
+     * Change the BT codec policy. While the lock is on (default), anything BELOW the maximum
+     * (LDAC 990 with aptX/aptX HD and AAC enabled) is REFUSED unless [confirmed] is true — the
+     * settings UI shows an explicit confirmation dialog and calls back with confirmed=true.
+     * Raising quality always applies silently. Returns true if applied, false if blocked.
+     */
+    fun applyCodecConfig(ldacQuality: String, aptx: Boolean, aac: Boolean, confirmed: Boolean = false): Boolean {
+        val wanted = CodecPolicy(ldacSpecific1For(ldacQuality), aptx, aac)
+        if (isQualityLocked() && !wanted.isMax && !confirmed) {
+            Log.w(TAG, "codec downgrade to $wanted BLOCKED by audio lockdown (needs explicit GUI confirm)")
+            return false
+        }
+        val cr = appContext?.contentResolver ?: return false
+        val before = readCodecPolicy()
+        runCatching {
+            Settings.Global.putLong(cr, KEY_BT_LDAC, wanted.ldacSpecific1)
+            Settings.Global.putInt(cr, KEY_BT_APTX, if (wanted.aptx) 1 else 0)
+            Settings.Global.putInt(cr, KEY_BT_AAC, if (wanted.aac) 1 else 0)
+        }.onFailure { Log.w(TAG, "applyCodecConfig: Settings.Global write refused: $it") }
+        // A codec the user just re-enabled has to be pushed back to DEFAULT priority once; the
+        // connect-time enforcer only re-asserts disables (the stack's default is "enabled").
+        val reenable = (wanted.aptx && !before.aptx) || (wanted.aac && !before.aac)
+        enforceCodecPolicy(reason = "user change", pushEnables = reenable)
+        return true
+    }
+
+    /**
+     * Re-assert the codec policy on every connected A2DP sink. Called on A2DP proxy bind, on
+     * every A2DP connect, and after a policy change. Idempotent: pushing a preference the link
+     * already satisfies causes no reconfiguration, so this never interrupts audio needlessly.
+     */
+    fun enforceCodecPolicy(reason: String = "enforce", pushEnables: Boolean = false, delayMs: Long = 0L) {
         scope.launch(Dispatchers.IO) {
-            try {
-                val ldacVal = when {
-                    ldacQuality.contains("990") -> "1000" // 990 kbps high quality
-                    ldacQuality.contains("660") -> "1001" // 660 kbps balanced
-                    ldacQuality.contains("330") -> "1002" // 330 kbps connection
-                    else -> "1003" // adaptive
+            if (delayMs > 0) kotlinx.coroutines.delay(delayMs)
+            val a2dp = a2dpProfile ?: run {
+                Log.i(TAG, "enforceCodecPolicy($reason): no A2DP proxy bound yet - will apply on bind")
+                return@launch
+            }
+            val devices = runCatching { a2dp.connectedDevices }.getOrNull().orEmpty()
+            if (devices.isEmpty()) {
+                Log.i(TAG, "enforceCodecPolicy($reason): no connected A2DP sink - will apply on connect")
+                return@launch
+            }
+            val policy = readCodecPolicy()
+            for (d in devices) {
+                val status = currentCodec(a2dp, d)
+                val ldacSelectable = status?.selectable?.contains(CODEC_TYPE_LDAC) ?: true
+                val needLdac = when {
+                    !ldacSelectable -> false                       // sink cannot do LDAC: nothing to force
+                    status == null -> true                         // unknown state: assert the policy
+                    status.type != CODEC_TYPE_LDAC -> true         // LDAC available but not in use
+                    else -> status.specific1 != policy.ldacSpecific1 // wrong bitrate mode
                 }
-                RootShell.execFast(
-                    "setprop persist.bluetooth.ldac.quality $ldacVal; " +
-                    "setprop persist.vendor.bt.a2dp.ldac.quality $ldacVal; " +
-                    "setprop persist.vendor.bt.a2dp.aptx_hd ${if (aptx) "true" else "false"}; " +
-                    "setprop persist.vendor.bt.a2dp.aac ${if (aac) "true" else "false"}"
-                )
-            } catch (_: Throwable) {}
+                var pushed = 0
+                if (needLdac && pushPreference(a2dp, d, CODEC_TYPE_LDAC, CODEC_PRIORITY_HIGHEST, policy.ldacSpecific1)) pushed++
+                // Disables the user chose (each is a confirmed downgrade) are re-asserted every
+                // connect; enables are pushed only right after the user flips a codec back on.
+                for (t in listOf(CODEC_TYPE_APTX_HD, CODEC_TYPE_APTX)) {
+                    if (!policy.aptx) { if (pushPreference(a2dp, d, t, CODEC_PRIORITY_DISABLED, 0L)) pushed++ }
+                    else if (pushEnables) { if (pushPreference(a2dp, d, t, CODEC_PRIORITY_DEFAULT, 0L)) pushed++ }
+                }
+                if (!policy.aac) { if (pushPreference(a2dp, d, CODEC_TYPE_AAC, CODEC_PRIORITY_DISABLED, 0L)) pushed++ }
+                else if (pushEnables) { if (pushPreference(a2dp, d, CODEC_TYPE_AAC, CODEC_PRIORITY_DEFAULT, 0L)) pushed++ }
+                Log.i(TAG, "enforceCodecPolicy($reason) ${d.address}: current=${status?.describe() ?: "unknown"} " +
+                    "policy=${policy.ldacLabel} aptx=${policy.aptx} aac=${policy.aac} pushed=$pushed")
+            }
         }
     }
+
+    private class CodecSnapshot(val type: Int, val specific1: Long, val selectable: Set<Int>) {
+        fun describe(): String = "${codecName(type)}(specific1=$specific1) selectable=${selectable.map { codecName(it) }}"
+    }
+
+    private fun codecName(type: Int): String = when (type) {
+        CODEC_TYPE_SBC -> "SBC"; CODEC_TYPE_AAC -> "AAC"; CODEC_TYPE_APTX -> "aptX"
+        CODEC_TYPE_APTX_HD -> "aptX HD"; CODEC_TYPE_LDAC -> "LDAC"; 5 -> "LC3"; 6 -> "Opus"
+        else -> "codec#$type"
+    }
+
+    /** What the stack is REALLY using for [d] (BluetoothA2dp.getCodecStatus, SystemApi). Null = unknown. */
+    private fun currentCodec(a2dp: BluetoothProfile, d: BluetoothDevice): CodecSnapshot? = runCatching {
+        val status = a2dp.javaClass.getMethod("getCodecStatus", BluetoothDevice::class.java).invoke(a2dp, d) ?: return null
+        val cfg = status.javaClass.getMethod("getCodecConfig").invoke(status) ?: return null
+        val type = cfg.javaClass.getMethod("getCodecType").invoke(cfg) as Int
+        val spec1 = (cfg.javaClass.getMethod("getCodecSpecific1").invoke(cfg) as? Long) ?: 0L
+        val selectable = runCatching {
+            @Suppress("UNCHECKED_CAST")
+            val list = status.javaClass.getMethod("getCodecsSelectableCapabilities").invoke(status) as? List<Any>
+            list.orEmpty().mapNotNull { c -> runCatching { c.javaClass.getMethod("getCodecType").invoke(c) as Int }.getOrNull() }.toSet()
+        }.getOrDefault(emptySet())
+        CodecSnapshot(type, spec1, selectable)
+    }.getOrNull()
+
+    /**
+     * Build a BluetoothCodecConfig for [codecType] at [priority] (+ LDAC quality in [specific1]).
+     * Fully reflective so this compiles against any SDK level; null when the platform exposes
+     * neither the public Builder nor the legacy constructor. 0 for sample rate / bits / channel
+     * mode means "no preference": the stack keeps the highest mutually supported values, so a
+     * preference never downgrades the link.
+     */
+    private fun buildCodecConfig(codecType: Int, priority: Int, specific1: Long): Any? = runCatching {
+        val builderCls = runCatching { Class.forName("android.bluetooth.BluetoothCodecConfig\$Builder") }.getOrNull()
+        if (builderCls != null) {
+            val b = builderCls.getDeclaredConstructor().newInstance()
+            builderCls.getMethod("setCodecType", Int::class.javaPrimitiveType).invoke(b, codecType)
+            builderCls.getMethod("setCodecPriority", Int::class.javaPrimitiveType).invoke(b, priority)
+            builderCls.getMethod("setCodecSpecific1", Long::class.javaPrimitiveType).invoke(b, specific1)
+            return@runCatching builderCls.getMethod("build").invoke(b)
+        }
+        val cfgCls = Class.forName("android.bluetooth.BluetoothCodecConfig")
+        val ctor = cfgCls.getConstructor(
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            Long::class.javaPrimitiveType, Long::class.javaPrimitiveType,
+            Long::class.javaPrimitiveType, Long::class.javaPrimitiveType
+        )
+        ctor.newInstance(codecType, priority, 0, 0, 0, specific1, 0L, 0L, 0L)
+    }.getOrNull()
+
+    /** setCodecConfigPreference on one sink. True only if the stack accepted the call. */
+    private fun pushPreference(a2dp: BluetoothProfile, d: BluetoothDevice, codecType: Int, priority: Int, specific1: Long): Boolean {
+        val cfg = buildCodecConfig(codecType, priority, specific1) ?: run {
+            Log.w(TAG, "pushPreference: BluetoothCodecConfig not constructible on this platform")
+            return false
+        }
+        return runCatching {
+            val m = a2dp.javaClass.getMethod("setCodecConfigPreference", BluetoothDevice::class.java, cfg.javaClass)
+            m.isAccessible = true
+            m.invoke(a2dp, d, cfg)
+        }.onFailure { Log.w(TAG, "setCodecConfigPreference(${codecName(codecType)} prio=$priority) refused for ${d.address}: $it") }.isSuccess
+    }
+
+    /** Re-assert the policy (max unless the user lowered it). Kept for existing callers. */
+    fun enforceMaxCodec() = enforceCodecPolicy(reason = "enforceMaxCodec")
 }

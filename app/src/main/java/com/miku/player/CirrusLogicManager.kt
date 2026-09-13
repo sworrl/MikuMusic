@@ -137,6 +137,8 @@ object CirrusLogicManager {
 
     suspend fun setGainMode(ctx: Context, gain: GainMode) = withContext(Dispatchers.IO) {
         val cr = ctx.contentResolver
+        // Explicit user choice: the best-audio enforcer re-applies this instead of forcing HIGH.
+        MikuDirectAudio.rememberUserGain(ctx, gain.sysfsValue)
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", gain.sysfsValue) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", gain.sysfsValue) }
 
@@ -279,6 +281,7 @@ object CirrusLogicManager {
 
     suspend fun setDreEnabled(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
         val cr = ctx.contentResolver
+        MikuDirectAudio.rememberUserDre(ctx, enabled)
         val v = if (enabled) 1 else 0
         val sysfsStr = if (enabled) "dremode_enable" else "dremode_disable"
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dre", v) }
@@ -297,6 +300,7 @@ object CirrusLogicManager {
 
     suspend fun setHighPowerEnabled(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
         val cr = ctx.contentResolver
+        MikuDirectAudio.rememberUserHighPower(ctx, enabled)
         val v = if (enabled) 1 else 0
         val sysfsStr = if (enabled) "hpower_enable" else "hpower_disable"
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.high_power", v) }

@@ -144,12 +144,67 @@ object MikuDirectAudio {
      * root-free way to actually move the hardware; the old su/sysfs path silently no-opped).
      * Idempotent and cheap; safe to call on every player start.
      */
-    fun ensureMaxGain(ctx: Context) {
+    fun ensureMaxGain(ctx: Context) = ensureBestAudio(ctx)
+
+    // ---- "All audio to max unless the user lowered it" (user directive 2026-09-13) ----
+    // Each knob has a Settings.Global row that ONLY the settings UIs write when the user makes an
+    // explicit choice. No row = the enforcer pushes the maximum; a row = the user's own value is
+    // what gets (re)applied. The rows live in Global so the player, MikuOS Settings and M500
+    // Hardware Settings all agree.
+    const val KEY_USER_GAIN = "miku_audio_user_gain"              // "high" | "low"
+    const val KEY_USER_DRE = "miku_audio_user_dre"                // 1 | 0
+    const val KEY_USER_HIGH_POWER = "miku_audio_user_high_power"  // 1 | 0
+
+    /** Record an explicit user choice so [ensureBestAudio] applies it instead of the maximum. */
+    fun rememberUserGain(ctx: Context, gain: String) =
+        runCatching { Settings.Global.putString(ctx.contentResolver, KEY_USER_GAIN, gain.lowercase()) }
+    fun rememberUserDre(ctx: Context, enabled: Boolean) =
+        runCatching { Settings.Global.putInt(ctx.contentResolver, KEY_USER_DRE, if (enabled) 1 else 0) }
+    fun rememberUserHighPower(ctx: Context, enabled: Boolean) =
+        runCatching { Settings.Global.putInt(ctx.contentResolver, KEY_USER_HIGH_POWER, if (enabled) 1 else 0) }
+
+    data class AudioPolicy(val gain: String, val dre: Boolean, val highPower: Boolean) {
+        val isMax: Boolean get() = gain == "high" && dre && highPower
+    }
+
+    fun readAudioPolicy(ctx: Context): AudioPolicy {
         val cr = ctx.contentResolver
-        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", "high") }
-        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", "high") }
-        pushToHal(ctx, "vendor.audio.hiby.hw.gain", "high")
-        pushToHal(ctx, "vendor.audio.hiby.gain", "high")
+        val gain = runCatching { Settings.Global.getString(cr, KEY_USER_GAIN) }.getOrNull()
+            ?.trim()?.lowercase()?.takeIf { it == "low" || it == "high" } ?: "high"
+        val dre = runCatching { Settings.Global.getInt(cr, KEY_USER_DRE) }.getOrDefault(1) == 1
+        val hp = runCatching { Settings.Global.getInt(cr, KEY_USER_HIGH_POWER) }.getOrDefault(1) == 1
+        return AudioPolicy(gain, dre, hp)
+    }
+
+    /**
+     * BEST AUDIO MODE, enforced: push the CS43198 pair to HIGH gain, DRE on (Dynamic Range
+     * Enhancement = more effective resolution at low volume) and high-power output - unless the
+     * user explicitly lowered one of them in a settings UI, in which case that choice is what
+     * gets re-applied. Writes the Settings rows the HiBy framework/SystemUI read AND pushes the
+     * parameters into the audio HAL (the only root-free way to actually move the hardware; the
+     * old su/sysfs path silently no-opped). Idempotent and cheap; runs on every player start.
+     */
+    fun ensureBestAudio(ctx: Context) {
+        val cr = ctx.contentResolver
+        val p = readAudioPolicy(ctx)
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", p.gain) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", p.gain) }
+        pushToHal(ctx, "vendor.audio.hiby.hw.gain", p.gain)
+        pushToHal(ctx, "vendor.audio.hiby.gain", p.gain)
+
+        val dreStr = if (p.dre) "dremode_enable" else "dremode_disable"
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dre", if (p.dre) 1 else 0) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.dre_mode", dreStr) }
+        pushToHal(ctx, "vendor.audio.hiby.hw.dre", if (p.dre) "1" else "0")
+        pushToHal(ctx, "vendor.audio.hiby.hw.dre_mode", dreStr)
+
+        val hpStr = if (p.highPower) "hpower_enable" else "hpower_disable"
+        runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.high_power", if (p.highPower) 1 else 0) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power", hpStr) }
+        runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.high_power_mode", hpStr) }
+        pushToHal(ctx, "vendor.audio.hiby.hw.high_power", if (p.highPower) "1" else "0")
+        pushToHal(ctx, "vendor.audio.hiby.hw.high_power_mode", hpStr)
+        Log.i(TAG, "ensureBestAudio: gain=${p.gain} dre=${p.dre} highPower=${p.highPower} (max=${p.isMax})")
     }
 
     /** Read the HAL's live direct-output state back for truthful verification. */
