@@ -150,16 +150,49 @@ object PulsarLight {
         } catch (_: Throwable) { false }
     }
 
+    /**
+     * Is the indicator actually writable? Probed ONCE, without `su` (see the no-root directive):
+     * if the sysfs nodes aren't there for us, every write in this object is a no-op and the BPM loop
+     * is pure waste. It used to run regardless — `delay(110L)` around a `writeDual` that shelled out
+     * to a nonexistent `su`, plus an `isDeviceCharging()` sticky-broadcast binder call, ~9x a second
+     * forever. Measured cost: the launcher's main thread pinned while the user was listening, which
+     * starved Miku Music's render thread and culled the whole projectM preset library as "slow".
+     */
+    private val ledWritable: Boolean by lazy {
+        val ok = sequenceOf("$SYSFS_RED/brightness", "$SYSFS_BLUE/brightness", "$SYSFS_SGM/red_current")
+            .any { path -> runCatching { java.io.File(path).canWrite() }.getOrDefault(false) }
+        if (!ok) Log.i(TAG, "Pulsar indicator not writable by this process — LED effects disabled (see PulsarLight KDoc)")
+        ok
+    }
+
     fun startBpmSync(ctx: Context) {
         if (bpmJob?.isActive == true) return
+        if (!ledWritable) return          // dead hardware on this unit: never spin the loop
         com.miku.launcher.bpm.MikuBpmEngine.startListening(ctx)
         bpmJob = bpmScope.launch {
             var chargeStep = 0
+            // Charging state arrives by broadcast instead of a registerReceiver() binder round-trip
+            // on every one of these iterations.
+            var charging = isDeviceCharging(ctx)
+            val chargeWatcher = object : android.content.BroadcastReceiver() {
+                override fun onReceive(c: Context?, i: android.content.Intent?) {
+                    val st = i?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+                    charging = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                        st == android.os.BatteryManager.BATTERY_STATUS_FULL
+                }
+            }
+            runCatching {
+                ctx.registerReceiver(chargeWatcher, android.content.IntentFilter().apply {
+                    addAction(android.content.Intent.ACTION_POWER_CONNECTED)
+                    addAction(android.content.Intent.ACTION_POWER_DISCONNECTED)
+                })
+            }
+            try {
             while (isActive) {
                 val mode = getMode(ctx)
                 val isBpmEnabled = isBpmSyncEnabled(ctx)
                 val bpmState = com.miku.launcher.bpm.MikuBpmEngine.state.value
-                val isCharging = isDeviceCharging(ctx)
+                val isCharging = charging
                 val bright = getBrightness(ctx)
 
                 if (mode == Mode.AUDIOPHILE_AUTO || mode == Mode.BATTERY_MONITOR) {
@@ -206,6 +239,9 @@ object PulsarLight {
                 } else {
                     delay(500L)
                 }
+            }
+            } finally {
+                runCatching { ctx.unregisterReceiver(chargeWatcher) }
             }
         }
     }

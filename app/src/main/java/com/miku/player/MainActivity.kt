@@ -445,6 +445,13 @@ class MainActivity : ComponentActivity() {
         // Automated SD card LOCAL rescans (never network — see MikuIngestGate for the ingress engine)
         schedulePeriodicLibraryScan(this)
 
+        // Warm the projectM preset library off the GL thread. The shipped library is ~9.8k presets
+        // (assets/presets_pack.zip); unpacking it the first time a visualizer opens would stall that
+        // first frame for tens of seconds, so do it here, once, in the background.
+        Thread {
+            runCatching { ProjectMNative.ensurePresets(applicationContext) }
+        }.apply { priority = Thread.MIN_PRIORITY; isDaemon = true }.start()
+
         // Tell the platform to hold a stable, un-throttled CPU/GPU clock state (no governor
         // hunting/lag) exactly while we're actually busy — playing audio, which is also when the
         // projectM visualizer is doing its heaviest continuous GL work. This is a hint, not a

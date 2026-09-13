@@ -185,6 +185,8 @@ class MikuLauncherActivity : ComponentActivity() {
         var requestedIngestOpen by mutableStateOf(false)
         /** Set when the HOME intent re-arrives while we're already on top (gesture-pill swipe up): dismiss overlays. */
         var requestedHome by mutableStateOf(false)
+        /** Set by an `open_battery` launch extra (Miku Music Settings → Battery & Power Core). */
+        var requestedBatteryOpen by mutableStateOf(false)
     }
 
     private fun hideSystemBars() {
@@ -221,6 +223,9 @@ class MikuLauncherActivity : ComponentActivity() {
         }
         if (intent?.getBooleanExtra("open_ingest", false) == true) {
             requestedIngestOpen = true
+        }
+        if (intent?.getBooleanExtra("open_battery", false) == true) {
+            requestedBatteryOpen = true
         }
 
         // Asynchronously initialize background system services, ADB & network daemons without blocking UI
@@ -418,6 +423,9 @@ class MikuLauncherActivity : ComponentActivity() {
         if (intent.getBooleanExtra("open_ingest", false)) {
             requestedIngestOpen = true
         }
+        if (intent.getBooleanExtra("open_battery", false)) {
+            requestedBatteryOpen = true
+        }
         // Pixel behaviour: the home gesture while the app drawer / recents are open closes them.
         if (intent.hasCategory(Intent.CATEGORY_HOME) && !intent.getBooleanExtra("open_recents", false)) {
             requestedHome = true
@@ -472,6 +480,13 @@ fun MikuLauncherScreen() {
         if (MikuLauncherActivity.requestedIngestOpen) {
             isFsIngestModalOpen = true
             MikuLauncherActivity.requestedIngestOpen = false
+        }
+    }
+
+    LaunchedEffect(MikuLauncherActivity.requestedBatteryOpen) {
+        if (MikuLauncherActivity.requestedBatteryOpen) {
+            isBatteryObservatoryOpen = true
+            MikuLauncherActivity.requestedBatteryOpen = false
         }
     }
 

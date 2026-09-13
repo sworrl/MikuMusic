@@ -41,19 +41,59 @@ object ProjectMNative {
      * Sync the bundled .milk presets from assets into a real dir, returning its path (or null).
      * Fast-paths when already synced so switching between Now Playing and Tape Mode is instant.
      */
+    /**
+     * Identity of the shipped preset library. Bump whenever assets/presets_pack.zip or the loose
+     * assets/presets/ set changes — the marker file below is compared against it, and a mismatch
+     * re-syncs. (A plain file-count comparison is not usable any more: the pack holds ~9.8k entries,
+     * so listing and diffing them on every launch would cost more than the sync it guards.)
+     */
+    private const val PRESET_LIBRARY_ID = "v2-cotc9795+curated"
+    private const val PRESET_PACK_ASSET = "presets_pack.zip"
+
+    /**
+     * Safe to call from the GL thread and from a background warm-up at the same time: the first
+     * caller does the unpack while the other blocks, instead of both writing the same ~9.8k files.
+     */
+    @Synchronized
     fun ensurePresets(ctx: Context): String? {
         cachedPresetPath?.let { return it }
         return try {
             val out = java.io.File(ctx.filesDir, "presets"); out.mkdirs()
-            val names = (ctx.assets.list("presets") ?: return null).toSet()
-            val existing = out.list()?.toSet() ?: emptySet()
-            if (existing.size != names.size || !existing.containsAll(names)) {
-                (existing - names).forEach { runCatching { java.io.File(out, it).delete() } }   // drop stale
-                (names - existing).forEach { n ->                                                // add missing
-                    ctx.assets.open("presets/$n").use { input ->
-                        java.io.File(out, n).outputStream().use { input.copyTo(it) }
+            val marker = java.io.File(out, ".library_id")
+            val synced = runCatching { marker.readText().trim() }.getOrNull()
+            if (synced != PRESET_LIBRARY_ID) {
+                // 1. The bulk pack (projectM "cream of the crop", flattened). One zip stream beats
+                //    ~9.8k individual AssetManager.open() calls by an order of magnitude, and this
+                //    runs once per library version, not per launch.
+                runCatching {
+                    ctx.assets.open(PRESET_PACK_ASSET).use { raw ->
+                        java.util.zip.ZipInputStream(raw.buffered()).use { zin ->
+                            var n = 0
+                            while (true) {
+                                val e = zin.nextEntry ?: break
+                                val name = e.name.substringAfterLast('/')
+                                if (!e.isDirectory && name.endsWith(".milk", ignoreCase = true)) {
+                                    java.io.File(out, name).outputStream().buffered().use { zin.copyTo(it) }
+                                    n++
+                                }
+                                zin.closeEntry()
+                            }
+                            android.util.Log.i("projectM", "preset pack unpacked: $n presets")
+                        }
+                    }
+                }.onFailure { android.util.Log.w("projectM", "preset pack unpack failed: $it") }
+
+                // 2. The curated/Miku presets land LAST so they win any name clash with the pack.
+                val names = ctx.assets.list("presets")?.toList() ?: emptyList()
+                names.forEach { n ->
+                    runCatching {
+                        ctx.assets.open("presets/$n").use { input ->
+                            java.io.File(out, n).outputStream().use { input.copyTo(it) }
+                        }
                     }
                 }
+                runCatching { marker.writeText(PRESET_LIBRARY_ID) }
+                android.util.Log.i("projectM", "preset library synced: ${out.list()?.size ?: 0} files")
             }
             cachedPresetPath = out.absolutePath
             cachedPresetPath
@@ -118,9 +158,18 @@ object ProjectMNative {
  * Ledger lives at filesDir/preset_perf.json: { "<preset>": {strikes, fps, disabled} }.
  */
 object PresetPerf {
-    private const val LOW_FPS = 30
-    private const val CONSEC_LOW = 2
+    // Bars calibrated to this device: a 60 Hz panel with an Adreno 610. projectM at 24-30 fps is
+    // perfectly watchable, so the old LOW_FPS=30 bar culled presets that looked fine — and because
+    // a CPU-starved run measures every preset low, the ledger blacklisted all 145 of them and the
+    // stage then skipped ~2x a second forever. Only genuinely unwatchable frame rates cull now.
+    private const val LOW_FPS = 18
+    private const val SEVERE_FPS = 8
+    private const val CONSEC_LOW = 4          // sustained, not a one-second dip behind a GC
     private const val MAX_STRIKES = 2
+    /** Never let the ledger blacklist the library out from under the user. */
+    private const val MAX_DISABLED_FRACTION = 0.5f
+    /** Floor between automatic preset advances, so a cull can never become a visual strobe. */
+    private const val ADVANCE_COOLDOWN_MS = 8_000L
     private data class Entry(var strikes: Int, var fps: Int, var disabled: Boolean)
     private val data = HashMap<String, Entry>()
     private var file: java.io.File? = null
@@ -130,6 +179,17 @@ object PresetPerf {
     private var lowRun = 0
     private var struckThisRun = false
     private var graceUntil = 0L
+    private var lastAdvanceMs = 0L
+
+    /** Rate-limited auto-advance: returns true if the skip was actually issued. */
+    private fun advance(why: String): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastAdvanceMs < ADVANCE_COOLDOWN_MS) return false
+        lastAdvanceMs = now
+        android.util.Log.i("projectM-perf", "auto-advance ($why)")
+        ProjectMNative.requestNext()
+        return true
+    }
 
     @Synchronized private fun ensure(ctx: Context) {
         if (loaded) return
@@ -143,15 +203,19 @@ object PresetPerf {
                     val e = o.getJSONObject(k)
                     val strikes = e.optInt("strikes")
                     val fps = e.optInt("fps")
-                    var disabled = e.optBoolean("disabled")
-
-                    // Retroactive Audit: Cull any low-fps preset (< 22 FPS or >= 2 strikes) recorded in local DB
-                    if (!disabled && ((fps in 1..22) || strikes >= 2)) {
-                        disabled = true
-                        dirty = true
-                        android.util.Log.w("projectM-perf", "Retroactive cull: \"$k\" (fps=$fps, strikes=$strikes) -> DISABLED")
-                    }
+                    val disabled = e.optBoolean("disabled")
+                    // No retroactive cull. The old audit disabled everything recorded under 22 fps,
+                    // which is how a single CPU-starved run permanently blacklisted the whole library.
                     data[k] = Entry(strikes, fps, disabled)
+                }
+                // Self-heal: a ledger that has disabled (almost) everything is measurement noise,
+                // not 145 genuinely broken presets. Wipe it and let them re-qualify.
+                val disabledCount = data.values.count { it.disabled }
+                if (data.isNotEmpty() && disabledCount >= data.size * MAX_DISABLED_FRACTION) {
+                    android.util.Log.w("projectM-perf",
+                        "ledger disabled $disabledCount/${data.size} presets — resetting (starved measurement, not real)")
+                    data.clear()
+                    dirty = true
                 }
                 if (dirty) persist()
             }
@@ -187,8 +251,7 @@ object PresetPerf {
 
         // Must check isDisabled BEFORE grace period so blacklisted presets skip immediately
         if (isDisabled(name)) {
-            android.util.Log.i("projectM-perf", "Skipping blacklisted preset: \"$name\"")
-            ProjectMNative.requestNext()
+            advance("blacklisted \"$name\"")   // cooldown-limited: never a skip storm
             return
         }
 
@@ -197,18 +260,23 @@ object PresetPerf {
         lowRun = if (fps < LOW_FPS) lowRun + 1 else 0
 
         // Severe low FPS (< 18 FPS) takes ONE STRIKE to be instantly culled!
-        val severe = fps in 1..17
+        val severe = fps in 1..SEVERE_FPS
         if ((lowRun >= CONSEC_LOW || severe) && !struckThisRun) {
             struckThisRun = true
             synchronized(this) {
                 val e = data.getOrPut(name) { Entry(0, fps, false) }
                 e.strikes = if (severe) MAX_STRIKES else e.strikes + 1
                 e.fps = fps
-                if (e.strikes >= MAX_STRIKES || severe) e.disabled = true
+                // Refuse to disable past the floor: with half the library already culled the problem
+                // is the device being starved, not the presets, and culling further leaves nothing.
+                val disabledCount = data.values.count { it.disabled }
+                val roomToCull = disabledCount < (data.size * MAX_DISABLED_FRACTION).toInt().coerceAtLeast(4)
+                if ((e.strikes >= MAX_STRIKES || severe) && roomToCull) e.disabled = true
                 persist()
                 android.util.Log.w("projectM-perf",
-                    "low fps $fps on \"$name\" — strike ${e.strikes}${if (e.disabled) " → DISABLED & CULLED" else ""}")
-                if (e.disabled) ProjectMNative.requestNext()
+                    "low fps $fps on \"$name\" — strike ${e.strikes}" +
+                        if (e.disabled) " → DISABLED" else if (!roomToCull) " (cull floor reached, kept)" else "")
+                if (e.disabled) advance("culled \"$name\" at $fps fps")
             }
         }
     }
