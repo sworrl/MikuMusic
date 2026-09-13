@@ -16,7 +16,6 @@ import android.os.Build
 import android.provider.Settings
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.miku.player.RootShell
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -239,45 +238,75 @@ object MikuBluetoothController {
         refreshDevices()
     }
 
+    private val BT_RUNTIME_PERMS = listOf(
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.BLUETOOTH_ADVERTISE",
+        "android.permission.ACCESS_FINE_LOCATION"
+    )
+    private val MIKU_PACKAGES = listOf(
+        "com.miku.player",
+        "com.miku.settings",
+        "com.miku.systemui",
+        "com.miku.launcher"
+    )
+
+    @Volatile private var permsEnsured = false
+
+    /**
+     * Grant the Miku suite its Bluetooth runtime permissions WITHOUT a shell.
+     *
+     * The old implementation shelled `pm grant ...` through su, which does not exist on MikuOS, so
+     * a denied BLUETOOTH_CONNECT stayed denied while scanning silently returned nothing. The
+     * root-free equivalent is PackageManager.grantRuntimePermission (hidden, guarded by the
+     * signature permission GRANT_RUNTIME_PERMISSIONS) - which this platform-signed build holds.
+     * Anything the platform refuses is logged, never papered over. Runs once per process.
+     */
     private fun ensurePermissions() {
+        if (permsEnsured) return
+        permsEnsured = true
+        val ctx = appContext ?: return
         scope.launch(Dispatchers.IO) {
-            try {
-                RootShell.execFast(
-                    "pm grant com.miku.settings android.permission.BLUETOOTH_CONNECT 2>/dev/null; " +
-                    "pm grant com.miku.settings android.permission.BLUETOOTH_SCAN 2>/dev/null; " +
-                    "pm grant com.miku.settings android.permission.BLUETOOTH_ADVERTISE 2>/dev/null; " +
-                    "pm grant com.miku.settings android.permission.ACCESS_FINE_LOCATION 2>/dev/null; " +
-                    "pm grant com.miku.player android.permission.BLUETOOTH_CONNECT 2>/dev/null; " +
-                    "pm grant com.miku.player android.permission.BLUETOOTH_SCAN 2>/dev/null; " +
-                    "pm grant com.miku.player android.permission.BLUETOOTH_ADVERTISE 2>/dev/null; " +
-                    "pm grant com.miku.player android.permission.ACCESS_FINE_LOCATION 2>/dev/null; " +
-                    "pm grant com.miku.systemui android.permission.BLUETOOTH_CONNECT 2>/dev/null; " +
-                    "pm grant com.miku.systemui android.permission.BLUETOOTH_SCAN 2>/dev/null; " +
-                    "pm grant com.miku.launcher android.permission.BLUETOOTH_CONNECT 2>/dev/null; " +
-                    "pm grant com.miku.launcher android.permission.BLUETOOTH_SCAN 2>/dev/null"
+            val pm = ctx.packageManager
+            val grant = runCatching {
+                pm.javaClass.getMethod(
+                    "grantRuntimePermission",
+                    String::class.java, String::class.java, android.os.UserHandle::class.java
                 )
-            } catch (_: Throwable) {}
+            }.getOrNull()
+            if (grant == null) {
+                Log.w(TAG, "ensurePermissions: PackageManager.grantRuntimePermission unavailable - relying on manifest/user grants")
+                return@launch
+            }
+            val user = android.os.Process.myUserHandle()
+            for (pkg in MIKU_PACKAGES) {
+                val installed = runCatching { pm.getPackageInfo(pkg, 0); true }.getOrDefault(false)
+                if (!installed) continue
+                for (perm in BT_RUNTIME_PERMS) {
+                    if (pm.checkPermission(perm, pkg) == android.content.pm.PackageManager.PERMISSION_GRANTED) continue
+                    val ok = runCatching { grant.invoke(pm, pkg, perm, user) }.isSuccess
+                    if (!ok) Log.w(TAG, "ensurePermissions: platform refused $perm for $pkg")
+                }
+            }
         }
     }
 
     fun toggleBluetooth(enable: Boolean) {
         scope.launch(Dispatchers.IO) {
             try {
+                // BluetoothAdapter.enable()/disable() IS the privileged path here: this build is
+                // platform-signed and holds BLUETOOTH_CONNECT + BLUETOOTH_PRIVILEGED. The `svc` /
+                // `cmd bluetooth_manager` shell-outs that used to follow needed su and never ran.
                 if (enable) {
                     @Suppress("DEPRECATION")
                     bluetoothAdapter?.enable()
-                    RootShell.execFast("svc bluetooth enable 2>/dev/null || cmd bluetooth_manager enable 2>/dev/null")
                 } else {
                     stopScan()
                     @Suppress("DEPRECATION")
                     bluetoothAdapter?.disable()
-                    RootShell.execFast("svc bluetooth disable 2>/dev/null || cmd bluetooth_manager disable 2>/dev/null")
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "Standard enable/disable failed: ${t.message}")
-                try {
-                    RootShell.execFast(if (enable) "svc bluetooth enable" else "svc bluetooth disable")
-                } catch (_: Throwable) {}
+                Log.w(TAG, "Bluetooth enable/disable refused by the platform: ${t.message}")
             }
             kotlinx.coroutines.delay(600)
             withContext(Dispatchers.Main) {
@@ -419,8 +448,8 @@ object MikuBluetoothController {
                     } catch (_: Throwable) {}
                 }
 
-                // 3. Command-line fallback via cmd bluetooth_manager
-                RootShell.execFast("cmd bluetooth_manager connect ${device.address} 2>/dev/null")
+                // (The old `cmd bluetooth_manager connect` shell-out that sat here needed su and
+                // never ran; the profile-proxy connect() calls above are the real, privileged path.)
 
                 kotlinx.coroutines.delay(1200)
                 refreshDevices()
@@ -468,7 +497,6 @@ object MikuBluetoothController {
                     } catch (_: Throwable) {}
                 }
 
-                RootShell.execFast("cmd bluetooth_manager disconnect ${device.address} 2>/dev/null")
                 kotlinx.coroutines.delay(500)
                 refreshDevices()
             } catch (t: Throwable) {
@@ -623,22 +651,80 @@ object MikuBluetoothController {
             return false
         }
         scope.launch(Dispatchers.IO) {
-            try {
-                val ldacVal = when {
-                    ldacQuality.contains("990") -> "1000"
-                    ldacQuality.contains("660") -> "1001"
-                    ldacQuality.contains("330") -> "1002"
-                    else -> "1003"
-                }
-                RootShell.execFast(
-                    "setprop persist.bluetooth.ldac.quality $ldacVal; " +
-                    "setprop persist.vendor.bt.a2dp.ldac.quality $ldacVal; " +
-                    "setprop persist.vendor.bt.a2dp.aptx_hd ${if (aptx) "true" else "false"}; " +
-                    "setprop persist.vendor.bt.a2dp.aac ${if (aac) "true" else "false"}"
-                )
-            } catch (_: Throwable) {}
+            // LDAC "quality" is codec-specific field 1 on the A2DP codec config:
+            //   1000 = 990 kbps, 1001 = 660, 1002 = 330, 1003 = adaptive bitrate.
+            val ldacVal = when {
+                ldacQuality.contains("990") -> 1000L
+                ldacQuality.contains("660") -> 1001L
+                ldacQuality.contains("330") -> 1002L
+                else -> 1003L
+            }
+            // Root-free path: BluetoothA2dp.setCodecConfigPreference (BLUETOOTH_PRIVILEGED, held by
+            // this platform-signed build). The old `setprop persist.bluetooth.ldac.quality ...`
+            // line ran through su and therefore never executed on MikuOS - the codec stayed on
+            // whatever the stack negotiated while the UI reported the change had applied.
+            val applied = applyLdacPreference(ldacVal)
+            Log.i(TAG, "codec preference ldac=$ldacQuality (specific1=$ldacVal) applied=$applied aptxHdRequested=$aptx aacRequested=$aac")
         }
         return true
+    }
+
+    private const val CODEC_TYPE_LDAC = 4            // BluetoothCodecConfig.SOURCE_CODEC_TYPE_LDAC
+    private const val CODEC_PRIORITY_HIGHEST = 1000000
+
+    /**
+     * Build a BluetoothCodecConfig asking for LDAC at [specific1]. Fully reflective so this
+     * compiles against any SDK level; returns null when the platform exposes neither the public
+     * Builder nor the legacy constructor.
+     */
+    private fun buildLdacCodecConfig(specific1: Long): Any? = runCatching {
+        val builderCls = runCatching { Class.forName("android.bluetooth.BluetoothCodecConfig\$Builder") }.getOrNull()
+        if (builderCls != null) {
+            val b = builderCls.getDeclaredConstructor().newInstance()
+            builderCls.getMethod("setCodecType", Int::class.javaPrimitiveType).invoke(b, CODEC_TYPE_LDAC)
+            builderCls.getMethod("setCodecPriority", Int::class.javaPrimitiveType).invoke(b, CODEC_PRIORITY_HIGHEST)
+            builderCls.getMethod("setCodecSpecific1", Long::class.javaPrimitiveType).invoke(b, specific1)
+            return@runCatching builderCls.getMethod("build").invoke(b)
+        }
+        val cfgCls = Class.forName("android.bluetooth.BluetoothCodecConfig")
+        val ctor = cfgCls.getConstructor(
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+            Long::class.javaPrimitiveType, Long::class.javaPrimitiveType,
+            Long::class.javaPrimitiveType, Long::class.javaPrimitiveType
+        )
+        // 0 for sample rate / bits-per-sample / channel mode means "no preference" - the stack keeps
+        // the highest mutually supported values, so this never downgrades the link.
+        ctor.newInstance(CODEC_TYPE_LDAC, CODEC_PRIORITY_HIGHEST, 0, 0, 0, specific1, 0L, 0L, 0L)
+    }.getOrNull()
+
+    /** Push the LDAC preference onto every connected A2DP sink. True only if one actually took it. */
+    private fun applyLdacPreference(specific1: Long): Boolean {
+        val a2dp = a2dpProfile ?: run {
+            Log.w(TAG, "applyLdacPreference: no A2DP proxy bound yet")
+            return false
+        }
+        val devices = runCatching { a2dp.connectedDevices }.getOrNull().orEmpty()
+        if (devices.isEmpty()) {
+            Log.i(TAG, "applyLdacPreference: no connected A2DP sink - preference will be re-applied on connect")
+            return false
+        }
+        val cfg = buildLdacCodecConfig(specific1) ?: run {
+            Log.w(TAG, "applyLdacPreference: BluetoothCodecConfig not constructible on this platform")
+            return false
+        }
+        var any = false
+        for (d in devices) {
+            val ok = runCatching {
+                val m = a2dp.javaClass.getMethod(
+                    "setCodecConfigPreference", BluetoothDevice::class.java, cfg.javaClass
+                )
+                m.isAccessible = true
+                m.invoke(a2dp, d, cfg)
+            }.onFailure { Log.w(TAG, "setCodecConfigPreference refused for ${d.address}: $it") }.isSuccess
+            if (ok) any = true
+        }
+        return any
     }
 
     /** Re-assert the maximum BT codec (LDAC 990 + aptX-HD). Called on BT connect / boot so the

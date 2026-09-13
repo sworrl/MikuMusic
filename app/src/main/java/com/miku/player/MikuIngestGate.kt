@@ -28,7 +28,7 @@ object MikuIngestGate {
     fun setEnabled(ctx: Context, enabled: Boolean): Boolean {
         val v = if (enabled) 1 else 0
         val ok = runCatching { Settings.Global.putInt(ctx.contentResolver, KEY, v) }.getOrDefault(false)
-        if (!ok) RootShell.execFast("settings put global $KEY $v")
+        if (!ok) android.util.Log.w("MikuIngestGate", "could not write $KEY (WRITE_SECURE_SETTINGS missing?) - returning failure")
         MikuSyncTransceiver.ingestEnabledFlag = enabled
         return ok
     }

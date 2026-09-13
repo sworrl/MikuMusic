@@ -43,9 +43,22 @@ Java_com_miku_player_ProjectMNative_nativeInit(JNIEnv* /*env*/, jobject /*thiz*/
     projectm_set_aspect_correction(s_pm, true);
     projectm_set_preset_duration(s_pm, 30.0);
     projectm_set_soft_cut_duration(s_pm, 3.0);
-    projectm_set_hard_cut_enabled(s_pm, true);
-    projectm_set_hard_cut_sensitivity(s_pm, 1.0f);
-    projectm_set_beat_sensitivity(s_pm, 1.2f);
+
+    // Hard cuts are beat-triggered preset changes. They were ON here with the sensitivity
+    // THRESHOLD set to 1.0 — half of projectM's 2.0 default, so it fired on half the volume
+    // delta — and with beat sensitivity pushed to 1.2, while the minimum-display-time gate
+    // (projectm_set_hard_cut_duration) was never set at all. On anything percussive that meant a
+    // new preset almost every beat.
+    //
+    // They stay off. A hard cut costs a full preset load, which on this GPU means recompiling
+    // shaders mid-frame — it is both the ugliest and the most expensive way to change preset, and
+    // the 30 s soft rotation above already keeps the view moving. The duration is still set above
+    // the preset duration because projectM's own docs give that as the way to disable hard cuts,
+    // so the gate holds even if something re-enables the flag.
+    projectm_set_hard_cut_enabled(s_pm, false);
+    projectm_set_hard_cut_duration(s_pm, 60.0);
+    projectm_set_hard_cut_sensitivity(s_pm, 3.0f);
+    projectm_set_beat_sensitivity(s_pm, 1.0f);
 
     s_playlist = projectm_playlist_create(s_pm);
     if (s_playlist) {

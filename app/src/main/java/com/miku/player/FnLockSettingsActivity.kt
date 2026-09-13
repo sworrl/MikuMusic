@@ -198,8 +198,11 @@ fun FnLockSettingsScreen(onBack: () -> Unit) {
                                         fnMode = id
                                         try {
                                             android.provider.Settings.Global.putString(cr, "fn_settings", id)
-                                        } catch (_: Throwable) {
-                                            scope.launch(Dispatchers.IO) { RootShell.execFast("settings put global fn_settings $id") }
+                                        } catch (t: Throwable) {
+                                            // WRITE_SECURE_SETTINGS is a platform grant on this build; a
+                                            // failure here is a permission bug to fix, not something a
+                                            // (non-existent) su shell can paper over.
+                                            android.util.Log.w("FnLockSettings", "fn_settings write refused: $t")
                                         }
                                         val isCurrentlyLocked = android.provider.Settings.Global.getInt(cr, "fn_status", 0) == 1
                                         if (isCurrentlyLocked) {
@@ -215,8 +218,11 @@ fun FnLockSettingsScreen(onBack: () -> Unit) {
                                         fnMode = id
                                         try {
                                             android.provider.Settings.Global.putString(cr, "fn_settings", id)
-                                        } catch (_: Throwable) {
-                                            scope.launch(Dispatchers.IO) { RootShell.execFast("settings put global fn_settings $id") }
+                                        } catch (t: Throwable) {
+                                            // WRITE_SECURE_SETTINGS is a platform grant on this build; a
+                                            // failure here is a permission bug to fix, not something a
+                                            // (non-existent) su shell can paper over.
+                                            android.util.Log.w("FnLockSettings", "fn_settings write refused: $t")
                                         }
                                         val isCurrentlyLocked = android.provider.Settings.Global.getInt(cr, "fn_status", 0) == 1
                                         if (isCurrentlyLocked) {
@@ -271,8 +277,8 @@ fun FnLockSettingsScreen(onBack: () -> Unit) {
                                     val v = if (it) 1 else 0
                                     try {
                                         android.provider.Settings.Global.putInt(cr, "m500_fn_allow_volume_wheel", v)
-                                    } catch (_: Throwable) {
-                                        scope.launch(Dispatchers.IO) { RootShell.execFast("settings put global m500_fn_allow_volume_wheel $v") }
+                                    } catch (t: Throwable) {
+                                        android.util.Log.w("FnLockSettings", "m500_fn_allow_volume_wheel write refused: $t")
                                     }
                                     val isCurrentlyLocked = android.provider.Settings.Global.getInt(cr, "fn_status", 0) == 1
                                     if (isCurrentlyLocked) {
@@ -304,8 +310,8 @@ fun FnLockSettingsScreen(onBack: () -> Unit) {
                                     val v = if (it) 1 else 0
                                     try {
                                         android.provider.Settings.Global.putInt(cr, "m500_fn_lock_power_button", v)
-                                    } catch (_: Throwable) {
-                                        scope.launch(Dispatchers.IO) { RootShell.execFast("settings put global m500_fn_lock_power_button $v") }
+                                    } catch (t: Throwable) {
+                                        android.util.Log.w("FnLockSettings", "m500_fn_lock_power_button write refused: $t")
                                     }
                                     val isCurrentlyLocked = android.provider.Settings.Global.getInt(cr, "fn_status", 0) == 1
                                     if (isCurrentlyLocked) {

@@ -121,7 +121,9 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            isRooted = android.os.Process.myUid() == 1000 || RootShell.isAvailable() || ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            // "Privileged" here means the platform grants this build actually holds - system UID
+            // or WRITE_SECURE_SETTINGS. Root is never part of the answer on MikuOS.
+            isRooted = android.os.Process.myUid() == 1000 || ctx.checkSelfPermission(android.Manifest.permission.WRITE_SECURE_SETTINGS) == android.content.pm.PackageManager.PERMISSION_GRANTED
             csFilter = CirrusLogicManager.getDigitalFilter(ctx)
             csGain = CirrusLogicManager.getGainMode(ctx)
             csDre = CirrusLogicManager.isDreEnabled(ctx)

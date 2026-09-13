@@ -9,6 +9,28 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 object RootShell {
+    /**
+     * ROOT IS OPTIONAL. MikuOS never requires su: every feature has a platform-signed, root-free
+     * path, and that path is what ships. Root is a power-user ENHANCEMENT — where it exists it can
+     * unlock extra hardware, and this class is how that gets used.
+     *
+     * This flag only stops us PAYING to ask when the answer is no. execFast forked `su -c` per
+     * call, and the LED animation loops call it every 35 ms, so on an unrooted unit the process
+     * forked and logged a stack trace about thirty times a second, forever. Probe once, remember,
+     * stop paying. The answer is not permanent — [recheck] clears it for a user who grants root
+     * later; never call recheck from a hot loop.
+     */
+    @Volatile private var suAbsent = false
+    private val loggedAbsence = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun latchAbsent(reason: String) {
+        suAbsent = true
+        if (loggedAbsence.compareAndSet(false, true)) {
+            Log.i(TAG, "no root available ($reason) - optional root-backed extras are off. " +
+                "This is the normal supported state on MikuOS; every feature has a root-free path.")
+        }
+    }
+
     private const val TAG = "MikuOS_RootShell"
     private const val DELIMITER = "__MIKU_SETTINGS_EOF__"
 
@@ -19,6 +41,7 @@ object RootShell {
     @Volatile private var isSessionActive = false
 
     fun isAvailable(): Boolean {
+        if (suAbsent) return false
         lock.withLock {
             if (isSessionActive && suProcess?.isAlive == true) return true
             return initSessionInternal()
@@ -26,11 +49,14 @@ object RootShell {
     }
 
     fun exec(cmd: String): Boolean {
+        if (suAbsent) return false
         val out = execOut(cmd)
         return out != null
     }
 
     fun execFast(cmd: String) {
+        // The fork-per-call that made this the flood source. One latched check, then nothing.
+        if (suAbsent) return
         try {
             Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
         } catch (_: Throwable) {
@@ -52,6 +78,7 @@ object RootShell {
     }
 
     fun execOut(cmd: String): String? {
+        if (suAbsent) return null
         lock.withLock {
             if (!isSessionActive || suProcess?.isAlive != true) {
                 if (!initSessionInternal()) return null

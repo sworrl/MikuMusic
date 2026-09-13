@@ -738,8 +738,12 @@ fun MikuDisplaySettingsModal(onDismissRequest: () -> Unit) {
                                     val intVal = (next * 255).toInt().coerceIn(1, 255)
                                     try {
                                         Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_BRIGHTNESS, intVal)
-                                    } catch (_: Throwable) {}
-                                    RootShell.execFast("settings put system screen_brightness $intVal")
+                                    } catch (t: Throwable) {
+                                        // WRITE_SETTINGS is granted to this platform-signed build; if it
+                                        // ever fails, say so rather than shelling out to a su that does
+                                        // not exist on MikuOS.
+                                        android.util.Log.w("MikuSettings", "screen_brightness write refused: $t")
+                                    }
                                 },
                                 colors = SliderDefaults.colors(
                                     thumbColor = Color(0xFFFFD600),
@@ -777,8 +781,8 @@ fun MikuDisplaySettingsModal(onDismissRequest: () -> Unit) {
                                         // alone is a no-op on this device — there's no hardware ambient light sensor).
                                         com.miku.player.brightness.MikuAmbientLightService.setEnabled(ctx, it)
                                         val mode = if (it) Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC else Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL
-                                        try { Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, mode) } catch (_: Throwable) {}
-                                        RootShell.execFast("settings put system screen_brightness_mode $mode")
+                                        try { Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE, mode) }
+                                        catch (t: Throwable) { android.util.Log.w("MikuSettings", "screen_brightness_mode write refused: $t") }
                                     }
                                 }
                             )
@@ -809,8 +813,8 @@ fun MikuDisplaySettingsModal(onDismissRequest: () -> Unit) {
                                             .clickable {
                                                 screenTimeoutMs = ms
                                                 val v = if (ms == -1) Int.MAX_VALUE else ms
-                                                try { Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, v) } catch (_: Throwable) {}
-                                                RootShell.execFast("settings put system screen_off_timeout $v")
+                                                try { Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, v) }
+                                                catch (t: Throwable) { android.util.Log.w("MikuSettings", "screen_off_timeout write refused: $t") }
                                             }
                                             .padding(vertical = 8.dp),
                                         contentAlignment = Alignment.Center
@@ -832,8 +836,8 @@ fun MikuDisplaySettingsModal(onDismissRequest: () -> Unit) {
                                             .clickable {
                                                 screenTimeoutMs = ms
                                                 val v = if (ms == -1) 2147483647 else ms
-                                                try { Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, v) } catch (_: Throwable) {}
-                                                RootShell.execFast("settings put system screen_off_timeout $v")
+                                                try { Settings.System.putInt(ctx.contentResolver, Settings.System.SCREEN_OFF_TIMEOUT, v) }
+                                                catch (t: Throwable) { android.util.Log.w("MikuSettings", "screen_off_timeout write refused: $t") }
                                             }
                                             .padding(vertical = 8.dp),
                                         contentAlignment = Alignment.Center
@@ -1479,8 +1483,9 @@ fun MikuSecuritySettingsModal(onDismissRequest: () -> Unit) {
                                     val disabled = if (it) 0 else 1
                                     try {
                                         Settings.Secure.putInt(ctx.contentResolver, "camera_double_tap_power_gesture_disabled", disabled)
-                                    } catch (_: Throwable) {}
-                                    RootShell.execFast("settings put secure camera_double_tap_power_gesture_disabled $disabled")
+                                    } catch (t: Throwable) {
+                                        android.util.Log.w("MikuSettings", "camera_double_tap_power_gesture_disabled write refused: $t")
+                                    }
                                 }
                             )
                         }

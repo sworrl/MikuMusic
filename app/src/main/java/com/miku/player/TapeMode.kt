@@ -306,6 +306,85 @@ private val TAPE_THEMES = listOf(
         accent = Color(0xFF66FF88), wallAlpha = 0.90f, cavityAlpha = 0.40f, welded = true),
 )
 
+/**
+ * The cassette grade the CURRENT TRACK earns, derived from its real measured format.
+ *
+ * This is not decoration bolted on top — the IEC cassette grades are a genuine quality ladder that
+ * lines up almost exactly with the digital one, so a better file gets a better physical tape:
+ *
+ *   TYPE I   Ferric (Fe2O3), 120µs EQ   — the cheap brown oxide tape. Lossy under ~192 kbps.
+ *   TYPE I+  Ferric premium             — lossy 192-320 kbps.
+ *   TYPE II  Chrome (CrO2), 70µs EQ     — the enthusiast tape. Lossless 16-bit up to 48 kHz.
+ *   TYPE IV  Metal particle, 70µs EQ    — the best tape ever sold. 24-bit up to 96 kHz.
+ *   MASTER   Studio mastering stock     — 24-bit above 96 kHz, 32-bit, or DSD.
+ *
+ * Everything here comes off the file: [TrackTech] reads bit depth and sample rate out of the FLAC
+ * or WAV header (or MediaExtractor for m4a/ALAC), and the bitrate is MediaStore's. Nothing is
+ * guessed. While a probe is still in flight TrackTech returns null and we sit at [UNKNOWN], which
+ * renders as the plain mid-grade shell with no badge rather than inventing a grade.
+ */
+private data class TapeGrade(
+    val rank: Int,                 // 0 unknown, 1 ferric … 5 master. Drives every visual below.
+    val typeLabel: String,         // "TYPE II" — the stamp on the shell
+    val formulation: String,       // "HIGH BIAS CHROME (CrO2)" — the fine print under it
+    val eq: String,                // "70µs EQ"
+    val oxideHi: Color,            // tape pack colour: real ferric IS brown, real metal IS black
+    val oxideLo: Color,
+    val detail: String             // "24 bit · 96.0 kHz" — the actual measured numbers
+) {
+    /** 0f (worst) … 1f (best). The single knob most visual modifiers ride on. */
+    val q: Float get() = if (rank <= 0) 0.45f else ((rank - 1) / 4f).coerceIn(0f, 1f)
+    /** Grime: low-grade tapes are dusty, scuffed, print-through-y. Hi-res stock is pristine. */
+    val wear: Float get() = if (rank <= 0) 0.5f else (1f - q).coerceIn(0f, 1f)
+    val isKnown: Boolean get() = rank > 0
+}
+
+private val GRADE_UNKNOWN = TapeGrade(
+    0, "", "", "",
+    oxideHi = Color(0xFF4A3728), oxideLo = Color(0xFF251A12),
+    detail = ""
+)
+
+/**
+ * Grade the track from its real format. `bits`/`sr` are TrackTech's measured values (null =
+ * not probed yet, 0 = lossy by definition), `bitrate` is MediaStore's kbps.
+ */
+private fun gradeFor(bits: Int?, sr: Int?, bitrateKbps: Int): TapeGrade {
+    // Lossless path: TrackTech only reports a non-zero bit depth for formats it actually parsed.
+    if (bits != null && bits > 0 && sr != null && sr > 0) {
+        val khz = sr / 1000f
+        val detail = "$bits bit · ${String.format("%.1f", khz)} kHz"
+        return when {
+            bits >= 32 || sr > 96000 -> TapeGrade(
+                5, "MASTER", "STUDIO MASTERING STOCK · HIGH COERCIVITY", "70µs EQ",
+                oxideHi = Color(0xFF241E18), oxideLo = Color(0xFF0B0907), detail = detail
+            )
+            bits >= 24 -> TapeGrade(
+                4, "TYPE IV", "METAL PARTICLE POSITION · IEC IV", "70µs EQ",
+                oxideHi = Color(0xFF2A2C31), oxideLo = Color(0xFF0D0E11), detail = detail
+            )
+            sr > 48000 -> TapeGrade(
+                4, "TYPE IV", "METAL PARTICLE POSITION · IEC IV", "70µs EQ",
+                oxideHi = Color(0xFF2A2C31), oxideLo = Color(0xFF0D0E11), detail = detail
+            )
+            else -> TapeGrade(
+                3, "TYPE II", "HIGH BIAS CHROME (CrO2) · IEC II", "70µs EQ",
+                oxideHi = Color(0xFF3A302A), oxideLo = Color(0xFF16110E), detail = detail
+            )
+        }
+    }
+    // Lossy path, or nothing measured yet.
+    if (bits == null) return GRADE_UNKNOWN          // probe still in flight — claim nothing
+    val detail = if (bitrateKbps > 0) "$bitrateKbps kbps" else "lossy"
+    return if (bitrateKbps >= 192) TapeGrade(
+        2, "TYPE I", "PREMIUM FERRIC (Fe2O3) · IEC I", "120µs EQ",
+        oxideHi = Color(0xFF5A4230), oxideLo = Color(0xFF2B1E14), detail = detail
+    ) else TapeGrade(
+        1, "TYPE I", "NORMAL FERRIC (Fe2O3) · IEC I", "120µs EQ",
+        oxideHi = Color(0xFF6B4F35), oxideLo = Color(0xFF352316), detail = detail
+    )
+}
+
 private data class LabelParams(val pen: Color, val rot: Float, val offX: Float, val offY: Float)
 
 /** One randomized deckled-tear edge: irregular tooth count, spacing, and depth — never the same
@@ -346,6 +425,8 @@ private val PEN_COLORS = listOf(
  */
 @Composable
 fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
+    // Cassette mode is watched, not touched - hold the screen on for as long as it is up.
+    KeepScreenAwake()
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     DisposableEffect(player) {
         val l = object : Player.Listener { override fun onIsPlayingChanged(p: Boolean) { isPlaying = p } }
@@ -380,6 +461,31 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
     }
     val progress = (pos.toFloat() / dur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
     val ctx = androidx.compose.ui.platform.LocalContext.current
+
+    // ── What grade of tape this track has earned ──────────────────────────────────────────────
+    // Measured, never assumed: TrackTech parses the FLAC/WAV header (or MediaExtractor for
+    // m4a/ALAC) and returns null until that probe lands, which grades as UNKNOWN and shows no
+    // stamp at all rather than claiming a type the file has not proven. A better file literally
+    // gets better tape stock — blacker oxide, cleaner plastic, harder specular, less grime.
+    val techBits = TrackTech.bitsFor(ctx, track)
+    val techRate = TrackTech.sampleRateFor(ctx, track)
+    val grade = remember(track.id, techBits, techRate) { gradeFor(techBits, techRate, track.bitrateKbps) }
+
+    // ── The travelling key light ──────────────────────────────────────────────────────────────
+    // One slow triangle wave shared by the room, the shell specular, the flake fire and the window
+    // glass, so every highlight in the scene agrees about where the lamp is. Paused while the
+    // screen is idle — it is the only always-on animation in this view and there is nobody to see
+    // it move once the display has dimmed.
+    val lightTransition = rememberInfiniteTransition(label = "tapeLight")
+    val lightRaw by lightTransition.animateFloat(
+        initialValue = 0f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 9000, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "tapeLightPos"
+    )
+    val light = if (IdleController.screenActive) lightRaw else 0.5f
     // Theme is STICKY (persisted until deliberately changed) and swapping takes a LONG-PRESS —
     // a single tap can no longer flip your cassette by accident.
     var themeIdx by remember { mutableStateOf(PlayerPreferences.loadTapeTheme(ctx)) }
@@ -414,13 +520,29 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
     // The supply reel (L) and take-up reel (R) spin at independent speeds proportional to 1/Radius!
     fun calcPackR(fill: Float) = sqrt(PACK_MIN_R * PACK_MIN_R + (PACK_MAX_R * PACK_MAX_R - PACK_MIN_R * PACK_MIN_R) * fill.coerceIn(0f, 1f))
 
+    // Transport speed as a FRACTION of nominal, not a boolean. A real deck's reels do not stop the
+    // instant you hit pause — the motor cuts and the pack coasts down against its own inertia, and
+    // on play it spools back up. Driving the physics loop off this instead of `isPlaying` is what
+    // buys that. It also keeps running for the ~1s of coast after a pause, then parks.
+    var transport by remember { mutableFloatStateOf(if (player.isPlaying) 1f else 0f) }
+
     LaunchedEffect(isPlaying) {
-        while (isPlaying) {
+        // Spin the loop while the deck is moving OR still coasting to a halt.
+        while (isPlaying || transport > 0.001f) {
             // Reel rotation is purely decorative — nobody's watching it spin with the screen off,
             // and the real per-tick cost here (sqrt + divisions, not just a counter) makes this
             // the heaviest of the app's idle-ungated loops. Coarse check-back while idle instead
             // of computing physics for reels nobody can see.
             if (!IdleController.screenActive) { delay(500); continue }
+
+            // Capstan spool-up / coast-down. Up is quicker than down: the motor drives the pinch
+            // roller on, but only friction stops it again.
+            transport = if (isPlaying) {
+                (transport + 0.085f).coerceAtMost(1f)
+            } else {
+                (transport * 0.90f - 0.004f).coerceAtLeast(0f)
+            }
+
             val curPos = try { player.currentPosition } catch (_: Throwable) { 0L }
             val curDur = try { if (player.duration > 0) player.duration else dur } catch (_: Throwable) { dur }
             val curProgress = (curPos.toFloat() / curDur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
@@ -429,14 +551,27 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
 
             // Standard compact cassette linear tape speed: v = 4.76 cm/s = 47.6 mm/s.
             // Instantaneous angular velocity omega = v / R (rad/s) converted to degrees/frame.
-            val baseSpeed = 47.6f // exact linear tape drive velocity (mm/s)
-            val dAngleL = (baseSpeed / leftR) * 0.032f * 57.2958f
-            val dAngleR = (baseSpeed / rightR) * 0.032f * 57.2958f
+            //
+            // Wow (slow, ~0.5 Hz, from a slightly out-of-round capstan or pack) and flutter (fast,
+            // ~12 Hz, from guide friction) are the two defects every analogue transport has, and
+            // the reason tape never sounds perfectly locked. A cheap ferric tape on a cheap deck
+            // wanders audibly; metal stock on a good transport barely does. So the amount of
+            // wander here is scaled by the grade the FILE earned: a 128 kbps rip visibly wows,
+            // a 24/96 master runs almost dead steady.
+            val tSec = System.nanoTime() / 1_000_000_000.0
+            val wander = 1f + grade.wear * (
+                0.020f * sin(tSec * 2.0 * Math.PI * 0.5).toFloat() +      // wow
+                0.007f * sin(tSec * 2.0 * Math.PI * 12.3).toFloat()       // flutter
+            )
+            val speed = 47.6f * transport * wander
+            val dAngleL = (speed / leftR) * 0.032f * 57.2958f
+            val dAngleR = (speed / rightR) * 0.032f * 57.2958f
             reelAngleL = (reelAngleL - dAngleL + 360f) % 360f
             reelAngleR = (reelAngleR - dAngleR + 360f) % 360f
-            tapeLinearDist = (tapeLinearDist + baseSpeed * 0.032f) % 100f
+            tapeLinearDist = (tapeLinearDist + speed * 0.032f + 100f) % 100f
             delay(32)
         }
+        transport = 0f
     }
 
     // True OLED black (0x000000), not the old dark-teal 0xFF04100F — now that tape mode goes
@@ -558,14 +693,14 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
             // into three stacked layers (base shell → mechanism → window/screws/branding overlay)
             // so the plastic lens/warp can apply to the mechanism at a lighter touch than the art
             // behind it, while the shell's own geometry in the base/overlay layers never warps.
-            Canvas(Modifier.fillMaxSize()) { drawCassetteBase(theme) }
+            Canvas(Modifier.fillMaxSize()) { drawCassetteBase(theme, light, grade) }
             Canvas(Modifier.fillMaxSize().graphicsLayer { applyTapeLens(theme, mechanismLensShader) }) {
-                drawCassetteMechanism(progress, reelAngleL, reelAngleR, tapeLinearDist, theme)
+                drawCassetteMechanism(progress, reelAngleL, reelAngleR, tapeLinearDist, theme, grade)
             }
             // The elapsed/total counter is drawn IN this overlay pass too (see drawWindowCounter) —
             // molded into the tape window itself, behind the same glass streaks/border as the reel
             // view, instead of floating as a separate UI overlay on top of the cassette.
-            Canvas(Modifier.fillMaxSize()) { drawCassetteOverlay(theme, "${fmt(pos)}/${fmt(dur)}") }
+            Canvas(Modifier.fillMaxSize()) { drawCassetteOverlay(theme, "${fmt(pos)}/${fmt(dur)}", light, grade) }
         }
 
         // Photorealistic Masking Tape Strip with torn deckled ends, crepe paper micro-ridges & grain
@@ -703,28 +838,116 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                     Triple(i, m.title?.toString().orEmpty().ifBlank { "—" }, m.artist?.toString().orEmpty())
                 }
             }
-            // rotated panel so the list reads upright with the device held sideways
+            // The queue as the thing it would actually be: the J-card inlay that lives folded
+            // inside the case, printed on the same paper stock as the label strip. Rotated so it
+            // reads upright with the device held sideways, like everything else in this view.
+            val paper = Color(0xFFF2EDDF)
+            val paperInk = Color(0xFF1B1710)
+            // Hoisted out of the Row below: inside RowScope the BoxWithConstraints `maxWidth`
+            // is no longer reachable through an implicit receiver.
+            val cardW = maxWidth
             Box(
                 Modifier.align(Alignment.Center)
                     .requiredSize(width = maxHeight * 0.86f, height = maxWidth * 0.82f)
                     .rotate(90f)
-                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(16.dp))
-                    .background(Color(0xF7081A1C))
-                    .padding(16.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+                    .background(paper)
+                    .drawBehind {
+                        // Offset-print paper: a faint fibre tint and the fold crease that turns a
+                        // flat rectangle into a folded card.
+                        drawRect(
+                            Brush.linearGradient(
+                                listOf(Color(0x00000000), Color(0x0E000000)),
+                                Offset.Zero, Offset(size.width, size.height)
+                            )
+                        )
+                        val creaseX = size.width * 0.135f
+                        drawLine(Color(0x22000000), Offset(creaseX, 0f), Offset(creaseX, size.height), 1f)
+                        drawLine(Color(0x44FFFFFF), Offset(creaseX + 1.5f, 0f), Offset(creaseX + 1.5f, size.height), 1f)
+                    }
             ) {
-                Column {
-                    Text("UP NEXT", color = MikuPink, fontSize = 12.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp, fontFamily = AudiowideFont)
-                    Spacer(Modifier.height(8.dp))
-                    if (upNext.isEmpty()) Text("End of the queue", color = theme.ink.copy(alpha = 0.7f), fontSize = 13.sp, fontFamily = Baloo2Font)
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        upNext.forEach { (idx, title, artist) ->
-                            Column(
-                                Modifier.fillMaxWidth()
-                                    .clickable { player.seekTo(idx, 0L); showQueue = false }
-                                    .padding(vertical = 6.dp)
-                            ) {
-                                Text(title, color = Color(0xFFE8F4F2), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(artist, color = Color(0xFF89ACA7), fontSize = 11.5.sp, fontFamily = Baloo2Font, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(Modifier.fillMaxSize()) {
+                    // The spine: on a real J-card this is the strip you see through the case edge,
+                    // printed solid in the release's colour with the title running up it.
+                    Box(
+                        Modifier.fillMaxHeight().width(cardW * 0.082f)
+                            .background(theme.accent),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "UP NEXT",
+                            // Spine text flips to dark ink on the bright accents (GOLD, NEON WU)
+                            // and stays paper-white on the dark ones, so it is legible on all of them.
+                            color = if (theme.accent.red * 0.299f + theme.accent.green * 0.587f + theme.accent.blue * 0.114f > 0.55f)
+                                Color(0xFF14100A) else Color(0xFFF6F2E6),
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Black,
+                            letterSpacing = 3.sp,
+                            fontFamily = AudiowideFont,
+                            maxLines = 1,
+                            modifier = Modifier.rotate(-90f).width(cardW * 0.7f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                    Column(Modifier.weight(1f).padding(start = 14.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) {
+                        Text(
+                            track.album.ifBlank { track.artist }.uppercase(),
+                            color = paperInk, fontSize = 13.sp, fontWeight = FontWeight.Black,
+                            letterSpacing = 1.5.sp, fontFamily = RighteousFont,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        // The printed rule under a J-card's header, and the grade line — the same
+                        // measured format the shell stamp carries, because a real inlay prints the
+                        // tape type on it too.
+                        Box(Modifier.fillMaxWidth().height(1.dp).background(paperInk.copy(alpha = 0.65f)))
+                        Spacer(Modifier.height(5.dp))
+                        Text(
+                            if (grade.isKnown) "${grade.typeLabel} · ${grade.detail}" else "PROGRAMME",
+                            color = paperInk.copy(alpha = 0.62f), fontSize = 8.5.sp,
+                            letterSpacing = 1.2.sp, fontFamily = AudiowideFont, maxLines = 1
+                        )
+                        Spacer(Modifier.height(7.dp))
+                        if (upNext.isEmpty()) {
+                            Text(
+                                "End of the programme.",
+                                color = paperInk.copy(alpha = 0.55f), fontSize = 12.sp,
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                                fontFamily = Baloo2Font
+                            )
+                        }
+                        Column(Modifier.verticalScroll(rememberScrollState())) {
+                            upNext.forEachIndexed { n, (idx, title, artist) ->
+                                Row(
+                                    Modifier.fillMaxWidth()
+                                        .clickable { player.seekTo(idx, 0L); showQueue = false }
+                                        .padding(vertical = 3.5.dp),
+                                    verticalAlignment = Alignment.Top
+                                ) {
+                                    // Printed track numbers, right-aligned on a real inlay.
+                                    Text(
+                                        "${n + 1}.",
+                                        color = paperInk.copy(alpha = 0.50f),
+                                        fontSize = 11.sp, fontFamily = AudiowideFont,
+                                        modifier = Modifier.width(20.dp),
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.End
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text(
+                                            title, color = paperInk, fontSize = 13.sp,
+                                            fontWeight = FontWeight.SemiBold, fontFamily = Baloo2Font,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (artist.isNotBlank()) {
+                                            Text(
+                                                artist, color = paperInk.copy(alpha = 0.58f),
+                                                fontSize = 10.5.sp, fontFamily = Baloo2Font,
+                                                maxLines = 1, overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -776,6 +999,11 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                         Modifier.weight(1f)
                                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
                                             .background(if (isSelected) Color(0xFF14403D) else Color(0xFF0F2B2E))
+                                            .border(
+                                                width = if (isSelected) 1.5.dp else 0.5.dp,
+                                                color = if (isSelected) MikuTealBright else Color(0x2239C5BB),
+                                                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
+                                            )
                                             .clickable {
                                                 themeIdx = idx
                                                 PlayerPreferences.saveTapeTheme(ctx, idx)
@@ -785,6 +1013,15 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                             .padding(8.dp)
                                     ) {
                                         Column {
+                                            // A real miniature of the tape itself, not four colour
+                                            // dots. Picking a cassette by looking at the cassette is
+                                            // the whole point, and the dots gave you no idea what
+                                            // MAJOR '84 or GLOWWORM would actually look like.
+                                            MiniCassette(
+                                                t,
+                                                Modifier.fillMaxWidth().aspectRatio(101.6f / 63.5f)
+                                            )
+                                            Spacer(Modifier.height(7.dp))
                                             Row(
                                                 verticalAlignment = Alignment.CenterVertically,
                                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -803,13 +1040,6 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                                 if (isSelected) {
                                                     Icon(Icons.Default.Check, null, tint = MikuTealBright, modifier = Modifier.size(14.dp))
                                                 }
-                                            }
-                                            Spacer(Modifier.height(6.dp))
-                                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(t.shellHi))
-                                                Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(t.accent))
-                                                Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(t.hubHi))
-                                                Box(Modifier.size(10.dp).clip(androidx.compose.foundation.shape.CircleShape).background(t.ink))
                                             }
                                         }
                                     }
@@ -864,26 +1094,145 @@ private fun DrawScope.withCassetteTransform(block: DrawScope.() -> Unit) {
     }) { block() }
 }
 
-/** Layer 1 (bottom, unwarped): shell walls, plastic material texture, bottom plate/head-block. */
-private fun DrawScope.drawCassetteBase(t: TapeTheme) = withCassetteTransform { drawCassetteBaseMm(t) }
-
-/** Layer 2 (middle, lightly warped — see rememberTapeLensShader): the tape mechanism itself. */
-private fun DrawScope.drawCassetteMechanism(progress: Float, angleL: Float, angleR: Float, tapeLinearDist: Float, t: TapeTheme) =
-    withCassetteTransform { drawCassetteMechanismMm(progress, angleL, angleR, tapeLinearDist, t) }
-
-/** Layer 3 (top, unwarped): window frame + counter, screws, branding — the plastic's own surface. */
-private fun DrawScope.drawCassetteOverlay(t: TapeTheme, counterText: String) = withCassetteTransform { drawCassetteOverlayMm(t, counterText) }
-
-/** Everything below draws in true millimetres on the landscape cassette. */
-private fun DrawScope.drawCassetteBaseMm(t: TapeTheme) {
-    // 0) Mask the world outside the shell — a ~97% themed-dark surround so the viz never bleeds
-    //    past the cassette itself; only a whisper of it survives for depth.
+/**
+ * Layer 1 (bottom, unwarped): the room, the shadow the cassette casts into it, then the shell
+ * walls, plastic material texture and bottom plate/head-block.
+ *
+ * The room and shadow are clipped to the area OUTSIDE the shell outline. That matters: paint them
+ * across the whole canvas and they cover the visualizer/art that is supposed to ghost up through
+ * the translucent plastic, which is the entire point of a clear shell.
+ */
+private fun DrawScope.drawCassetteBase(t: TapeTheme, light: Float, g: TapeGrade) {
+    val s = kotlin.math.min(size.height / SHELL_W, size.width / SHELL_H)
+    val halfW = SHELL_H * s / 2f
+    val halfH = SHELL_W * s / 2f
     val outside = Path().apply {
         fillType = PathFillType.EvenOdd
-        addRect(Rect(-500f, -500f, SHELL_W + 500f, SHELL_H + 500f))
-        addRoundRect(RoundRect(0f, 0f, SHELL_W, SHELL_H, CornerRadius(SHELL_R, SHELL_R)))
+        addRect(Rect(0f, 0f, size.width, size.height))
+        addRoundRect(
+            RoundRect(
+                center.x - halfW, center.y - halfH, center.x + halfW, center.y + halfH,
+                CornerRadius(SHELL_R * s, SHELL_R * s)
+            )
+        )
     }
-    drawPath(outside, lerp(t.shellLo, Color.Black, 0.85f).copy(alpha = 0.97f))
+    clipPath(outside) {
+        drawStudioBackdrop(t, light, g)
+        drawContactShadow(light, g)
+    }
+    withCassetteTransform { drawCassetteBaseMm(t, light) }
+}
+
+/** Layer 2 (middle, lightly warped — see rememberTapeLensShader): the tape mechanism itself. */
+private fun DrawScope.drawCassetteMechanism(progress: Float, angleL: Float, angleR: Float, tapeLinearDist: Float, t: TapeTheme, g: TapeGrade) =
+    withCassetteTransform { drawCassetteMechanismMm(progress, angleL, angleR, tapeLinearDist, t, g) }
+
+/** Layer 3 (top, unwarped): window frame + counter, screws, branding — the plastic's own surface. */
+private fun DrawScope.drawCassetteOverlay(t: TapeTheme, counterText: String, light: Float, g: TapeGrade) =
+    withCassetteTransform { drawCassetteOverlayMm(t, counterText, light, g) }
+
+/**
+ * The room the cassette is photographed in. Drawn UNDER everything, in screen space rather than
+ * mm space, so it is unaffected by the 90° cassette transform.
+ *
+ * Three things are happening: a soft key light behind and above the object (the bright pool that
+ * makes the black read as a surface instead of an absence), a cool fill bounced from the opposite
+ * corner, and a vignette that closes the corners down. The key is tinted with the theme's own
+ * accent at very low saturation — enough that a GOLD tape sits in a warm room and a NEON MIKU tape
+ * sits in a teal one, without either reading as a colored background.
+ */
+private fun DrawScope.drawStudioBackdrop(t: TapeTheme, light: Float, g: TapeGrade) {
+    // The grade does not only change the object, it changes the SHOOT. A mastering-stock tape is
+    // lit like a product photograph: a tight, rich key and deep falloff. A 128 kbps rip is lit
+    // like a snapshot: flat, weak, washed out. Same room, worse photography.
+    val q = g.q
+    val w = size.width
+    val h = size.height
+    // Key light: drifts very slightly with the same phase as the shell sweep, so the room and the
+    // highlight on the plastic agree about where the lamp is.
+    val keyC = Offset(w * (0.30f + 0.10f * light), h * 0.30f)
+    drawRect(
+        Brush.radialGradient(
+            listOf(
+                lerp(Color(0xFF0B0F12), t.accent, 0.05f + 0.11f * q).copy(alpha = 0.85f),
+                lerp(Color(0xFF06090B), t.accent, 0.02f + 0.03f * q).copy(alpha = 0.92f),
+                Color.Black
+            ),
+            center = keyC,
+            // A good key is tight and falls off fast; a bad one is broad and flat.
+            radius = maxOf(w, h) * (1.25f - 0.38f * q)
+        )
+    )
+    // Cool bounce from the opposite corner — keeps the unlit side from going flat dead black.
+    drawRect(
+        Brush.radialGradient(
+            listOf(lerp(Color.Transparent, t.bevelHi, 0.07f), Color.Transparent),
+            center = Offset(w * 0.86f, h * 0.80f),
+            radius = maxOf(w, h) * 0.55f
+        )
+    )
+    // Vignette: pulls the corners down so the eye lands on the shell.
+    drawRect(
+        Brush.radialGradient(
+            listOf(Color.Transparent, Color.Transparent, Color.Black.copy(alpha = 0.25f + 0.22f * q), Color.Black.copy(alpha = 0.55f + 0.25f * q)),
+            center = Offset(w / 2f, h / 2f),
+            radius = maxOf(w, h) * 0.72f
+        )
+    )
+}
+
+/**
+ * Contact shadow. A real cassette laid on a surface has two shadows: a tight, dark, sharp one
+ * right at the contact edge (ambient occlusion — light cannot get into that seam) and a wide soft
+ * one thrown away from the key light. Without these the shell floats, which is the single biggest
+ * tell that a rendered object is a drawing rather than a photograph.
+ *
+ * Drawn in screen space between the backdrop and the shell, sized off the same mm fit the cassette
+ * uses so it tracks the shell exactly at any screen size.
+ */
+private fun DrawScope.drawContactShadow(light: Float, g: TapeGrade) {
+    // Crisper shadow on the good grades (a hard key throws a defined edge), woollier on the bad.
+    val q = g.q
+    val s = kotlin.math.min(size.height / SHELL_W, size.width / SHELL_H)
+    // The shell occupies SHELL_H mm across the screen's width and SHELL_W mm down its height
+    // (it is rotated 90°), so swap the extents here.
+    val halfW = SHELL_H * s / 2f
+    val halfH = SHELL_W * s / 2f
+    val cx = center.x
+    val cy = center.y
+    // Throw direction: away from the drifting key light, which sits up and to the left.
+    val offX = (6f + 5f * light) * s * 0.35f
+    val offY = 9f * s * 0.35f
+
+    // Wide soft cast shadow — several expanding, fading passes stand in for a blur we cannot
+    // afford per-frame on this GPU, and read the same at this scale.
+    for (i in 7 downTo 1) {
+        val grow = i * (4.0f - 1.4f * q) * s * 0.35f
+        drawRoundRect(
+            Color.Black.copy(alpha = 0.045f + 0.030f * q),
+            topLeft = Offset(cx - halfW - grow + offX, cy - halfH - grow + offY),
+            size = Size((halfW + grow) * 2f, (halfH + grow) * 2f),
+            cornerRadius = CornerRadius(SHELL_R * s + grow, SHELL_R * s + grow)
+        )
+    }
+    // Tight ambient-occlusion seam hugging the shell edge.
+    for (i in 3 downTo 1) {
+        val grow = i * 0.9f * s * 0.35f
+        drawRoundRect(
+            Color.Black.copy(alpha = 0.13f + 0.09f * q),
+            topLeft = Offset(cx - halfW - grow, cy - halfH - grow + grow * 0.5f),
+            size = Size((halfW + grow) * 2f, (halfH + grow) * 2f),
+            cornerRadius = CornerRadius(SHELL_R * s + grow, SHELL_R * s + grow)
+        )
+    }
+}
+
+/** Everything below draws in true millimetres on the landscape cassette. */
+private fun DrawScope.drawCassetteBaseMm(t: TapeTheme, light: Float) {
+    // 0) Nothing masks the outside world here any more. drawCassetteBase paints the room into that
+    //    exact region first (clipped to outside the shell outline, opaque out to black at the
+    //    edges), which stops the visualizer bleeding past the cassette AND gives the object a
+    //    surface to sit on. A second mask drawn here would simply bury that backdrop.
 
     // 1) Clear-shell body: opaque-ish moulded WALLS, distinctly clearer interior — the album art
     //    reads through the cavity like a clear-shell tape, strongest through the window.
@@ -910,24 +1259,118 @@ private fun DrawScope.drawCassetteBaseMm(t: TapeTheme) {
         drawLine(t.engrave, Offset(SHELL_W - gx, 20f), Offset(SHELL_W - gx, 44f), 0.22f)
         gx += 0.65f
     }
-    val sheen = Path().apply { moveTo(12f, 0f); lineTo(30f, 0f); lineTo(6f, SHELL_H); lineTo(-12f, SHELL_H); close() }
+    // A moulded object under a fixed light does not look alive; a highlight that travels does. This
+    // is the same pair of diagonal sheen bands as before, but their x origin rides `light` (a slow
+    // 0..1 triangle from the composable), so the specular crawls the length of the shell the way a
+    // real cassette's does when you tilt it. Everything else about the plastic stays put.
+    val sweepX = -26f + light * 96f
+    val sheen = Path().apply {
+        moveTo(sweepX + 12f, 0f); lineTo(sweepX + 30f, 0f)
+        lineTo(sweepX + 6f, SHELL_H); lineTo(sweepX - 12f, SHELL_H); close()
+    }
     drawPath(sheen, Color(0x12FFFFFF))
-    val sheen2 = Path().apply { moveTo(34f, 0f); lineTo(40f, 0f); lineTo(16f, SHELL_H); lineTo(10f, SHELL_H); close() }
+    val sheen2 = Path().apply {
+        moveTo(sweepX + 34f, 0f); lineTo(sweepX + 40f, 0f)
+        lineTo(sweepX + 16f, SHELL_H); lineTo(sweepX + 10f, SHELL_H); close()
+    }
     drawPath(sheen2, Color(0x0AFFFFFF))
+    // The hot core of the sweep — narrow, brighter, and only where the band actually crosses the
+    // shell, so it reads as a glint rather than a wash.
+    val glint = Path().apply {
+        moveTo(sweepX + 20f, 0f); lineTo(sweepX + 24f, 0f)
+        lineTo(sweepX - 0.5f, SHELL_H); lineTo(sweepX - 4.5f, SHELL_H); close()
+    }
+    drawPath(glint, Color(0x1FFFFFFF))
 
     // 1c) Bespoke physical plastic material textures & diffuse blur shaders:
     when (t.plasticType) {
         PlasticType.CLEAR_POLYCARBONATE -> {
             // Prismatic crystal clarity: sharp glass refraction streaks and corner chromatic highlights
+            // Crystal acrylic throws the hardest specular of any of these plastics, so its bands
+            // ride the same travelling light as the base sweep, just brighter and wider.
             val prismSheen = Path().apply {
-                moveTo(14f, 0f); lineTo(32f, 0f); lineTo(8f, SHELL_H); lineTo(-10f, SHELL_H); close()
+                moveTo(sweepX + 14f, 0f); lineTo(sweepX + 32f, 0f)
+                lineTo(sweepX + 8f, SHELL_H); lineTo(sweepX - 10f, SHELL_H); close()
             }
             drawPath(prismSheen, Color(0x28FFFFFF))
             val prismSheen2 = Path().apply {
-                moveTo(38f, 0f); lineTo(46f, 0f); lineTo(20f, SHELL_H); lineTo(12f, SHELL_H); close()
+                moveTo(sweepX + 38f, 0f); lineTo(sweepX + 46f, 0f)
+                lineTo(sweepX + 20f, SHELL_H); lineTo(sweepX + 12f, SHELL_H); close()
             }
             drawPath(prismSheen2, Color(0x18FFFFFF))
+            // Chromatic fringe: real thick clear plastic splits the edge of a highlight into warm
+            // and cool. Two hairlines either side of the band are enough to suggest it.
+            drawLine(Color(0x1AFF8A4A), Offset(sweepX + 13f, 0f), Offset(sweepX + 7f, SHELL_H), 0.5f)
+            drawLine(Color(0x1A4AB4FF), Offset(sweepX + 33f, 0f), Offset(sweepX + 9f, SHELL_H), 0.5f)
             drawRoundRect(Color(0x15FFFFFF), topLeft = Offset(WALL, WALL), size = Size(SHELL_W - 2 * WALL, SHELL_H - 2 * WALL), cornerRadius = CornerRadius(SHELL_R, SHELL_R), style = Stroke(0.6f))
+
+            // ── Making clear plastic read as MATERIAL rather than as a hole ────────────────────
+            // The old clear pass was two sheen bands and a hairline, which left the cavity looking
+            // like an opening cut in the shell. Real transparent polycarbonate is never invisible:
+            // it absorbs, it scatters, it goes bright at grazing angles and dense where you look
+            // through more of it. These four passes are those properties, cheapest-first.
+
+            // 1) Body tint. Polycarbonate is not colourless — it carries a faint green-blue cast
+            //    that deepens with thickness. Very low alpha, but it is the difference between
+            //    "glass" and "nothing at all".
+            drawRoundRect(
+                Color(0xFF9FC6C2).copy(alpha = 0.055f),
+                topLeft = Offset(WALL, WALL), size = Size(SHELL_W - 2 * WALL, SHELL_H - 2 * WALL),
+                cornerRadius = CornerRadius(SHELL_R, SHELL_R)
+            )
+
+            // 2) Fresnel. Reflectivity climbs steeply toward grazing incidence, so the plastic
+            //    turns bright and milky in a band around the whole inner perimeter while staying
+            //    clear through the middle. This is the single strongest cue that there is a
+            //    surface there at all. Stacked strokes stand in for a gradient along the border.
+            for (i in 0 until 7) {
+                val inset = WALL + i * 0.55f
+                val k = 1f - i / 7f
+                drawRoundRect(
+                    Color.White.copy(alpha = 0.065f * k * k),
+                    topLeft = Offset(inset, inset),
+                    size = Size(SHELL_W - 2 * inset, SHELL_H - 2 * inset),
+                    cornerRadius = CornerRadius(SHELL_R, SHELL_R),
+                    style = Stroke(0.55f)
+                )
+            }
+
+            // 3) Internal scatter. A soft off-centre bloom, as if the key light is diffusing
+            //    through the body of the material rather than bouncing off its face.
+            drawRoundRect(
+                Brush.radialGradient(
+                    listOf(Color.White.copy(alpha = 0.085f), Color.Transparent),
+                    center = Offset(SHELL_W * 0.34f, SHELL_H * 0.30f),
+                    radius = SHELL_W * 0.46f
+                ),
+                topLeft = Offset(WALL, WALL), size = Size(SHELL_W - 2 * WALL, SHELL_H - 2 * WALL),
+                cornerRadius = CornerRadius(SHELL_R, SHELL_R)
+            )
+
+            // 4) Moulding artefacts. Injection-moulded shells carry flow lines radiating from the
+            //    hub bosses and faint sink marks where the wall thickens. Nobody consciously reads
+            //    these, but their absence is part of why a render looks synthetic.
+            for (hx in listOf(HUB_L_X, HUB_R_X)) {
+                for (k in 0 until 5) {
+                    val ang = (k * 37 + if (hx < SHELL_W / 2f) 12 else 58) * 0.0174533f
+                    val r0 = HUB_R + 2.2f
+                    val r1 = r0 + 7f + k * 1.6f
+                    drawLine(
+                        Color.White.copy(alpha = 0.030f),
+                        Offset(hx + kotlin.math.cos(ang) * r0, HUB_Y + kotlin.math.sin(ang) * r0),
+                        Offset(hx + kotlin.math.cos(ang) * r1, HUB_Y + kotlin.math.sin(ang) * r1),
+                        0.22f
+                    )
+                }
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(Color.Black.copy(alpha = 0.05f), Color.Transparent),
+                        center = Offset(hx, HUB_Y), radius = HUB_R * 1.9f
+                    ),
+                    HUB_R * 1.9f, Offset(hx, HUB_Y)
+                )
+            }
+
             drawShellAccentGraphics(t, strength = 1f)
         }
 
@@ -944,6 +1387,20 @@ private fun DrawScope.drawCassetteBaseMm(t: TapeTheme) {
                 cornerRadius = CornerRadius(SHELL_R, SHELL_R)
             )
             drawRoundRect(Color(0x20FFFFFF), topLeft = Offset(WALL + 0.4f, WALL + 0.4f), size = Size(SHELL_W - 2 * WALL - 0.8f, SHELL_H - 2 * WALL - 0.8f), cornerRadius = CornerRadius(SHELL_R, SHELL_R), style = Stroke(0.8f))
+            // Smoked acrylic is the same material family as the clear shell, just loaded with
+            // tint, so it gets the same grazing-angle brightening — weaker, because the tint eats
+            // some of the reflection.
+            for (i in 0 until 5) {
+                val inset = WALL + i * 0.6f
+                val k = 1f - i / 5f
+                drawRoundRect(
+                    Color.White.copy(alpha = 0.045f * k * k),
+                    topLeft = Offset(inset, inset),
+                    size = Size(SHELL_W - 2 * inset, SHELL_H - 2 * inset),
+                    cornerRadius = CornerRadius(SHELL_R, SHELL_R),
+                    style = Stroke(0.6f)
+                )
+            }
             drawShellAccentGraphics(t, strength = 0.6f)
         }
 
@@ -993,16 +1450,24 @@ private fun DrawScope.drawCassetteBaseMm(t: TapeTheme) {
         PlasticType.METALLIC_FLAKE -> {
             // Luxurious metallic flake shimmer matrix & anisotropic luster
             val sheenMetallic = Path().apply {
-                moveTo(20f, 0f); lineTo(45f, 0f); lineTo(15f, SHELL_H); lineTo(-10f, SHELL_H); close()
+                moveTo(sweepX + 20f, 0f); lineTo(sweepX + 45f, 0f)
+                lineTo(sweepX + 15f, SHELL_H); lineTo(sweepX - 10f, SHELL_H); close()
             }
             drawPath(sheenMetallic, Color(0x30FFEAA0))
+            // Metal flake only fires where the light is actually on it — that selective twinkle is
+            // what separates a flake finish from a flat gold fill. Flakes far from the travelling
+            // band stay dull; ones inside it go hot.
             var fx = WALL + 1.5f
             while (fx < SHELL_W - WALL - 1.5f) {
                 var fy = WALL + 1.5f
                 while (fy < SHELL_H - WALL - 1.5f) {
                     val sparkle = ((fx * 47.3f + fy * 61.9f).toInt() % 7) == 0
                     if (sparkle) {
-                        drawCircle(Color(0x75FFF8D0), 0.22f, Offset(fx, fy))
+                        // Distance from this flake to the sweep band, measured along the band's slant.
+                        val bandX = sweepX + 30f - (fy / SHELL_H) * 25f
+                        val d = kotlin.math.abs(fx - bandX)
+                        val hot = (1f - (d / 22f)).coerceIn(0f, 1f)
+                        drawCircle(Color(0xFFFFF8D0).copy(alpha = 0.18f + 0.62f * hot * hot), 0.22f + 0.14f * hot, Offset(fx, fy))
                     }
                     fy += 2.8f
                 }
@@ -1044,7 +1509,7 @@ private fun DrawScope.drawCassetteBaseMm(t: TapeTheme) {
  * up against the inside of the shell, so it should barely warp, not not-at-all) while the shell's
  * own walls/plate/window-frame/screws (drawn in the base and overlay layers) stay perfectly crisp.
  */
-private fun DrawScope.drawCassetteMechanismMm(progress: Float, angleL: Float, angleR: Float, tapeLinearDist: Float, t: TapeTheme) {
+private fun DrawScope.drawCassetteMechanismMm(progress: Float, angleL: Float, angleR: Float, tapeLinearDist: Float, t: TapeTheme, g: TapeGrade) {
     // Physically-open mechanism visibility. A real shell only exposes the transport through
     // the label window and the bottom-edge head/pinch-roller/capstan cutouts — never through
     // solid plastic (see mechanismVisibilityPath). Clear/smoked shells are the one exception:
@@ -1054,7 +1519,7 @@ private fun DrawScope.drawCassetteMechanismMm(progress: Float, angleL: Float, an
     // cost and removing the double-imposition that showed through opaque shells everywhere.
     clipPath(mechanismVisibilityPath(t)) {
         // Unified Magnetic Tape Transport System (Reels, Guides, Ribbon, and Forward Oxide Motion)
-        drawMagneticTapeTransport(progress, angleL, angleR, tapeLinearDist, t)
+        drawMagneticTapeTransport(progress, angleL, angleR, tapeLinearDist, t, g)
 
         // Felt Pressure Pad on Phosphor Bronze Leaf Spring (only ever visible through the head opening)
         drawLine(Color(0xFFB0B6BA), Offset(42.8f, 57.1f), Offset(58.8f, 57.1f), 0.5f)
@@ -1065,7 +1530,7 @@ private fun DrawScope.drawCassetteMechanismMm(progress: Float, angleL: Float, an
 
 /** Window frame + counter, screws, branding — the plastic's own top surface, drawn last so it sits
  *  over the mechanism layer, and never warped (it's the plastic, not something seen through it). */
-private fun DrawScope.drawCassetteOverlayMm(t: TapeTheme, counterText: String) {
+private fun DrawScope.drawCassetteOverlayMm(t: TapeTheme, counterText: String, light: Float, g: TapeGrade) {
     // 9) Label-side viewing window, centred on the hub line — its frame sits over the packs, and a
     //    couple of diagonal glass streaks sell the clear pane. The time counter is molded into the
     //    window itself (drawn after the fill, before the streaks/border below) so those glass
@@ -1074,8 +1539,24 @@ private fun DrawScope.drawCassetteOverlayMm(t: TapeTheme, counterText: String) {
     drawRoundRect(Color(0x14FFFFFF), topLeft = winTL, size = Size(WINDOW_W, WINDOW_H), cornerRadius = CornerRadius(2.5f, 2.5f))
     drawWindowCounter(t, counterText, winTL)
     clipPath(Path().apply { addRoundRect(RoundRect(winTL.x, winTL.y, winTL.x + WINDOW_W, winTL.y + WINDOW_H, CornerRadius(2.5f, 2.5f))) }) {
-        drawLine(Color(0x2EFFFFFF), Offset(winTL.x + 4f, winTL.y + WINDOW_H + 2f), Offset(winTL.x + 14f, winTL.y - 2f), 1.1f)
-        drawLine(Color(0x1AFFFFFF), Offset(winTL.x + 9f, winTL.y + WINDOW_H + 2f), Offset(winTL.x + 21f, winTL.y - 2f), 2.6f)
+        // Glass haze. A tape that has been through a cheap deck a hundred times has a scuffed,
+        // slightly milky window; mastering stock out of the case is water-clear. Scaled by the
+        // grade's wear so the pane itself reports the file's quality.
+        if (g.wear > 0.05f) {
+            drawRoundRect(
+                Color(0xFFBFC6C2).copy(alpha = 0.05f + 0.09f * g.wear),
+                topLeft = winTL, size = Size(WINDOW_W, WINDOW_H), cornerRadius = CornerRadius(2.5f, 2.5f)
+            )
+        }
+        // The two reflection streaks travel with the key light rather than sitting frozen — this
+        // is the single detail that most stops the window reading as a painted-on shape.
+        val gx = winTL.x + light * (WINDOW_W - 6f)
+        drawLine(Color(0x2EFFFFFF), Offset(gx + 4f, winTL.y + WINDOW_H + 2f), Offset(gx + 14f, winTL.y - 2f), 1.1f)
+        drawLine(Color(0x1AFFFFFF), Offset(gx + 9f, winTL.y + WINDOW_H + 2f), Offset(gx + 21f, winTL.y - 2f), 2.6f)
+        // A crisp hot edge only the good plastics get.
+        if (g.q > 0.5f) {
+            drawLine(Color.White.copy(alpha = 0.10f + 0.16f * g.q), Offset(gx + 6.5f, winTL.y + WINDOW_H + 2f), Offset(gx + 16.5f, winTL.y - 2f), 0.35f)
+        }
     }
     drawRoundRect(Color(0x88000000), topLeft = Offset(winTL.x - 0.5f, winTL.y - 0.5f), size = Size(WINDOW_W + 1f, WINDOW_H + 1f), cornerRadius = CornerRadius(2.8f, 2.8f), style = Stroke(0.9f))
     drawRoundRect(t.bevelHi.copy(alpha = 0.55f), topLeft = winTL, size = Size(WINDOW_W, WINDOW_H), cornerRadius = CornerRadius(2.5f, 2.5f), style = Stroke(0.3f))
@@ -1123,6 +1604,137 @@ private fun DrawScope.drawCassetteOverlayMm(t: TapeTheme, counterText: String) {
             drawCircle(t.ink, HUB_R + 1.6f, Offset(HUB_L_X, HUB_Y), style = Stroke(0.4f))
             drawCircle(t.ink, HUB_R + 1.6f, Offset(HUB_R_X, HUB_Y), style = Stroke(0.4f))
             mmText("side a", 8f, 22.8f, 2.3f, t.ink, bold = false)
+        }
+    }
+
+    // 11) The grade stamp — the real IEC type block every cassette carries, filled in with what
+    //     THIS file actually measured. Nothing is printed until TrackTech has answered.
+    if (g.isKnown) drawGradeStamp(t, g)
+
+    // 12) Physical wear, last of all, so it sits on top of the plastic, the print and the window
+    //     alike — the way dust and scuffs actually do on a real object.
+    drawShellWear(t, g)
+}
+
+/**
+ * The IEC grade block, bottom-left of the label face where the type/bias stamp genuinely lives on
+ * a real shell. Reads e.g.
+ *
+ *     TYPE IV                     ← the grade this file earned
+ *     METAL PARTICLE POSITION     ← the formulation
+ *     70µs EQ · 24 bit · 96.0 kHz ← the measured numbers, verbatim
+ *
+ * The accent slab behind the type name gets brighter and more saturated as the grade climbs, so
+ * even unread at a glance the good tapes look expensive and the 128 kbps rips look cheap.
+ */
+private fun DrawScope.drawGradeStamp(t: TapeTheme, g: TapeGrade) {
+    // POSITION IS CONSTRAINED, do not move this down. The transport control row is laid out at
+    // screen offset -22.5 mm from centre, i.e. mm y ~54, and its buttons are tall enough to cover
+    // roughly y 48..60. The bottom plate starts at y 50.6. The window's lower edge is at y 34.9.
+    // That leaves mm y 36..47 as the only band on the label face that is clear of both, which is
+    // where this sits. The first version ran to y 55 and the last two lines were simply invisible
+    // behind the Play/Pause glyph.
+    val x = 5.5f
+    val y = 37.4f
+    val slabW = 15.5f
+    val slabH = 4.6f
+    // Premium grades get a bright, fully-saturated slab; ferric gets a flat muted one.
+    val slab = lerp(lerp(t.ink, Color(0xFF6A6A6A), 0.55f), t.accent, g.q)
+    drawRoundRect(
+        slab.copy(alpha = 0.62f + 0.33f * g.q),
+        topLeft = Offset(x, y), size = Size(slabW, slabH), cornerRadius = CornerRadius(0.7f, 0.7f)
+    )
+    // Only the top grades get the foil-ish bright rule under the slab.
+    if (g.q > 0.7f) {
+        drawLine(t.bevelHi.copy(alpha = 0.75f), Offset(x, y + slabH + 0.5f), Offset(x + slabW, y + slabH + 0.5f), 0.30f)
+    }
+    // Contrast comes off the slab's OWN luminance, not off the grade. The slab colour is a blend
+    // of the theme ink and the theme accent, so on GOLD it lands bright and on NEON MIKU it lands
+    // dark — picking the label colour from g.q instead put dark text on a dark slab half the time.
+    val slabLum = slab.red * 0.299f + slab.green * 0.587f + slab.blue * 0.114f
+    mmText(g.typeLabel, x + slabW / 2f, y + 3.4f, 3.2f, if (slabLum > 0.5f) Color(0xFF101014) else Color.White, center = true)
+    mmText(g.formulation, x, y + slabH + 3.1f, 1.85f, t.ink.copy(alpha = 0.88f), bold = false)
+    mmText("${g.eq} · ${g.detail}", x, y + slabH + 5.5f, 1.85f, t.ink.copy(alpha = 0.72f), bold = false)
+}
+
+/**
+ * Grime, proportional to grade. A pristine render is the other big tell that an object is drawn
+ * rather than photographed — real plastic that has lived in a bag has hairline scratches, settled
+ * dust, rubbed-dull corners and finger oil on the flat faces.
+ *
+ * All of it is deterministic (hashed off position, no RNG), so the same tape always wears the same
+ * way frame to frame instead of boiling. A 24/96 master gets almost none of this; a 128 kbps rip
+ * gets the lot.
+ */
+private fun DrawScope.drawShellWear(t: TapeTheme, g: TapeGrade) {
+    val w = g.wear
+    if (w < 0.04f) return
+    clipPath(Path().apply { addRoundRect(RoundRect(0f, 0f, SHELL_W, SHELL_H, CornerRadius(SHELL_R, SHELL_R))) }) {
+        // 1) Hairline scratches — short, shallow, mostly aligned with how a tape slides in and out
+        //    of a case, so they run along the shell rather than in all directions.
+        val n = (34 * w).toInt()
+        for (i in 0 until n) {
+            val h1 = tapeHash(i * 1.7f, 3.1f)
+            val h2 = tapeHash(i * 2.9f, 7.7f)
+            val h3 = tapeHash(i * 4.3f, 11.3f)
+            val sx = h1 * SHELL_W
+            val sy = h2 * SHELL_H
+            val len = 1.5f + h3 * 9f
+            val slant = (h3 - 0.5f) * 0.55f
+            drawLine(
+                Color.White.copy(alpha = 0.03f + 0.05f * h3 * w),
+                Offset(sx, sy), Offset(sx + len, sy + len * slant), 0.11f
+            )
+            drawLine(
+                Color.Black.copy(alpha = 0.05f * w),
+                Offset(sx, sy + 0.12f), Offset(sx + len, sy + len * slant + 0.12f), 0.09f
+            )
+        }
+        // 2) Settled dust — tiny specks, brighter than the plastic, denser in the moulded corners
+        //    where a cloth never reaches.
+        val d = (54 * w).toInt()
+        for (i in 0 until d) {
+            val h1 = tapeHash(i * 3.7f, 21.5f)
+            val h2 = tapeHash(i * 5.1f, 29.9f)
+            val h3 = tapeHash(i * 6.7f, 37.1f)
+            drawCircle(
+                Color(0xFFEFEFE8).copy(alpha = 0.10f + 0.22f * h3 * w),
+                0.10f + h3 * 0.16f,
+                Offset(h1 * SHELL_W, h2 * SHELL_H)
+            )
+        }
+        // 3) Rubbed corners — the four corners of a shell go dull and pale first, because they are
+        //    what drags on everything.
+        for ((cx, cy) in listOf(0f to 0f, SHELL_W to 0f, 0f to SHELL_H, SHELL_W to SHELL_H)) {
+            drawCircle(
+                Brush.radialGradient(
+                    listOf(Color.White.copy(alpha = 0.09f * w), Color.Transparent),
+                    center = Offset(cx, cy), radius = 13f
+                ),
+                13f, Offset(cx, cy)
+            )
+        }
+        // 4) Finger oil on the two big flat faces either side of the window — broad, very low
+        //    contrast smudges. Barely visible alone, but they stop the plastic reading as glass.
+        if (w > 0.35f) {
+            for ((fx, fy, fr) in listOf(Triple(24f, 40f, 11f), Triple(76f, 38f, 9f), Triple(62f, 12f, 7f))) {
+                drawCircle(
+                    Brush.radialGradient(
+                        listOf(Color.White.copy(alpha = 0.045f * w), Color.Transparent),
+                        center = Offset(fx, fy), radius = fr
+                    ),
+                    fr, Offset(fx, fy)
+                )
+            }
+        }
+        // 5) Age cast — the cheap grades yellow. Real ABS does this under UV, and it is the exact
+        //    look of a ferric tape that has sat in a car door for twenty years.
+        if (w > 0.5f) {
+            drawRoundRect(
+                Color(0xFFC8A85A).copy(alpha = 0.05f * (w - 0.5f) * 2f),
+                topLeft = Offset.Zero, size = Size(SHELL_W, SHELL_H),
+                cornerRadius = CornerRadius(SHELL_R, SHELL_R)
+            )
         }
     }
 }
@@ -1287,7 +1899,8 @@ private fun DrawScope.drawMagneticTapeTransport(
     angleL: Float,
     angleR: Float,
     tapeLinearDist: Float,
-    t: TapeTheme
+    t: TapeTheme,
+    g: TapeGrade
 ) {
     // 1) Physical tape volume conservation (C-90 spec: A_L + A_R = Constant)
     fun calcPackRadius(fill: Float): Float {
@@ -1458,8 +2071,8 @@ private fun DrawScope.drawMagneticTapeTransport(
     // 7) Reels drawn LAST, on top of the ribbon's buried ends (see reelDive above) — the pack's
     // own edge covers that overlap so the transit tape visibly disappears into the wound pack
     // instead of butting up against it with a hard-edged seam.
-    drawReel(HUB_L_X, HUB_Y, leftR, angleL, t)
-    drawReel(HUB_R_X, HUB_Y, rightR, angleR, t)
+    drawReel(HUB_L_X, HUB_Y, leftR, angleL, t, g)
+    drawReel(HUB_R_X, HUB_Y, rightR, angleR, t, g)
 }
 
 /** Cheap deterministic hash shared by the reel pack and the in-transit ribbon so both read as one
@@ -1556,7 +2169,7 @@ private fun buildReelGeometry(cx: Float, cy: Float, tapeR: Float, packDepth: Flo
 }
 
 /** One reel at spec size: wound pack with continuous Archimedean spirals, hub with hole ring, splined spindle. */
-private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float, t: TapeTheme) {
+private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float, t: TapeTheme, g: TapeGrade) {
     val c = Offset(cx, cy)
     // 1) Soft ambient drop shadow under the winding pack
     drawCircle(Color(0x66000000), tapeR + 0.6f, Offset(cx + 0.45f, cy + 0.65f))
@@ -1564,9 +2177,13 @@ private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float,
     // 2) Photorealistic magnetic ferric/chrome oxide tape pancake
     if (tapeR > HUB_R) {
         // Base deep magnetic tape body
+        // Oxide colour is the GRADE's, not a fixed brown. This is the most legible quality tell
+        // in the whole view and it is also simply true of the real object: ferric tape is warm
+        // brown, chrome is a colder dark umber, metal particle is near-black with a blue cast, and
+        // mastering stock is blacker still. The file decides which pancake is on the hubs.
         drawCircle(
             Brush.radialGradient(
-                listOf(Color(0xFF332014), Color(0xFF1E130B), Color(0xFF0F0A06)),
+                listOf(g.oxideHi, g.oxideLo, lerp(g.oxideLo, Color.Black, 0.55f)),
                 center = Offset(cx - tapeR * 0.25f, cy - tapeR * 0.25f),
                 radius = tapeR * 1.35f
             ),
@@ -1660,10 +2277,147 @@ private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float,
     }
 }
 
+/**
+ * A small, honest portrait of one cassette theme, for the picker.
+ *
+ * It is drawn in the same millimetre space as the real shell (so proportions are the true
+ * 101.6 x 63.5 mm) but deliberately reduced: walls, label band, window, hubs, packs, the accent
+ * mark and the melt-weld or screw corners. No mechanism, no wear, no lens shader — at this size
+ * those turn to mud and cost a frame each, and the point here is to answer "what does this tape
+ * look like" at a glance.
+ */
+@Composable
+private fun MiniCassette(t: TapeTheme, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val s = kotlin.math.min(size.width / SHELL_W, size.height / SHELL_H)
+        withTransform({
+            translate((size.width - SHELL_W * s) / 2f, (size.height - SHELL_H * s) / 2f)
+            scale(s, s, Offset.Zero)
+        }) {
+            // Body
+            drawRoundRect(
+                Brush.linearGradient(listOf(t.shellHi, t.shellLo), Offset.Zero, Offset(SHELL_W, SHELL_H)),
+                size = Size(SHELL_W, SHELL_H),
+                cornerRadius = CornerRadius(SHELL_R, SHELL_R)
+            )
+            // Label band across the top, the way every one of these layouts starts
+            drawRoundRect(
+                lerp(t.shellHi, Color.White, 0.28f).copy(alpha = 0.55f),
+                topLeft = Offset(2.8f, 2.8f),
+                size = Size(SHELL_W - 5.6f, 13.6f),
+                cornerRadius = CornerRadius(1.2f, 1.2f)
+            )
+            // The one accent mark that distinguishes this layout family
+            when (t.layout) {
+                TapeLayout.STUDIO -> drawPath(
+                    Path().apply { moveTo(58f, 3.4f); lineTo(63.5f, 3.4f); lineTo(69.5f, 15.8f); lineTo(64f, 15.8f); close() },
+                    t.accent
+                )
+                TapeLayout.MAJOR84 -> {
+                    drawLine(t.ink.copy(alpha = 0.85f), Offset(3f, 1.7f), Offset(SHELL_W - 3f, 1.7f), 0.4f)
+                    drawRoundRect(t.accent, topLeft = Offset(91.6f, 3.6f), size = Size(6f, 6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+                }
+                TapeLayout.NEON -> drawRoundRect(t.accent, topLeft = Offset(93.2f, 3f), size = Size(4.6f, 4.6f), cornerRadius = CornerRadius(0.6f, 0.6f))
+                TapeLayout.MERCH -> {
+                    drawCircle(t.ink, HUB_R + 1.6f, Offset(HUB_L_X, HUB_Y), style = Stroke(0.5f))
+                    drawCircle(t.ink, HUB_R + 1.6f, Offset(HUB_R_X, HUB_Y), style = Stroke(0.5f))
+                }
+                TapeLayout.CLEAR -> drawPath(
+                    Path().apply { moveTo(4f, 2f); lineTo(46f, 2f); lineTo(22f, 40f); lineTo(-6f, 40f); close() },
+                    t.accent.copy(alpha = 0.30f)
+                )
+            }
+            // Packs + hubs
+            for (hx in listOf(HUB_L_X, HUB_R_X)) {
+                drawCircle(Color(0xFF2A1C12), 18f, Offset(hx, HUB_Y))
+                drawCircle(
+                    Brush.radialGradient(listOf(t.hubHi, t.hubLo), center = Offset(hx - 3f, HUB_Y - 3f), radius = HUB_R * 1.4f),
+                    HUB_R, Offset(hx, HUB_Y)
+                )
+                drawCircle(t.holes, SPINDLE_R, Offset(hx, HUB_Y))
+            }
+            // Window
+            val winTL = Offset(50.8f - WINDOW_W / 2f, HUB_Y - WINDOW_H / 2f)
+            drawRoundRect(Color(0x22FFFFFF), topLeft = winTL, size = Size(WINDOW_W, WINDOW_H), cornerRadius = CornerRadius(2.5f, 2.5f))
+            drawRoundRect(Color(0x88000000), topLeft = winTL, size = Size(WINDOW_W, WINDOW_H), cornerRadius = CornerRadius(2.5f, 2.5f), style = Stroke(0.8f))
+            // Bottom plate + head opening
+            drawPath(
+                Path().apply { moveTo(17f, SHELL_H); lineTo(19.8f, 50.6f); lineTo(81.8f, 50.6f); lineTo(84.6f, SHELL_H); close() },
+                Color(0x33000000)
+            )
+            drawRoundRect(Color(0xCC0A0A0A), topLeft = Offset(45.3f, 59.6f), size = Size(11f, SHELL_H - 59.6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+            // Corner fixings — screws or melt welds, the same tell as the full shell
+            for ((sx, sy) in listOf(4.3f to 4.3f, SHELL_W - 4.3f to 4.3f, 4.3f to 59.2f, SHELL_W - 4.3f to 59.2f)) {
+                drawCircle(if (t.welded) t.shellLo else t.bevelLo.copy(alpha = 0.8f), 1.5f, Offset(sx, sy))
+                if (!t.welded) drawCircle(t.bevelHi.copy(alpha = 0.55f), 1.5f, Offset(sx, sy), style = Stroke(0.3f))
+            }
+            // A single fixed sheen, so the thumbnails all catch the light the same way
+            drawPath(
+                Path().apply { moveTo(16f, 0f); lineTo(30f, 0f); lineTo(6f, SHELL_H); lineTo(-8f, SHELL_H); close() },
+                Color(0x16FFFFFF)
+            )
+            drawRoundRect(t.bevelHi.copy(alpha = 0.8f), size = Size(SHELL_W, SHELL_H), cornerRadius = CornerRadius(SHELL_R, SHELL_R), style = Stroke(0.6f))
+        }
+    }
+}
+
 private fun fmt(ms: Long): String { val sec = (ms / 1000).coerceAtLeast(0); return "${sec / 60}:${(sec % 60).toString().padStart(2, '0')}" }
+
+
+/** Relative luminance, the cheap perceptual weighting (not full sRGB linearisation). */
+private fun lum(c: Color): Float = c.red * 0.299f + c.green * 0.587f + c.blue * 0.114f
+
+/**
+ * What is physically behind the brand text on the top rail, for this theme's layout. This has to
+ * match what drawCassetteOverlayMm actually paints there, or the contrast guard corrects against
+ * the wrong background.
+ */
+private fun brandStripBackground(t: TapeTheme): Color = when (t.layout) {
+    // STUDIO lays a cream paper strip across the whole label band (see the TapeLayout.STUDIO
+    // branch: drawRoundRect(Color(0xF2F4F1E8), ...)).
+    TapeLayout.STUDIO -> Color(0xFFF4F1E8)
+    // MAJOR84 prints straight onto the shell between two ink rules.
+    TapeLayout.MAJOR84 -> t.shellHi
+    // CLEAR / NEON / MERCH print onto the shell itself, which is lit from the top edge, so the
+    // effective ground is a little brighter than the flat shellHi.
+    else -> lerp(t.shellHi, t.bevelHi, 0.12f)
+}
+
+/**
+ * Nudge [fg] toward black or white — whichever the background is further from — until it clears
+ * [minDelta] of luminance separation from [bg]. Hue is preserved as far as possible: the colour is
+ * blended toward the target rather than replaced, so a gold stays gold and a teal stays teal, just
+ * dark enough or light enough to read.
+ */
+private fun ensureContrastOn(fg: Color, bg: Color, minDelta: Float): Color {
+    val bgL = lum(bg)
+    if (kotlin.math.abs(lum(fg) - bgL) >= minDelta) return fg
+    val target = if (bgL > 0.5f) Color.Black else Color.White
+    var mix = 0.12f
+    while (mix <= 1f) {
+        val c = lerp(fg, target, mix)
+        if (kotlin.math.abs(lum(c) - bgL) >= minDelta) return c
+        mix += 0.12f
+    }
+    return target
+}
 
 @Composable
 private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier) {
+    // CONTRAST GUARD. The brand colours are chosen to suit each theme's SHELL, but three of the
+    // layouts print the brand onto something else entirely — STUDIO lays a cream paper strip over
+    // the label band, MAJOR84 prints between two ink rules on the bare shell. So TDK SA-X, whose
+    // near-white brandColor is right against its smoke-black plastic, was being drawn white-on-
+    // cream and was effectively invisible; MAXELL XLII-S's pale gold had the same problem.
+    //
+    // Rather than hand-tune twenty colour pairs, work out what is ACTUALLY behind the text for
+    // this theme's layout and force the ink to clear a contrast floor against it, darkening or
+    // lightening whichever direction that background demands. A colour that already passes is
+    // left exactly as the theme author set it.
+    val strip = brandStripBackground(theme)
+    val brandInk = ensureContrastOn(theme.brandColor, strip, 0.42f)
+    val brandSubInk = ensureContrastOn(theme.brandSubColor, strip, 0.30f)
+
     Column(
         modifier = modifier.wrapContentWidth(unbounded = true),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -1683,7 +2437,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
                     )
                     Text(
                         theme.brandText,
-                        color = theme.brandColor,
+                        color = brandInk,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 2.sp,
@@ -1695,7 +2449,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
                 // Crisp offset printed ink directly on paper sticker / shell (no plastic deboss)
                 Text(
                     theme.brandText,
-                    color = theme.brandColor,
+                    color = brandInk,
                     fontSize = 11.5.sp,
                     fontWeight = FontWeight.Black,
                     letterSpacing = 2.sp,
@@ -1715,7 +2469,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
                     )
                     Text(
                         theme.brandText,
-                        color = theme.brandColor,
+                        color = brandInk,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 2.sp,
@@ -1736,7 +2490,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
                     )
                     Text(
                         theme.brandText,
-                        color = theme.brandColor,
+                        color = brandInk,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 2.sp,
@@ -1748,14 +2502,14 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         theme.brandText,
-                        color = theme.brandColor.copy(alpha = 0.45f),
+                        color = brandInk.copy(alpha = 0.45f),
                         fontSize = 13.5.sp,
                         letterSpacing = 3.sp,
                         fontFamily = theme.brandFont
                     )
                     Text(
                         theme.brandText,
-                        color = theme.brandColor,
+                        color = brandInk,
                         fontSize = 12.5.sp,
                         letterSpacing = 3.sp,
                         fontFamily = theme.brandFont
@@ -1765,7 +2519,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
             BrandTexture.DOT_MATRIX_IMPRINT -> {
                 Text(
                     theme.brandText,
-                    color = theme.brandColor,
+                    color = brandInk,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
@@ -1775,7 +2529,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
             BrandTexture.JAPANESE_KAWAII -> {
                 Text(
                     theme.brandText,
-                    color = theme.brandColor,
+                    color = brandInk,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp,
@@ -1785,7 +2539,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
             BrandTexture.MINIMAL_LASER_ETCH -> {
                 Text(
                     theme.brandText,
-                    color = theme.brandColor.copy(alpha = 0.85f),
+                    color = brandInk.copy(alpha = 0.85f),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     letterSpacing = 2.sp,
@@ -1805,7 +2559,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
                     )
                     Text(
                         theme.brandText,
-                        color = theme.brandColor,
+                        color = brandInk,
                         fontSize = 11.5.sp,
                         fontWeight = FontWeight.Black,
                         letterSpacing = 2.sp,
@@ -1816,7 +2570,7 @@ private fun BespokeTapeBranding(theme: TapeTheme, modifier: Modifier = Modifier)
         }
         Text(
             theme.brandSub,
-            color = theme.brandSubColor,
+            color = brandSubInk,
             fontSize = 7.5.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 1.1.sp,

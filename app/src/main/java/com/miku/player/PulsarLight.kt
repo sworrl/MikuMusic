@@ -79,9 +79,14 @@ object PulsarLight {
 
     /**
      * Whether a Pulsar LED node this engine writes to actually exists AND is writable by this
-     * process right now. Every write below goes out through [RootShell] (su), which never runs on
-     * MikuOS, so when this returns false the controls only persist a preference — the physical
-     * diode does not change. UI must say so instead of implying the light responded.
+     * process right now. Writes are plain java.io.File writes to those nodes (the old su path
+     * never ran on MikuOS); when this returns false NOTHING is written at all and the controls
+     * only persist a preference — the physical diode does not change. UI must say so instead of
+     * implying the light responded.
+     *
+     * On this unit the RGB indicator is confirmed non-functional (SELinux-locked, no consumer
+     * service), so this normally returns false and the Pulsar screens say the light will not
+     * respond.
      *
      * Checked against the real node paths under sys/class/leds; result cached after the first probe.
      */
@@ -186,6 +191,13 @@ object PulsarLight {
         try {
             android.provider.Settings.System.putInt(ctx.contentResolver, "show_turn_on_power", if (mode != Mode.OFF) 1 else 0)
         } catch (_: Throwable) {}
+        if (!isHardwareWritable()) {
+            // No writable LED node on this unit: the preference is stored (above) but there is
+            // nothing to drive. Do NOT spin an animation loop that writes to nothing - that was
+            // pure battery burn with zero visible effect.
+            Log.i(TAG, "applyMode($mode): no writable Pulsar LED node - preference stored only")
+            return
+        }
         when (mode) {
             Mode.OFF -> {
                 turnOff(ctx)
@@ -244,6 +256,8 @@ object PulsarLight {
 
         if (!PlayerPreferences.loadPulsarEnabled(ctx)) return@withContext
         val mode = getMode(ctx)
+        // The sample-quality HAL hint below is worth pushing either way; the animation loops are
+        // not, when nothing can be written to the diode.
 
         if (mode != Mode.AUDIOPHILE_AUTO && mode != Mode.DYNAMIC_STROBE) {
             return@withContext
@@ -251,6 +265,7 @@ object PulsarLight {
 
         if (!isPlaying || track == null) {
             cancelActiveAnimation()
+            if (!isHardwareWritable()) return@withContext
             val (batR, batB) = batteryIndicatorDual(ctx)
             val brightness = getBrightness(ctx)
             if (isCharging(ctx)) {
@@ -269,7 +284,15 @@ object PulsarLight {
             }
         }
 
-        RootShell.execFast("setprop vendor.audio.hiby.charging no; setprop vendor.audio.hiby.hw.led on; setprop vendor.audio.hiby.hw.sample_quality ${tier.qualityProp}; echo ${tier.patternCode} > /sys/class/leds/sgm31324-leds/led_pattern 2>/dev/null")
+        // Root-free equivalent of the old setprop line: the two vendor.audio.hiby.* keys are audio
+        // HAL parameters, so push them the way every other HiBy setting is pushed. The LED pattern
+        // node is only touched when it is genuinely writable (see [isHardwareWritable]).
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.led", "on")
+        MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.sample_quality", tier.qualityProp)
+        writeNode("$SYSFS_SGM/led_pattern", tier.patternCode.toString())
+
+        // Nothing to animate when the diode is unreachable - the HAL hints above are still useful.
+        if (!isHardwareWritable()) return@withContext
 
         if (isBpmSyncEnabled(ctx)) {
             startBpmPulse(tier.color.r, tier.color.b, brightness, bpm)
@@ -285,6 +308,7 @@ object PulsarLight {
     }
 
     fun indicatePocketLock(ctx: Context, locked: Boolean) {
+        if (!isHardwareWritable()) return
         scope.launch {
             cancelActiveAnimation()
             val (r, b) = if (locked) Pair(255, 0) else Pair(0, 255)
@@ -301,6 +325,7 @@ object PulsarLight {
     }
 
     fun indicateHearted(ctx: Context, hearted: Boolean = true) {
+        if (!isHardwareWritable()) return
         scope.launch {
             cancelActiveAnimation()
             val (r, b) = if (hearted) Pair(255, 100) else Pair(85, 255)
@@ -445,13 +470,31 @@ object PulsarLight {
     // Low-Level Hardware Sysfs Writes (Dual-Die)
     // ==========================================
 
+    /**
+     * Write one LED sysfs node directly. Root-free and honest: if the node is missing or this
+     * process cannot write it (the normal case on this unit), nothing happens and nothing pretends
+     * otherwise. Guarded by the cached [isHardwareWritable] probe so a dead LED costs no syscalls
+     * inside the animation loops.
+     */
+    private fun writeNode(path: String, value: String) {
+        if (!isHardwareWritable()) return
+        runCatching {
+            val f = java.io.File(path)
+            if (f.exists() && f.canWrite()) f.writeText(value)
+        }
+    }
+
     private fun writeDual(r: Int, b: Int, brightness: Int) {
+        if (!isHardwareWritable()) return
         val scale = brightness.coerceIn(0, 255) / 255f
         val fr = (r.coerceIn(0, 255) * scale).toInt()
         val fb = (b.coerceIn(0, 255) * scale).toInt()
 
-        val cmd = "setprop vendor.audio.hiby.hw.led on 2>/dev/null; echo $fr > $SYSFS_RED/brightness 2>/dev/null; echo 0 > /sys/class/leds/green/brightness 2>/dev/null; echo $fb > $SYSFS_BLUE/brightness 2>/dev/null; echo \"$fr 0 $fb\" > $SYSFS_SGM/rgb_val 2>/dev/null; echo $brightness > $SYSFS_SGM/brightness 2>/dev/null"
-        RootShell.execFast(cmd)
+        writeNode("$SYSFS_RED/brightness", fr.toString())
+        writeNode("/sys/class/leds/green/brightness", "0")
+        writeNode("$SYSFS_BLUE/brightness", fb.toString())
+        writeNode("$SYSFS_SGM/rgb_val", "$fr 0 $fb")
+        writeNode("$SYSFS_SGM/brightness", brightness.coerceIn(0, 255).toString())
     }
 
     private fun turnOff(ctx: Context? = null) {
@@ -459,9 +502,15 @@ object PulsarLight {
             try {
                 android.provider.Settings.System.putInt(ctx.contentResolver, "show_turn_on_power", 0)
             } catch (_: Throwable) {}
+            // vendor.audio.hiby.hw.* are audio HAL parameters, not shell properties.
+            MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.led", "off")
+            MikuDirectAudio.pushToHal(ctx, "vendor.audio.hiby.hw.sample_quality", "none")
         }
-        val cmd = "echo 0 > $SYSFS_RED/brightness 2>/dev/null; echo 0 > /sys/class/leds/green/brightness 2>/dev/null; echo 0 > $SYSFS_BLUE/brightness 2>/dev/null; echo 0 > $SYSFS_SGM/brightness 2>/dev/null; echo 0 > $SYSFS_SGM/led_pattern 2>/dev/null; setprop vendor.audio.hiby.hw.led off 2>/dev/null; setprop vendor.audio.hiby.hw.sample_quality none 2>/dev/null"
-        RootShell.execFast(cmd)
+        writeNode("$SYSFS_RED/brightness", "0")
+        writeNode("/sys/class/leds/green/brightness", "0")
+        writeNode("$SYSFS_BLUE/brightness", "0")
+        writeNode("$SYSFS_SGM/brightness", "0")
+        writeNode("$SYSFS_SGM/led_pattern", "0")
     }
 
     private fun batteryIndicatorDual(ctx: Context): Pair<Int, Int> {
@@ -504,6 +553,7 @@ object PulsarLight {
      * Rapid retro HDD / memory-card activity LED flicker for SD card scans and heavy file I/O.
      */
     fun startHddActivity() {
+        if (!isHardwareWritable()) return
         if (hddJob?.isActive == true) return
         hddJob = scope.launch {
             while (isActive) {

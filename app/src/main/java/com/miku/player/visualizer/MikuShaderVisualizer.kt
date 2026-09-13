@@ -175,7 +175,7 @@ class MikuShaderGLSurfaceView(context: Context, sessionId: Int) : GLSurfaceView(
         renderMode = RENDERMODE_CONTINUOUSLY
     }
 
-    fun setPreset(p: ShaderPreset) { renderer.preset = p.ordinal }
+    fun setPreset(p: ShaderPreset) { renderer.requestPreset(p.ordinal) }
     fun setSessionId(id: Int) { renderer.sessionId = id }
     fun setAccent(a: Color, b: Color) {
         renderer.setAccent(a.red, a.green, a.blue, b.red, b.green, b.blue)
@@ -198,16 +198,39 @@ class MikuShaderGLSurfaceView(context: Context, sessionId: Int) : GLSurfaceView(
 
 private class ShaderRenderer(@Volatile var sessionId: Int) : GLSurfaceView.Renderer {
     @Volatile var preset = 0
+    // Set when the preset changes so the next frame wipes both feedback buffers first — otherwise
+    // the incoming preset spends several seconds dissolving the outgoing one's trails.
+    @Volatile private var clearHistory = true
+    fun requestPreset(i: Int) { if (i != preset) { preset = i; clearHistory = true } }
     @Volatile private var ar = 0.22f; @Volatile private var ag = 0.77f; @Volatile private var ab = 0.73f
     @Volatile private var br = 1.0f; @Volatile private var bg = 0.37f; @Volatile private var bb = 0.64f
     fun setAccent(r1: Float, g1: Float, b1: Float, r2: Float, g2: Float, b2: Float) { ar = r1; ag = g1; ab = b1; br = r2; bg = g2; bb = b2 }
 
-    private class Prog(val id: Int, val aPos: Int, val uRes: Int, val uTime: Int, val uBass: Int, val uMid: Int, val uTreble: Int, val uBeat: Int, val uAccent: Int, val uAccent2: Int, val uAudio: Int)
+    private class Prog(val id: Int, val aPos: Int, val uRes: Int, val uTime: Int, val uBass: Int, val uMid: Int, val uTreble: Int, val uBeat: Int, val uAccent: Int, val uAccent2: Int, val uAudio: Int, val uPrev: Int, val uAspect: Int)
     private val programs = arrayOfNulls<Prog>(ShaderPreset.entries.size)
     private val failed = BooleanArray(ShaderPreset.entries.size)
     private var vertexShader = 0
     private var texture = 0
     private var width = 1; private var height = 1
+
+    // ── Milkdrop feedback buffers ────────────────────────────────────────────────────────────
+    // The defining feature of a Milkdrop/projectM preset is not the shapes it draws, it is that
+    // every frame is drawn ON TOP OF a warped, zoomed, faded copy of the PREVIOUS frame. That
+    // feedback loop is what produces the trails, tunnels and smears the whole look rests on, and
+    // it is exactly what the old stateless one-pass presets had no way to do.
+    //
+    // Two RGBA textures ping-pong: the preset renders into `fbo[cur]` while sampling `tex[1-cur]`
+    // through the uPrev sampler, then the result is blitted to the screen. Kept at half the
+    // surface resolution (fbTexW/H) because feedback is bandwidth-bound and the Adreno 610 has
+    // very little of it — at this scale the softening actually helps the look.
+    private val fbo = IntArray(2)
+    private val fboTex = IntArray(2)
+    private var fbW = 0; private var fbH = 0
+    private var cur = 0
+    private var blitProg = 0
+    private var blitPos = 0
+    private var blitTex = 0
+    private var feedbackReady = false
     private val startNs = System.nanoTime()
 
     // Preallocated once: full-screen triangle + the 64x2 audio texture staging buffer.
@@ -258,7 +281,8 @@ private class ShaderRenderer(@Volatile var sessionId: Int) : GLSurfaceView.Rende
             GLES20.glGetUniformLocation(p, "uBass"), GLES20.glGetUniformLocation(p, "uMid"),
             GLES20.glGetUniformLocation(p, "uTreble"), GLES20.glGetUniformLocation(p, "uBeat"),
             GLES20.glGetUniformLocation(p, "uAccent"), GLES20.glGetUniformLocation(p, "uAccent2"),
-            GLES20.glGetUniformLocation(p, "uAudio")
+            GLES20.glGetUniformLocation(p, "uAudio"),
+            GLES20.glGetUniformLocation(p, "uPrev"), GLES20.glGetUniformLocation(p, "uAspect")
         )
         programs[index] = prog
         return prog
@@ -267,6 +291,9 @@ private class ShaderRenderer(@Volatile var sessionId: Int) : GLSurfaceView.Rende
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         // The EGL context may be brand new (first surface, or a lost context): rebuild everything.
         programs.fill(null); failed.fill(false)
+        // A fresh EGL context invalidates every GL name we held, including the feedback pair.
+        fboTex[0] = 0; fboTex[1] = 0; fbo[0] = 0; fbo[1] = 0
+        feedbackReady = false; blitProg = 0; cur = 0; clearHistory = true
         vertexShader = compile(GLES20.GL_VERTEX_SHADER, ShaderPreset.VERTEX)
         if (vertexShader == 0) { markFailed(); return }
         val tex = IntArray(1)
@@ -292,6 +319,65 @@ private class ShaderRenderer(@Volatile var sessionId: Int) : GLSurfaceView.Rende
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
         width = w.coerceAtLeast(1); height = h.coerceAtLeast(1)
         GLES20.glViewport(0, 0, width, height)
+        createFeedbackTargets(width / 2, height / 2)
+    }
+
+    /** (Re)allocate the ping-pong pair. Safe to call repeatedly; tears the old pair down first. */
+    private fun createFeedbackTargets(w: Int, h: Int) {
+        val tw = w.coerceAtLeast(1)
+        val th = h.coerceAtLeast(1)
+        if (feedbackReady && tw == fbW && th == fbH) return
+        releaseFeedbackTargets()
+        fbW = tw; fbH = th
+        GLES20.glGenTextures(2, fboTex, 0)
+        GLES20.glGenFramebuffers(2, fbo, 0)
+        for (i in 0..1) {
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTex[i])
+            GLES20.glTexImage2D(GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, fbW, fbH, 0, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+            // CLAMP_TO_EDGE, not REPEAT: a zoom-out warp that wraps drags the opposite edge of the
+            // frame into shot, which reads as a glitch rather than a tunnel.
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo[i])
+            GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, fboTex[i], 0)
+            if (GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) != GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                android.util.Log.w("MikuShaders", "feedback FBO incomplete - running without trails")
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+                releaseFeedbackTargets()
+                return
+            }
+            GLES20.glClearColor(0f, 0f, 0f, 1f)
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+        }
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        if (blitProg == 0) blitProg = buildBlit()
+        feedbackReady = blitProg != 0
+    }
+
+    private fun releaseFeedbackTargets() {
+        if (fboTex[0] != 0 || fboTex[1] != 0) GLES20.glDeleteTextures(2, fboTex, 0)
+        if (fbo[0] != 0 || fbo[1] != 0) GLES20.glDeleteFramebuffers(2, fbo, 0)
+        fboTex[0] = 0; fboTex[1] = 0; fbo[0] = 0; fbo[1] = 0
+        feedbackReady = false
+    }
+
+    /** Trivial texture-to-screen pass for the final blit out of the feedback buffer. */
+    private fun buildBlit(): Int {
+        val vs = compile(GLES20.GL_VERTEX_SHADER, ShaderPreset.VERTEX)
+        val fs = compile(GLES20.GL_FRAGMENT_SHADER, ShaderPreset.BLIT_FRAGMENT)
+        if (vs == 0 || fs == 0) return 0
+        val p = GLES20.glCreateProgram()
+        GLES20.glAttachShader(p, vs); GLES20.glAttachShader(p, fs)
+        GLES20.glLinkProgram(p)
+        val ok = IntArray(1)
+        GLES20.glGetProgramiv(p, GLES20.GL_LINK_STATUS, ok, 0)
+        GLES20.glDeleteShader(vs); GLES20.glDeleteShader(fs)
+        if (ok[0] == 0) { GLES20.glDeleteProgram(p); return 0 }
+        blitPos = GLES20.glGetAttribLocation(p, "aPos")
+        blitTex = GLES20.glGetUniformLocation(p, "uTex")
+        return p
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -336,12 +422,41 @@ private class ShaderRenderer(@Volatile var sessionId: Int) : GLSurfaceView.Rende
         bassAvg += (bass - bassAvg) * 0.06f
         if (bass > bassAvg * 1.35f && bass > 0.12f) beat = 1f else beat *= 0.88f
 
+        // ── Pass 1: the preset, rendered into the back feedback buffer ───────────────────────
+        // It samples the FRONT buffer (last frame) through uPrev, so each preset's own warp+decay
+        // is what builds the trails. Without a working FBO pair we fall straight through to the
+        // screen and the presets still draw, just with no history to feed on.
+        val useFeedback = feedbackReady
+        if (useFeedback && clearHistory) {
+            clearHistory = false
+            for (i in 0..1) {
+                GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo[i])
+                GLES20.glViewport(0, 0, fbW, fbH)
+                GLES20.glClearColor(0f, 0f, 0f, 1f)
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+            }
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        }
+        val back = 1 - cur
+        if (useFeedback) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo[back])
+            GLES20.glViewport(0, 0, fbW, fbH)
+        }
+
         GLES20.glUseProgram(prog.id)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture)
         GLES20.glTexSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, 64, 2, GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, audioBuf)
         GLES20.glUniform1i(prog.uAudio, 0)
-        GLES20.glUniform2f(prog.uRes, width.toFloat(), height.toFloat())
+        if (prog.uPrev >= 0) {
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (useFeedback) fboTex[cur] else 0)
+            GLES20.glUniform1i(prog.uPrev, 1)
+        }
+        val rw = if (useFeedback) fbW else width
+        val rh = if (useFeedback) fbH else height
+        GLES20.glUniform2f(prog.uRes, rw.toFloat(), rh.toFloat())
+        if (prog.uAspect >= 0) GLES20.glUniform1f(prog.uAspect, rw.toFloat() / rh.toFloat().coerceAtLeast(1f))
         GLES20.glUniform1f(prog.uTime, ((System.nanoTime() - startNs) / 1_000_000_000.0).toFloat())
         GLES20.glUniform1f(prog.uBass, sBass)
         GLES20.glUniform1f(prog.uMid, sMid)
@@ -353,6 +468,21 @@ private class ShaderRenderer(@Volatile var sessionId: Int) : GLSurfaceView.Rende
         GLES20.glVertexAttribPointer(prog.aPos, 2, GLES20.GL_FLOAT, false, 0, quad)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3)
         GLES20.glDisableVertexAttribArray(prog.aPos)
+
+        // ── Pass 2: blit the finished frame to the screen, then swap ─────────────────────────
+        if (useFeedback) {
+            GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+            GLES20.glViewport(0, 0, width, height)
+            GLES20.glUseProgram(blitProg)
+            GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, fboTex[back])
+            GLES20.glUniform1i(blitTex, 0)
+            GLES20.glEnableVertexAttribArray(blitPos)
+            GLES20.glVertexAttribPointer(blitPos, 2, GLES20.GL_FLOAT, false, 0, quad)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3)
+            GLES20.glDisableVertexAttribArray(blitPos)
+            cur = back
+        }
         lastFrameEndNs = System.nanoTime()
     }
 }

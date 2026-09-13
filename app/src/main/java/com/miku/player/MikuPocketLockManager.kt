@@ -18,10 +18,14 @@ import kotlinx.coroutines.launch
  * Hatsune Miku System-Wide Pocket Lock & Hardware Fn Switch Manager.
  * Solves the hardware limitation where Touch + Key Lock only executed one mode.
  * Simultaneously locks/unlocks:
- * 1. Touchscreen Digitizer (via `vendor.audio.hw.set.disable_touch` and `libinputflinger.so`)
- * 2. Physical Transport Buttons (via `Settings.Global.button_lock`)
- * 3. Physical Power Button (via `/dev/input/event0` kernel permission masking)
- * 4. Rotary Volume Wheel (via `/dev/input/event2` configurable pass-through)
+ * 1. Touchscreen Digitizer (InputManager.disableInputDevice on "Goodix-CTP")
+ * 2. Physical Transport Buttons (Settings.Global.button_lock, honored by the HiBy framework)
+ * 3. Physical Power Button (InputManager.disableInputDevice on "qpnp_pon")
+ * 4. Rotary Volume Wheel (InputManager.disableInputDevice on "ring-keys")
+ *
+ * Every one of those is root-free and platform-permission backed - see MikuInputLock. The old
+ * setprop/chmod shell-outs this class used to fire alongside them needed su, which does not exist
+ * on MikuOS, so they were dead weight and have been removed.
  */
 object MikuPocketLockManager {
     private const val TAG = "MikuPocketLock"
@@ -90,7 +94,8 @@ object MikuPocketLockManager {
                 Settings.System.putInt(cr, "volume_lock", 0)
                 Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 0)
             } catch (_: Throwable) {}
-            RootShell.execFast("chmod 666 /dev/input/event*; setprop vendor.audio.hw.set.disable_touch false; settings put system media_lock 0; settings put system volume_lock 0")
+            // Root-free unlock of the physical devices (the old chmod/setprop line needed su).
+            MikuInputLock.enableAll(ctx.applicationContext)
         }
     }
 
@@ -130,24 +135,20 @@ object MikuPocketLockManager {
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 1) } catch (_: Throwable) {}
                         // Root-free digitizer lock (the old setprop no-ops unrooted). +blank screen.
                         MikuInputLock.setTouch(ctx, enabled = false)
-                        RootShell.execFast("setprop vendor.audio.hw.set.disable_touch true")
                         blankScreen(ctx)
                     }
                     "key_lock" -> {
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 1) } catch (_: Throwable) {}
                         MikuInputLock.setTouch(ctx, enabled = true)
-                        RootShell.execFast("setprop vendor.audio.hw.set.disable_touch false")
                     }
                     "touch_lock" -> {
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 0) } catch (_: Throwable) {}
                         MikuInputLock.setTouch(ctx, enabled = false)
-                        RootShell.execFast("setprop vendor.audio.hw.set.disable_touch true")
                         blankScreen(ctx)
                     }
                     else -> {
                         try { Settings.Global.putInt(cr, SETTING_BUTTON_LOCK, 1) } catch (_: Throwable) {}
                         MikuInputLock.setTouch(ctx, enabled = false)
-                        RootShell.execFast("setprop vendor.audio.hw.set.disable_touch true")
                         blankScreen(ctx)
                     }
                 }
@@ -161,10 +162,8 @@ object MikuPocketLockManager {
                 // 4. Volume wheel rotary encoder (/dev/input/event2)
                 if (!allowVolume && fnMode != "touch_lock") {
                     MikuInputLock.setWheel(ctx, enabled = false)
-                    RootShell.execFast("chmod 000 /dev/input/event2")
                 } else {
                     MikuInputLock.setWheel(ctx, enabled = true)
-                    RootShell.execFast("chmod 660 /dev/input/event2")
                 }
             } else {
                 // ==================== UNLOCKED ====================
@@ -174,7 +173,6 @@ object MikuPocketLockManager {
                     Settings.System.putInt(cr, "volume_lock", 0)
                 } catch (_: Throwable) {}
                 MikuInputLock.enableAll(ctx)
-                RootShell.execFast("setprop vendor.audio.hw.set.disable_touch false; chmod 666 /dev/input/event*; settings put system media_lock 0; settings put system volume_lock 0")
             }
 
             // Visual feedback & animated cyber HUD overlay (only when screen is awake)

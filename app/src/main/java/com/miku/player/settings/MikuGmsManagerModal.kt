@@ -28,7 +28,6 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.miku.player.R
-import com.miku.player.RootShell
 import com.miku.player.AudiowideFont
 import com.miku.player.CyberGlassBorder
 import com.miku.player.MikuCyan
@@ -78,18 +77,39 @@ fun isPackageEnabled(ctx: Context, packageName: String): Boolean {
  * Checks if a package is installed on the system (even if disabled).
  */
 fun isPackageInstalled(ctx: Context, packageName: String): Boolean {
+    // MATCH_UNINSTALLED_PACKAGES also matches packages that are installed but disabled/hidden -
+    // exactly the state this screen toggles. (The old `pm list packages` shell-out needed su and
+    // never ran on MikuOS, so a disabled package looked "not installed".)
     return try {
-        ctx.packageManager.getPackageInfo(packageName, 0)
+        ctx.packageManager.getPackageInfo(packageName, PackageManager.MATCH_UNINSTALLED_PACKAGES)
         true
     } catch (_: PackageManager.NameNotFoundException) {
-        // Try query via pm list packages
-        try {
-            val res = RootShell.execOut("pm list packages $packageName")
-            res != null && res.indexOf(packageName) >= 0
-        } catch (_: Throwable) {
-            false
-        }
+        false
+    } catch (_: Throwable) {
+        false
     }
+}
+
+/**
+ * Enable or disable an application root-free.
+ *
+ * PackageManager.setApplicationEnabledSetting is the platform path: it needs
+ * CHANGE_COMPONENT_ENABLED_STATE (signature|privileged), which this platform-signed build holds.
+ * The previous implementation shelled `pm enable` / `pm disable-user` through su, which does not
+ * exist on MikuOS - so nothing ever changed. Returns true only when the OS accepted the call;
+ * the caller still re-reads the real state before telling the user anything.
+ */
+private fun setApplicationEnabled(ctx: Context, pkg: String, enable: Boolean): Boolean = try {
+    ctx.packageManager.setApplicationEnabledSetting(
+        pkg,
+        if (enable) PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        else PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
+        0
+    )
+    true
+} catch (t: Throwable) {
+    android.util.Log.w("MikuGmsManager", "setApplicationEnabledSetting($pkg, $enable) refused: $t")
+    false
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,22 +144,18 @@ fun MikuGmsManagerModal(
         }
     }
 
-    // The enable/disable path shells out to `pm` through su, which never runs on MikuOS (no root),
-    // and this screen used to report "Enabled $pkg" / "All Google Apps Enabled" unconditionally —
-    // a success message for a write that did nothing. Every message below is now derived from
+    // This screen used to report "Enabled $pkg" / "All Google Apps Enabled" unconditionally after
+    // firing `pm enable` through su — a success message for a write that did nothing. The write is
+    // now the platform call [setApplicationEnabled], and every message below is derived from a
     // PackageManager re-read AFTER the attempt, so the screen states what the OS actually says.
     fun setPackageState(pkg: String, enable: Boolean) {
         isProcessing = true
         statusMessage = if (enable) "Enabling $pkg..." else "Disabling $pkg..."
         scope.launch(Dispatchers.IO) {
-            if (enable) {
-                RootShell.execFast("pm enable $pkg && pm unhide $pkg")
-            } else {
-                RootShell.execFast("pm disable-user --user 0 $pkg || pm disable $pkg")
-            }
-            // execFast is fire-and-forget; give a real `pm` (if one ever runs) time to land before
-            // reading the result back, so the verdict below reflects the OS, not a race.
-            kotlinx.coroutines.delay(400)
+            setApplicationEnabled(ctx, pkg, enable)
+            // Let PackageManager settle before reading the result back, so the verdict below
+            // reflects the OS rather than a race.
+            kotlinx.coroutines.delay(200)
             refreshStates()
             val actual = isPackageEnabled(ctx, pkg)
             withContext(Dispatchers.Main) {
@@ -159,13 +175,9 @@ fun MikuGmsManagerModal(
         scope.launch(Dispatchers.IO) {
             val attempted = GOOGLE_ECOSYSTEM_TARGETS.filter { installedSet.contains(it.packageName) }
             for (target in attempted) {
-                if (enable) {
-                    RootShell.execFast("pm enable ${target.packageName} && pm unhide ${target.packageName}")
-                } else {
-                    RootShell.execFast("pm disable-user --user 0 ${target.packageName} || pm disable ${target.packageName}")
-                }
+                setApplicationEnabled(ctx, target.packageName, enable)
             }
-            kotlinx.coroutines.delay(600)
+            kotlinx.coroutines.delay(300)
             refreshStates()
             val changed = attempted.count { isPackageEnabled(ctx, it.packageName) == enable }
             withContext(Dispatchers.Main) {

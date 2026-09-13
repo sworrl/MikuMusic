@@ -192,7 +192,7 @@ object MikuPowerGovernor {
         val a = app ?: return
         io.launch {
             val ok = runCatching { Settings.Global.putString(a.contentResolver, KEY_OVERRIDE, m.key) }.getOrDefault(false)
-            if (!ok) RootShell.execFast("settings put global $KEY_OVERRIDE ${m.key}")
+            if (!ok) Log.w(TAG, "could not publish $KEY_OVERRIDE=${m.key} (WRITE_SECURE_SETTINGS missing?)")
         }
         applyNow("mode=$m")
     }
@@ -252,7 +252,7 @@ object MikuPowerGovernor {
                 Settings.Global.putString(a.contentResolver, KEY_PROFILE, next.key)
                 Settings.Global.putString(a.contentResolver, KEY_PROFILE_TS, System.currentTimeMillis().toString())
             }.getOrDefault(false)
-            if (!ok) RootShell.execFast("settings put global $KEY_PROFILE ${next.key}; settings put global $KEY_PROFILE_TS ${System.currentTimeMillis()}")
+            if (!ok) Log.w(TAG, "could not publish $KEY_PROFILE=${next.key} (WRITE_SECURE_SETTINGS missing?)")
         }
 
         // 2. System battery saver — never in PERF/BALANCED, on in AUDIO_ONLY (if enabled) and IDLE-screen-off.
@@ -309,7 +309,6 @@ object MikuPowerGovernor {
 
     private fun writeLowPower(a: Context, v: Int) {
         val ok = runCatching { Settings.Global.putInt(a.contentResolver, KEY_LOW_POWER, v) }.getOrDefault(false)
-        if (!ok) RootShell.execFast("settings put global $KEY_LOW_POWER $v")
         Log.i(TAG, "battery saver (low_power) → $v (ok=$ok)")
     }
 

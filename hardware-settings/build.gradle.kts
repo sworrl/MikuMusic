@@ -14,8 +14,8 @@ android {
         applicationId = "com.m500.hardware"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1007
-        versionName = "1.0.7-mikuos"
+        versionCode = 1008
+        versionName = "1.0.8-mikuos"
     }
 
     val signingProps = Properties().apply {

@@ -56,6 +56,12 @@ object IdleController {
     var tier by mutableStateOf(IdleTier.ACTIVE)
         private set
 
+    /** Ref count of on-screen surfaces demanding the display stay lit (see [KeepScreenAwake]). */
+    var holdAwake by mutableStateOf(0)
+        private set
+    fun acquireAwake() { holdAwake++ }
+    fun releaseAwake() { if (holdAwake > 0) holdAwake-- }
+
     @Volatile private var lastInteraction = android.os.SystemClock.elapsedRealtime()
     @Volatile private var offRequested = false
 
@@ -81,6 +87,15 @@ object IdleController {
 
     /** Called once a second by [IdleWatcher]. */
     fun tick(ctx: Context) {
+        // A hold beats the timer entirely: tape mode and the fullscreen visualiser are things you
+        // sit and WATCH without touching the device, so the idle ladder (dim -> ambient -> screen
+        // off) must not run while one is on screen.
+        if (holdAwake > 0) {
+            if (tier != IdleTier.ACTIVE) tier = IdleTier.ACTIVE
+            lastInteraction = android.os.SystemClock.elapsedRealtime()
+            if (offRequested) { ScreenOffHelper.restore(ctx); offRequested = false }
+            return
+        }
         if (!enabled) { if (tier != IdleTier.ACTIVE) tier = IdleTier.ACTIVE; return }
         val idleSec = (android.os.SystemClock.elapsedRealtime() - lastInteraction) / 1000
         val dimAt = activeSec.toLong()
@@ -243,6 +258,30 @@ fun AmbientOverlay(player: ExoPlayer, modifier: Modifier = Modifier) {
                         if (artist.isNotBlank()) Text(artist, color = Color(0xFF1E2626), fontSize = 12.sp, maxLines = 1)
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * Keeps the panel lit for as long as [active] and this composable are on screen: sets the window's
+ * FLAG_KEEP_SCREEN_ON (so Android's own display timeout cannot fire) AND takes an [IdleController]
+ * hold (so OUR idle ladder cannot dim or blank it either). Both are released on dispose, so normal
+ * timeout behaviour resumes the moment the surface goes away.
+ */
+@Composable
+fun KeepScreenAwake(active: Boolean = true) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.DisposableEffect(active, view) {
+        if (!active) {
+            onDispose { }
+        } else {
+            view.keepScreenOn = true
+            IdleController.acquireAwake()
+            IdleController.poke()
+            onDispose {
+                view.keepScreenOn = false
+                IdleController.releaseAwake()
             }
         }
     }

@@ -17,7 +17,6 @@ import android.os.Build
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.content.ContextCompat
-import com.miku.player.RootShell
 import com.miku.player.metrics.MikuMetricDatabase
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow

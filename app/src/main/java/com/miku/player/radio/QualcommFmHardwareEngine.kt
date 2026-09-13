@@ -9,7 +9,6 @@ import android.media.AudioManager
 import android.media.AudioRecord
 import android.os.Process
 import android.util.Log
-import com.miku.player.RootShell
 import dalvik.system.PathClassLoader
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -240,8 +239,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
         scope.launch {
             try {
                 try { setStationMethod?.invoke(fmReceiverInstance, clamped) } catch (_: Throwable) {}
+                // AudioManager.setParameters IS the HAL write; the setprop mirror that used to
+                // follow needed su (absent on MikuOS) and carried no extra information.
                 audioManager.setParameters("fm_freq=$clamped;fm_status=1;fm_mute=0")
-                RootShell.execFast("setprop vendor.audio.fm.freq $clamped; setprop vendor.audio.fm.status 1; setprop vendor.audio.fm.mute 0")
             } catch (t: Throwable) {
                 Log.e(TAG, "Error tuning frequency $clamped", t)
             }
@@ -299,14 +299,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
             audioManager.setParameters("handle_fm=$status;fm_status=$status;fm_volume=1.0;fm_mute=0;fm_freq=$freqKHz;fm_active=$status")
             audioManager.setParameters(if (enable) "fm_route=playback" else "fm_route=off")
             audioManager.setParameters("vendor.audio.hw.fm.mode=$status")
-
-            RootShell.execFast(
-                "setprop vendor.audio.hw.fm.mode $status; " +
-                "setprop vendor.audio.fm.route $status; " +
-                "setprop vendor.audio.fm.freq $freqKHz; " +
-                "setprop vendor.audio.fm.status $status; " +
-                "setprop vendor.audio.fm.mute 0"
-            )
+            audioManager.setParameters("vendor.audio.fm.route=$status;vendor.audio.fm.freq=$freqKHz;vendor.audio.fm.status=$status;vendor.audio.fm.mute=0")
         } catch (t: Throwable) {
             Log.e(TAG, "Audio HAL parameter configuration error", t)
         }

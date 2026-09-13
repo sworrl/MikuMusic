@@ -50,7 +50,7 @@ object MikuTrackHud {
     fun setEnabled(ctx: Context, on: Boolean): Boolean {
         val v = if (on) 1 else 0
         val ok = runCatching { Settings.Global.putInt(ctx.contentResolver, KEY_ENABLED, v) }.getOrDefault(false)
-        if (!ok) RootShell.execFast("settings put global $KEY_ENABLED $v")
+        if (!ok) android.util.Log.w("MikuTrackHud", "could not write $KEY_ENABLED (WRITE_SECURE_SETTINGS missing?) - reporting failure to the caller")
         return ok
     }
 

@@ -21,29 +21,77 @@ object RootShell {
     private val lock = ReentrantLock()
     @Volatile private var isSessionActive = false
 
-    fun isAvailable(): Boolean {
-        lock.withLock {
-            if (isSessionActive && suProcess?.isAlive == true) return true
-            return initSessionInternal()
+    /**
+     * ROOT IS OPTIONAL. MikuOS never requires su for anything: every feature has a platform-signed,
+     * root-free path, and that path is what ships. Root is a power-user ENHANCEMENT — where it is
+     * present it can unlock extra hardware (the SELinux-locked LED nodes, for one) and this class
+     * is how that gets used.
+     *
+     * What this flag fixes is the COST of asking when the answer is no. execFast forked `su -c`
+     * on every call, and PulsarLight's animation loops call it every 35 ms, so on an unrooted unit
+     * the always-alive hardware daemon was forking a process and printing a stack trace about
+     * thirty times a second, forever — the log flood in logcat, and real CPU taken from the
+     * ambient-light sampler that shares this process.
+     *
+     * So: probe once, remember the answer, and stop paying for it. The answer is NOT permanent —
+     * [recheck] clears it, which is what a user who has just installed Magisk or granted the su
+     * prompt needs. Call recheck from a user action or on app resume; never from a hot loop.
+     */
+    @Volatile private var suAbsent = false
+    private val loggedAbsence = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private fun latchAbsent(reason: String) {
+        suAbsent = true
+        if (loggedAbsence.compareAndSet(false, true)) {
+            Log.i(TAG, "no root available ($reason) - optional root-backed extras are off. This is the " +
+                "normal, supported state: MikuOS is platform-signed and every feature has a " +
+                "root-free path. Call RootShell.recheck() if the user grants root later.")
         }
     }
 
+    fun isAvailable(): Boolean {
+        if (suAbsent) return false
+        lock.withLock {
+            if (suAbsent) return false
+            if (isSessionActive && suProcess?.isAlive == true) return true
+            val ok = initSessionInternal()
+            if (!ok) latchAbsent("session init failed")
+            return ok
+        }
+    }
+
+    /**
+     * Re-probe for su, clearing any previous negative answer first.
+     *
+     * This is the path for a user who roots the device (or grants the su prompt) after the process
+     * has already concluded there was no root. It is deliberately the ONLY thing that un-latches,
+     * and it is never called from an animation or polling loop — only from an explicit user action
+     * or an app-resume, so a genuinely unrooted device still pays for exactly one probe.
+     */
     fun recheck(): Boolean {
         lock.withLock {
+            suAbsent = false
+            loggedAbsence.set(false)
             closeInternal()
-            return initSessionInternal()
+            val ok = initSessionInternal()
+            if (!ok) latchAbsent("recheck found no su")
+            return ok
         }
     }
 
     fun exec(cmd: String): Boolean {
+        if (suAbsent) return false
         val out = execOut(cmd)
         return out != null
     }
 
     fun execFast(cmd: String) {
+        // The fork-per-call that made this the flood source. One latched check, then nothing.
+        if (suAbsent) return
         try {
             Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
         } catch (_: Throwable) {
+            latchAbsent("su binary not executable")
             lock.withLock {
                 if (!isSessionActive || suProcess?.isAlive != true) {
                     if (!initSessionInternal()) return

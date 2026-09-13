@@ -1740,9 +1740,14 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
     }
     if (fnLocked) {
         val cr = ctx.contentResolver
-        val isKernelLock = PlayerPreferences.loadRootEnabled(ctx) &&
-            (android.provider.Settings.Global.getString(cr, "fn_settings") ?: "touch_and_key_lock") == "touch_and_key_lock"
-        if (!isKernelLock) {
+        // Skip the in-app touch-eating overlay ONLY when the digitizer is genuinely inhibited at
+        // the platform level (InputManager reported a device disabled). This used to be gated on
+        // the "root enabled" preference, which defaults to true and has nothing to do with whether
+        // touch is actually blocked - so on any non-touch_and_key_lock mismatch the overlay went
+        // missing while touch stayed live.
+        val isHardwareTouchLock = MikuInputLock.touchHardwareLocked &&
+            (android.provider.Settings.Global.getString(cr, "fn_settings") ?: "touch_and_key_lock") != "key_lock"
+        if (!isHardwareTouchLock) {
             Box(
                 Modifier.fillMaxSize().pointerInput(Unit) {
                     awaitPointerEventScope { while (true) { awaitPointerEvent().changes.forEach { it.consume() } } }
@@ -5718,11 +5723,7 @@ enum class SettingsCategory(val title: String, val icon: String) {
     Spacer(Modifier.height(8.dp))
 }
 
-/** Entirely hidden when root isn't available — these are pure bonus features on top of an app
- *  that's fully functional without them (RootShell's whole design point), not something to nag a
- *  non-rooted user about. Checked async (root-shell calls are blocking I/O) and simply renders
- *  nothing until/unless that check comes back true. */
-/** Sudo/Root features section — master toggle defaulted to OFF with a fullscreen Miku consent modal. */
+/** Restart the app cleanly (used by settings that need a fresh process). */
 private fun gracefulAppRestart(ctx: android.content.Context) {
     try {
         val pm = ctx.packageManager
@@ -5739,68 +5740,73 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
     }
 }
 
-/** Sudo/Root features section — master toggle defaulted to OFF with confirmation modals and graceful restart. */
+/**
+ * Hardware & System section.
+ *
+ * There is no "grant root" switch any more: MikuOS ships no su binary at all, so the old master
+ * toggle could only ever report "root request denied" while hiding the two features behind it.
+ * This build is platform-signed and reaches the hardware through platform APIs instead. Each
+ * control below is shown with its REAL availability, probed on this device, and says plainly when
+ * the hardware cannot honour it.
+ */
 @Composable private fun RootFeaturesSection(ctx: android.content.Context) {
     val scope = rememberCoroutineScope()
-    var rootMasterEnabled by remember { mutableStateOf(PlayerPreferences.loadRootEnabled(ctx)) }
-    var showConsentModal by remember { mutableStateOf(false) }
-    var showDisableModal by remember { mutableStateOf(false) }
     var pulsarOn by remember { mutableStateOf(PlayerPreferences.loadPulsarEnabled(ctx)) }
     var cpuPerfOn by remember { mutableStateOf(PlayerPreferences.loadCpuPerfEnabled(ctx)) }
+    val ledWritable = remember { PulsarLight.isHardwareWritable() }
+    var cpuSupported by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(Unit) { cpuSupported = CpuPerformance.isSupported() }
 
     SettingsSection("Hardware & System")
 
-    SettingsToggleRow(
-        title = "Elevated Hardware Access (Root)",
-        subtitle = if (rootMasterEnabled) "Active · Direct kernel LED and CPU scaling enabled" else "Disabled · Tap to grant privileged hardware access",
-        checked = rootMasterEnabled
-    ) { enabled ->
-        if (enabled) {
-            scope.launch {
-                val available = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    RootShell.recheck()
-                }
-                if (available) {
-                    PlayerPreferences.saveRootEnabled(ctx, true)
-                    rootMasterEnabled = true
-                    android.widget.Toast.makeText(ctx, "✓ Privileged hardware access enabled", android.widget.Toast.LENGTH_SHORT).show()
-                } else {
-                    android.widget.Toast.makeText(ctx, "⚠ Root request denied or unavailable", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }
-        } else {
-            scope.launch {
-                PlayerPreferences.saveRootEnabled(ctx, false)
-                PlayerPreferences.savePulsarEnabled(ctx, false)
-                PlayerPreferences.saveCpuPerfEnabled(ctx, false)
-                pulsarOn = false
-                cpuPerfOn = false
-                rootMasterEnabled = false
-                PulsarLight.setEnabled(ctx, false)
-                CpuPerformance.setEnabled(ctx, false)
-                RootShell.close()
-                android.widget.Toast.makeText(ctx, "✓ Standard permissions restored", android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xFF07272B))
+            .border(1.dp, MikuTealBright.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .padding(14.dp)
+    ) {
+        Text("Platform Hardware Access", color = MikuTealBright, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "MikuOS runs without su. Miku Music is platform-signed, so the DAC, input lock and power controls go straight through the Android platform APIs — there is nothing to grant here.",
+            color = Muted,
+            fontSize = 11.5.sp,
+            lineHeight = 15.sp
+        )
     }
 
-    if (rootMasterEnabled) {
-        SettingsToggleRow(
-            title = "Pulsar RGB Master Control",
-            subtitle = "Direct TrueColor RGB PWM & silicon hardware driver control",
-            checked = pulsarOn
-        ) { pulsarOn = it; scope.launch { PulsarLight.setEnabled(ctx, it) } }
+    Spacer(Modifier.height(10.dp))
 
-        if (pulsarOn) {
-            PulsarSettingsCard(ctx)
-            Spacer(Modifier.height(10.dp))
-        }
+    SettingsToggleRow(
+        title = "Pulsar RGB Master Control",
+        subtitle = if (ledWritable) "Front indicator colour and animation engine"
+                   else "Not available on this unit — no writable LED node, so the setting is stored but the light will not respond",
+        checked = pulsarOn
+    ) { pulsarOn = it; scope.launch { PulsarLight.setEnabled(ctx, it) } }
 
+    if (pulsarOn) {
+        PulsarSettingsCard(ctx)
+        Spacer(Modifier.height(10.dp))
+    }
+
+    if (cpuSupported == true) {
         SettingsToggleRow(
             title = "Performance Governor",
-            subtitle = "Locks CPU cores at peak clock while player is open for zero-latency DSD audio",
+            subtitle = "Pins every CPU core at peak clock while the player is open",
             checked = cpuPerfOn
         ) { cpuPerfOn = it; scope.launch { CpuPerformance.setEnabled(ctx, it) } }
+    } else if (cpuSupported == false) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
+            Text("Performance Governor — unavailable", color = Color(0xFFFFD166), fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                "This kernel does not let the player write cpufreq scaling_governor, so the clock pin cannot be applied. Sustained-performance mode (an Android hint) is still used while playing.",
+                color = Muted,
+                fontSize = 12.sp,
+                lineHeight = 15.sp
+            )
+        }
     }
 }
 
@@ -5999,7 +6005,11 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
         mutableStateOf(android.provider.Settings.Global.getInt(cr, "m500_fn_lock_power_button", 1) == 1)
     }
 
-    val isRooted = RootShell.isAllowed(ctx)
+    // Whether the privileged input path this feature actually uses is available. Root is never
+    // part of the answer: locking runs through InputManager.disableInputDevice, which needs the
+    // signature permission DISABLE_INPUT_DEVICES that the Falcon platform key grants.
+    val hasInputLock = ctx.checkSelfPermission("android.permission.DISABLE_INPUT_DEVICES") ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
     val isPocket = fnMode == "touch_and_key_lock" || fnMode == "Both"
 
     SettingsSection("Hardware Fn Switch")
@@ -6009,29 +6019,27 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
         Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .background(if (isRooted) Color(0xFF07272B) else Color(0xFF2B2407))
-            .border(1.dp, if (isRooted) MikuTealBright.copy(alpha = 0.3f) else Color(0xFFFFD166).copy(alpha = 0.3f), RoundedCornerShape(14.dp))
+            .background(if (hasInputLock) Color(0xFF07272B) else Color(0xFF2B2407))
+            .border(1.dp, if (hasInputLock) MikuTealBright.copy(alpha = 0.3f) else Color(0xFFFFD166).copy(alpha = 0.3f), RoundedCornerShape(14.dp))
             .padding(14.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(if (isRooted) "🟢" else "🟡", fontSize = 14.sp)
+            Text(if (hasInputLock) "🟢" else "🟡", fontSize = 14.sp)
             Spacer(Modifier.width(8.dp))
             Text(
-                if (isRooted) "Root Shell Available" else "Platform Input Lock (No Root)",
-                color = if (isRooted) MikuTealBright else Color(0xFFFFD166),
+                if (hasInputLock) "Platform Input Lock Ready" else "Input Lock Permission Missing",
+                color = if (hasInputLock) MikuTealBright else Color(0xFFFFD166),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
         }
         Spacer(Modifier.height(4.dp))
-        // Honest description of the mechanism that actually runs. The old copy claimed "Kernel
-        // Hardware Lock Active" with direct digitizer-node inhibition whenever a root shell merely
-        // existed, and told the user to enable root to get locking at all — on this build locking
-        // runs root-free through InputManager.disableInputDevice plus the HiBy framework's
-        // Settings.Global button_lock, which is the path that is actually verified to work.
+        // Honest description of the mechanism that actually runs. The old copy keyed this card on
+        // whether a root shell existed — MikuOS has no su at all, so it always read as the
+        // degraded state while the real (and working) mechanism is the platform input lock.
         Text(
-            if (isRooted) "Root shell detected. Locking still runs root-free through InputManager.disableInputDevice and the HiBy framework's button_lock setting."
-            else "Locking runs root-free: InputManager.disableInputDevice (platform permission) plus the HiBy framework's button_lock setting. No root needed.",
+            if (hasInputLock) "Locking runs root-free: InputManager.disableInputDevice (platform permission) plus the HiBy framework's button_lock setting."
+            else "This build is missing DISABLE_INPUT_DEVICES, so only the HiBy framework's button_lock applies — the touchscreen will NOT be inhibited.",
             color = Muted,
             fontSize = 11.5.sp,
             lineHeight = 15.sp

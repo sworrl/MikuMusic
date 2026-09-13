@@ -2,24 +2,41 @@ package com.miku.player
 
 import android.content.Context
 import android.util.Log
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.BufferedWriter
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /**
- * High-performance, single-session interactive root shell.
- * Maintains a persistent `su` session to eliminate multiple Magisk popup prompts
- * and provide sub-millisecond command execution latency.
+ * Legacy root shell shim.
+ *
+ * MikuOS is platform-signed and deliberately root-free: there is no `su` binary on the device, so
+ * every spawn used to throw `IOException: error=2, No such file or directory`. The old
+ * implementation retried on a 120 s backoff forever, which meant a permanent fork/exception flood
+ * in logcat plus a real battery cost from the timer-driven managers that polled through here.
+ *
+ * The standing project directive is: never use su; anything that needs privilege goes through a
+ * platform API (Settings puts on WRITE_SECURE_SETTINGS, AudioManager.setParameters for the HiBy
+ * audio HAL, InputManager.disableInputDevice, PackageManager, AppOps, PowerManager...). Nothing in
+ * this app calls into this object for real work any more; it survives only so an out-of-tree or
+ * future caller still compiles and gets an honest "unavailable" instead of a silent no-op loop.
+ *
+ * Behaviour: ONE probe per process. The moment `su` is found to be missing (or refuses uid=0), the
+ * absence is latched in [suAbsent] permanently and logged exactly once. Every entry point is then a
+ * lock-free, fork-free no-op returning a clearly-unavailable result ([isAvailable]/[isAllowed] =
+ * false, [exec] = false, [execOut] = null, [execFast] = nothing). [recheck] does NOT clear the
+ * latch - su does not appear mid-process on this ROM, and un-latching is what produced the retry
+ * flood in the first place.
  */
 object RootShell {
     private const val TAG = "RootShell"
     private const val DELIMITER = "__MIKU_SHELL_EOF__"
+
+    /** Reason reported when no root shell exists (the normal state on MikuOS). */
+    const val REASON_NO_SU = "no su binary on this build (MikuOS is platform-signed and root-free)"
 
     private var suProcess: Process? = null
     private var writer: BufferedWriter? = null
@@ -27,73 +44,85 @@ object RootShell {
     private val lock = ReentrantLock()
     @Volatile private var isSessionActive = false
 
-    // On an UNROOTED boot every su spawn throws — and several managers poll through here on
-    // timers, which turned into a continuous fork/IOException flood (battery + logcat) AND
-    // starved unrelated callers queued on [lock]. After a failed spawn, fail fast (no lock,
-    // no fork) for this window before probing su again. recheck() clears it immediately.
-    private const val SU_BACKOFF_MS = 120_000L
-    @Volatile private var suMissingUntil = 0L
+    /** Latched once su is proven absent/denied. Never cleared for the life of the process. */
+    @Volatile private var suAbsentLatch = false
+    @Volatile private var lastReason: String? = null
+    private val loggedOnce = AtomicBoolean(false)
 
-    private fun suOnCooldown(): Boolean = System.currentTimeMillis() < suMissingUntil
-    private fun markSuMissing() { suMissingUntil = System.currentTimeMillis() + SU_BACKOFF_MS }
+    /** True once this process has proven there is no usable root shell. Cheap, never re-probes. */
+    val suAbsent: Boolean get() = suAbsentLatch
 
-    /** True if user has opted into root features in Settings AND root shell is operational. */
+    /** Human-readable reason the shell is unavailable, or null while it is (still) usable. */
+    val unavailableReason: String? get() = if (suAbsentLatch) (lastReason ?: REASON_NO_SU) else null
+
+    private fun latchAbsent(reason: String, t: Throwable? = null) {
+        lastReason = reason
+        suAbsentLatch = true
+        isSessionActive = false
+        if (loggedOnce.compareAndSet(false, true)) {
+            val detail = if (t != null) " [" + t.javaClass.simpleName + ": " + t.message + "]" else ""
+            Log.i(TAG, "root shell unavailable for this process: $reason$detail - every RootShell call is a no-op from here (this message is logged once)")
+        }
+    }
+
+    /** True if the user opted into root features AND a root shell is actually operational. */
     fun isAllowed(context: Context): Boolean {
+        if (suAbsentLatch) return false
         if (!PlayerPreferences.loadRootEnabled(context)) return false
         return isAvailable()
     }
 
     /**
-     * Checks or ensures persistent root shell is available.
-     * Only triggers root grant prompt on the first call.
+     * Whether a root shell is usable. Returns false immediately and forever once [suAbsent]
+     * latched - no lock, no fork, no log.
      */
     fun isAvailable(): Boolean {
-        if (suOnCooldown()) return false
+        if (suAbsentLatch) return false
         lock.withLock {
             if (isSessionActive && suProcess?.isAlive == true) return true
             return initSessionInternal()
         }
     }
 
+    /**
+     * Re-probe. Kept for API compatibility with the old "grant root" toggle; it deliberately does
+     * NOT clear the [suAbsent] latch, so a device without su can never restart the retry flood.
+     */
     fun recheck(): Boolean {
-        suMissingUntil = 0L
+        if (suAbsentLatch) return false
         lock.withLock {
             closeInternal()
             return initSessionInternal()
         }
     }
 
-    /** Execute command synchronously through persistent root pipe. */
+    /** Execute synchronously. Returns false (not "unknown") when no root shell exists. */
     fun exec(cmd: String): Boolean {
-        val out = execOut(cmd)
-        return out != null
+        if (suAbsentLatch) return false
+        return execOut(cmd) != null
     }
 
-    /** Asynchronously stream a fire-and-forget command through the pipe without blocking for reply. */
+    /** Fire-and-forget through the persistent pipe. No-op (no fork, no exception) without su. */
     fun execFast(cmd: String) {
-        if (suOnCooldown()) return
-        try {
-            Runtime.getRuntime().exec(arrayOf("su", "-c", cmd))
-        } catch (_: Throwable) {
-            lock.withLock {
-                if (!isSessionActive || suProcess?.isAlive != true) {
-                    if (!initSessionInternal()) return
-                }
-                try {
-                    val w = writer ?: return
-                    w.write(cmd)
-                    w.newLine()
-                    w.flush()
-                } catch (_: Throwable) {
-                    closeInternal()
-                }
+        if (suAbsentLatch) return
+        lock.withLock {
+            if (!isSessionActive || suProcess?.isAlive != true) {
+                if (!initSessionInternal()) return
+            }
+            try {
+                val w = writer ?: return
+                w.write(cmd)
+                w.newLine()
+                w.flush()
+            } catch (_: Throwable) {
+                closeInternal()
             }
         }
     }
 
-    /** Execute command and capture output text through persistent root pipe. */
+    /** Execute and capture stdout. Returns null when no root shell exists or the command failed. */
     fun execOut(cmd: String): String? {
-        if (suOnCooldown()) return null
+        if (suAbsentLatch) return null
         lock.withLock {
             if (!isSessionActive || suProcess?.isAlive != true) {
                 if (!initSessionInternal()) return null
@@ -103,7 +132,6 @@ object RootShell {
                 val w = writer ?: return null
                 val r = reader ?: return null
 
-                // Write command with end delimiter and exit status
                 w.write(cmd)
                 w.newLine()
                 w.write("echo \"$DELIMITER $?\"")
@@ -129,16 +157,16 @@ object RootShell {
 
                 if (exitCode == 0) sb.toString() else null
             } catch (e: Throwable) {
-                Log.e(TAG, "Command execution failed: $cmd", e)
+                Log.w(TAG, "command failed: $cmd", e)
                 closeInternal()
                 null
             }
         }
     }
 
-    private fun findSuBinary(): String {
+    /** Locate a su binary, or null when the ROM ships none (the MikuOS case). */
+    private fun findSuBinary(): String? {
         val paths = listOf(
-            "su",
             "/system/bin/su",
             "/system/xbin/su",
             "/sbin/su",
@@ -149,41 +177,39 @@ object RootShell {
         )
         for (p in paths) {
             try {
-                if (p == "su") return "su"
                 val f = java.io.File(p)
                 if (f.exists() && f.canExecute()) return p
             } catch (_: Throwable) {}
         }
-        return "su"
+        return null
     }
 
     private fun initSessionInternal(): Boolean {
+        if (suAbsentLatch) return false
+        val su = findSuBinary()
+        if (su == null) {
+            latchAbsent(REASON_NO_SU)
+            return false
+        }
         return try {
             closeInternal()
-            val proc = ProcessBuilder(findSuBinary()).redirectErrorStream(true).start()
+            val proc = ProcessBuilder(su).redirectErrorStream(true).start()
             val w = BufferedWriter(OutputStreamWriter(proc.outputStream))
             val r = BufferedReader(InputStreamReader(proc.inputStream))
 
-            // Verify uid=0
             w.write("id")
             w.newLine()
             w.write("echo \"$DELIMITER $?\"")
             w.newLine()
             w.flush()
 
-            val sb = java.lang.StringBuilder()
             var line: String?
             var gotRoot = false
 
             while (r.readLine().also { line = it } != null) {
                 val currentLine = line ?: break
-                if (currentLine.contains("uid=0")) {
-                    gotRoot = true
-                }
-                if (currentLine.startsWith(DELIMITER)) {
-                    break
-                }
-                sb.append(currentLine)
+                if (currentLine.contains("uid=0")) gotRoot = true
+                if (currentLine.startsWith(DELIMITER)) break
             }
 
             if (gotRoot && proc.isAlive) {
@@ -191,19 +217,16 @@ object RootShell {
                 writer = w
                 reader = r
                 isSessionActive = true
-                suMissingUntil = 0L
-                Log.i(TAG, "Persistent root shell successfully initialized (uid=0)")
+                Log.i(TAG, "persistent root shell initialized (uid=0) via $su")
                 true
             } else {
                 proc.destroyForcibly()
-                isSessionActive = false
-                markSuMissing()
+                latchAbsent("su at $su did not return uid=0 (root denied)")
                 false
             }
         } catch (e: Throwable) {
-            Log.w(TAG, "Failed to start su process — backing off ${SU_BACKOFF_MS / 1000}s", e)
             closeInternal()
-            markSuMissing()
+            latchAbsent("su at $su could not be started", e)
             false
         }
     }

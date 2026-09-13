@@ -111,12 +111,55 @@ object PulsarLight {
         RootShell.execFast("echo 0 > $SYSFS_RED; echo 0 > /sys/class/leds/green/brightness; echo 0 > $SYSFS_BLUE; echo 0 > $SYSFS_SGM_BRIGHT; echo 0 > $SYSFS_SGM_PATTERN; setprop vendor.audio.hiby.hw.led off")
     }
 
+    /**
+     * Can this unit's LED actually be driven at all?
+     *
+     * On this M500 it cannot: the Pulsar RGB indicator is SELinux-locked with no consumer service
+     * and no factory-test config (confirmed by direct probing, see the project notes). Every write
+     * below is therefore a no-op — but it used to be an EXPENSIVE no-op, because the animation
+     * loops call writeDual every 35 ms and each call forked an `su` that does not exist.
+     *
+     * Probed once, cached for the process. When it comes back false the animations do not start,
+     * so the daemon stops burning CPU pretending to drive a diode that will never light.
+     */
+    @Volatile private var hwWritableCache: Boolean? = null
+
+    fun isHardwareWritable(): Boolean {
+        hwWritableCache?.let { return it }
+        synchronized(this) {
+            hwWritableCache?.let { return it }
+            // Root-free path first — that is the one that has to work. Root is only consulted as
+            // an optional bonus for power users who have it, and on a rooted unit it may well be
+            // what finally gets this LED lit, since the nodes are SELinux-locked to us otherwise.
+            val ok = try {
+                java.io.File(SYSFS_RED).canWrite() || java.io.File(SYSFS_SGM_RGB).canWrite()
+            } catch (_: Throwable) { false } || RootShell.isAvailable()
+            if (!ok) {
+                android.util.Log.i("PulsarLight",
+                    "Pulsar LED is not writable on this unit - the sysfs nodes are SELinux-locked " +
+                    "to us and no (optional) root is available. Modes are still stored and the UI " +
+                    "says so; the light will not respond unless the user roots the device.")
+            }
+            hwWritableCache = ok
+            return ok
+        }
+    }
+
     private fun writeDual(r: Int, b: Int, brightness: Int) {
+        if (!isHardwareWritable()) return
         val scale = brightness.coerceIn(0, 255) / 255f
         val fr = (r.coerceIn(0, 255) * scale).toInt()
         val fb = (b.coerceIn(0, 255) * scale).toInt()
 
-        RootShell.execFast("setprop vendor.audio.hiby.hw.led on; echo $fr > $SYSFS_RED; echo 0 > /sys/class/leds/green/brightness; echo $fb > $SYSFS_BLUE; echo \"$fr 0 $fb\" > $SYSFS_SGM_RGB; echo $brightness > $SYSFS_SGM_BRIGHT")
+        // Direct sysfs write where the platform allows it; no shell, no fork.
+        val direct = runCatching { java.io.File(SYSFS_RED).writeText(fr.toString()) }.isSuccess
+        runCatching { java.io.File(SYSFS_BLUE).writeText(fb.toString()) }
+        runCatching { java.io.File(SYSFS_SGM_RGB).writeText("$fr 0 $fb") }
+        runCatching { java.io.File(SYSFS_SGM_BRIGHT).writeText(brightness.toString()) }
+        // Only if the unprivileged write was refused AND this user has root do we spend a shell.
+        if (!direct && RootShell.isAvailable()) {
+            RootShell.execFast("setprop vendor.audio.hiby.hw.led on; echo $fr > $SYSFS_RED; echo $fb > $SYSFS_BLUE; echo \"$fr 0 $fb\" > $SYSFS_SGM_RGB; echo $brightness > $SYSFS_SGM_BRIGHT")
+        }
     }
 
     private fun applyMode(ctx: Context, mode: Mode, brightness: Int) {
@@ -137,6 +180,7 @@ object PulsarLight {
     }
 
     private fun startChromaWave(peakBrightness: Int) {
+        if (!isHardwareWritable()) return
         val totalSteps = 60
         activeJob = scope.launch {
             try {
@@ -158,6 +202,7 @@ object PulsarLight {
     }
 
     private fun startBreathing(r: Int, b: Int, peakBrightness: Int, periodMs: Long) {
+        if (!isHardwareWritable()) return
         val totalSteps = 30
         val stepDelayMs = (periodMs / totalSteps).coerceAtLeast(20)
         activeJob = scope.launch {

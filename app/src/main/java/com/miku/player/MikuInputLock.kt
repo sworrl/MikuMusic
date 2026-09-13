@@ -63,7 +63,22 @@ object MikuInputLock {
         return n
     }
 
-    fun setTouch(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_TOUCH, enabled)
+    @Volatile private var touchLockedNow = false
+
+    /**
+     * True only while the digitizer is REALLY disabled: a matching input device was found and
+     * InputManager.disableInputDevice accepted the call. UI that needs to know whether the
+     * hardware is inhibited (and can therefore skip an in-app touch-blocking overlay) must read
+     * this rather than assuming from a preference.
+     */
+    val touchHardwareLocked: Boolean get() = touchLockedNow
+
+    fun setTouch(ctx: Context, enabled: Boolean): Int {
+        val n = setByName(ctx, DEV_TOUCH, enabled)
+        touchLockedNow = !enabled && n > 0
+        return n
+    }
+
     fun setKeys(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_KEYS, enabled)
     fun setWheel(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_WHEEL, enabled)
     fun setPower(ctx: Context, enabled: Boolean) = setByName(ctx, DEV_POWER, enabled)

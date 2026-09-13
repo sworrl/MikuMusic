@@ -91,9 +91,7 @@ object MikuAccentPublisher {
                 Settings.Global.putString(cr, KEY_ACCENT2, a2.toString())
                 Settings.Global.putString(cr, KEY_TS, System.currentTimeMillis().toString())
             }.getOrDefault(false)
-            if (!ok) RootShell.execFast(
-                "settings put global $KEY_ACCENT $a1; settings put global $KEY_ACCENT2 $a2; settings put global $KEY_TS ${System.currentTimeMillis()}"
-            )
+            if (!ok) android.util.Log.w("MikuAccentPublisher", "accent publish refused (WRITE_SECURE_SETTINGS missing?)")
         }
     }
 }

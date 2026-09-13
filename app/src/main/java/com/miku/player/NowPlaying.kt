@@ -392,6 +392,9 @@ fun NowPlayingScreen(
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(148.dp).alpha(0.07f)
         )
 
+        // Fullscreen play/visualiser is watched without touching the device - keep the panel lit.
+        KeepScreenAwake(isFullscreenVisualizer)
+
         if (isFullscreenVisualizer) {
         Box(
             Modifier

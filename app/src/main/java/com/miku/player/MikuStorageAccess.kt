@@ -40,10 +40,10 @@ object MikuStorageAccess {
             m.invoke(aom, OP, uid, pkg, android.app.AppOpsManager.MODE_ALLOWED)
         }.onFailure { Log.w(TAG, "AppOpsManager.setMode failed: ${it.javaClass.simpleName}: ${it.message}") }
         if (hasAllFilesAccess()) { Log.i(TAG, "All-files access self-granted via AppOps"); return true }
-        // 2. Root fallback (only does anything on a rooted boot).
-        RootShell.execFast("appops set $pkg MANAGE_EXTERNAL_STORAGE allow")
-        val ok = hasAllFilesAccess()
-        Log.i(TAG, "All-files access after root fallback: $ok")
-        return ok
+        // No su fallback: AppOpsManager.setMode above IS the privileged path on this
+        // platform-signed build. If it did not take, report the failure honestly so the caller can
+        // send the user to the "All files access" Settings screen instead of pretending.
+        Log.w(TAG, "All-files access NOT held after AppOps self-grant (pkg=$pkg uid=$uid) - user must grant it in Settings")
+        return false
     }
 }

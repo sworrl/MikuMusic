@@ -400,7 +400,7 @@ object PlayerHolder {
         val ok = runCatching {
             android.provider.Settings.Global.putInt(context.contentResolver, "miku_pause_on_unplug", v)
         }.getOrDefault(false)
-        if (!ok) RootShell.execFast("settings put global miku_pause_on_unplug $v")
+        if (!ok) android.util.Log.w("PlayerHolder", "miku_pause_on_unplug publish refused (WRITE_SECURE_SETTINGS missing?) - in-app behaviour still applied")
     }
 
     /**
