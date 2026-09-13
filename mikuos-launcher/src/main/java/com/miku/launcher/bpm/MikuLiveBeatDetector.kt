@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import android.media.audiofx.Visualizer
 import android.util.Log
+import com.miku.launcher.ui.MikuPowerProfile
 import kotlinx.coroutines.*
 
 /**
@@ -42,6 +43,18 @@ object MikuLiveBeatDetector {
         // the counter shows "standby" honestly and we don't hold a Visualizer for nothing.
         gateJob = scope.launch {
             while (isActive) {
+                // VISIBILITY GATE (added 2026-09-13). Everything this detector feeds — the BPM badge,
+                // widget and observatory — is launcher UI. Capturing the output mix at max FFT rate
+                // while the launcher is BACKGROUNDED cost ~4% of a core continuously for something
+                // nobody could see, and over a long listening session that is what got the launcher
+                // killed by the platform: `am_kill com.miku.launcher, excessive cpu 158760 during
+                // 300077 limit=25` (~53% sustained). The lockscreen's BPM is unaffected: it reads
+                // Settings.Global miku_now_playing_bpm, published by Miku Music, not from here.
+                if (!MikuPowerProfile.visible.value) {
+                    if (vis != null) { detach(); MikuBpmEngine.pushLivePlaying(false) }
+                    MikuPowerProfile.awaitVisible()   // suspends — no polling at all while hidden
+                    continue
+                }
                 val musicOut = try { am?.isMusicActive == true } catch (_: Throwable) { false }
                 if (musicOut && vis == null) attach(app)
                 if (!musicOut && vis != null) { detach(); MikuBpmEngine.pushLivePlaying(false) }
