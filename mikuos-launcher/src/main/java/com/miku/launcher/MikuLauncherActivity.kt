@@ -2637,16 +2637,38 @@ fun bringTaskToFront(ctx: Context, task: RecentTaskItem) {
     }
 }
 
-fun dismissTask(ctx: Context, task: RecentTaskItem) {
-    // 1. Terminate package with root am force-stop (works for Spotify, Google apps, 3rd party apps)
+/**
+ * Actually removes a task and stops its app. Returns true only if the task removal was accepted.
+ *
+ * This used to be `su -c am force-stop` (there is no su on MikuOS — the fork threw and was
+ * swallowed) plus `am.appTasks…finishAndRemoveTask()`, and appTasks only ever contains THIS app's
+ * own tasks, so a third-party card was never removed by either half. The caller then deleted the
+ * card from the list anyway, so the UI showed a dismissal that had not happened.
+ */
+fun dismissTask(ctx: Context, task: RecentTaskItem): Boolean {
+    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+    var removed = false
     try {
-        Runtime.getRuntime().exec(arrayOf("su", "-c", "am force-stop ${task.packageName}"))
+        am?.appTasks?.firstOrNull { it.taskInfo?.taskId == task.taskId }?.let {
+            it.finishAndRemoveTask()
+            removed = true
+        }
     } catch (_: Throwable) {}
-    // 2. Remove from ActivityManager tasks
-    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return
-    try {
-        am.appTasks.firstOrNull { it.taskInfo?.taskId == task.taskId }?.finishAndRemoveTask()
-    } catch (_: Throwable) {}
+    if (!removed) {
+        // Platform-signed path (MikuOS is privileged, not rooted): ActivityTaskManager.removeTask.
+        removed = runCatching {
+            val atmClass = Class.forName("android.app.ActivityTaskManager")
+            val svc = atmClass.getMethod("getService").invoke(null)
+            svc.javaClass.getMethod("removeTask", Int::class.javaPrimitiveType).invoke(svc, task.taskId)
+            true
+        }.getOrDefault(false)
+    }
+    // forceStopPackage is a signature-permission @SystemApi — reachable for a platform-signed
+    // launcher, unlike the `su` fork it replaces.
+    runCatching {
+        ActivityManager::class.java.getMethod("forceStopPackage", String::class.java).invoke(am, task.packageName)
+    }
+    return removed
 }
 
 fun clearAllTasks(ctx: Context, tasks: List<RecentTaskItem>) {
@@ -5301,30 +5323,42 @@ private fun CyberShadeFooterSection(onClose: () -> Unit) {
 
     // Telemetry & Weather
     val weatherState by com.miku.launcher.weather.MikuWeatherService.state.collectAsState()
+    val netState by com.miku.launcher.network.MikuNetworkService.state.collectAsState()
 
-    // Data-Only SIM Shield Banner
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0x3300E676))
-            .border(1.dp, com.miku.launcher.ui.MikuIdentity.Leek, RoundedCornerShape(12.dp))
-            .padding(horizontal = 10.dp, vertical = 6.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(6.dp).clip(CircleShape).background(com.miku.launcher.ui.MikuIdentity.Leek))
-            Spacer(Modifier.width(6.dp))
-            Text(
-                text = "🛡️ DATA-ONLY SIM SHIELD: GOOGLE FI & IMS NAGS SUPPRESSED",
-                color = com.miku.launcher.ui.MikuIdentity.Leek,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-                fontFamily = AudiowideFont
-            )
+    // Cellular status — REAL, from MikuNetworkService.
+    // WAS: an unconditional green "live" banner reading
+    //   "🛡️ DATA-ONLY SIM SHIELD: GOOGLE FI & IMS NAGS SUPPRESSED"
+    // which asserted (a) that the SIM was a Google Fi data-only SIM and (b) that a suppression had
+    // been applied. Neither was ever checked, it rendered with no SIM in the tray at all, and the
+    // only thing that could apply such a change is a RootShell write that silently no-ops on this
+    // (rootless) device. NOW: the carrier and SIM state we can actually read, and nothing at all
+    // until the telemetry poll has run or when no SIM is present.
+    val cell = netState.cellular
+    if (netState.lastUpdated > 0L && cell.isConnected) {
+        val liveTint = if (cell.dataConnected) com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFFFFB300)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(liveTint.copy(alpha = 0.18f))
+                .border(1.dp, liveTint, RoundedCornerShape(12.dp))
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(6.dp).clip(CircleShape).background(liveTint))
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "📶 ${cell.carrierName.ifBlank { "SIM" }} · ${cell.simStateLabel.ifBlank { "—" }}",
+                    color = liveTint,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = AudiowideFont
+                )
+            }
         }
-    }
 
-    Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(8.dp))
+    }
 
     // Weather & Conditions Card
     val w = weatherState.weather
@@ -5336,19 +5370,28 @@ private fun CyberShadeFooterSection(onClose: () -> Unit) {
             .border(1.dp, MikuCyan, RoundedCornerShape(16.dp))
             .padding(10.dp)
     ) {
+        // WAS: rendered w.tempF / w.summary / w.feelsLikeF / humidity / wind / precip with NO
+        // freshness gate, so before the first successful fetch the shade printed the model's
+        // neutral defaults as readings: "0°F ·  (Feels 0°F)" and "Humidity: 0% · Wind: 0mph ·
+        // Precip: 0%". A WeatherCondition is only real once lastUpdatedTime > 0.
+        val wxReal = w.lastUpdatedTime > 0L
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(w.icon, fontSize = 24.sp)
+            Text(if (wxReal) w.icon.ifBlank { "🌐" } else "🌐", fontSize = 24.sp)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = "${w.tempF.toInt()}°F · ${w.summary} (Feels ${w.feelsLikeF.toInt()}°F)",
+                    text = if (wxReal)
+                        "${w.tempF.toInt()}°F · ${w.summary.ifBlank { "—" }} (Feels ${w.feelsLikeF.toInt()}°F)"
+                    else "No weather data yet",
                     color = Color.White,
                     fontSize = 15.5.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = AudiowideFont
                 )
                 Text(
-                    text = "💧 Humidity: ${w.humidityPct}% · 💨 Wind: ${w.windSpeedMph.toInt()}mph ${w.windDirectionCompass} · ☔ Precip: ${w.precipitationProbPct}%",
+                    text = if (wxReal)
+                        "💧 Humidity: ${w.humidityPct}% · 💨 Wind: ${w.windSpeedMph.toInt()}mph ${w.windDirectionCompass} · ☔ Precip: ${w.precipitationProbPct}%"
+                    else "💧 — · 💨 — · ☔ —",
                     color = MikuTextSecondary,
                     fontSize = 13.sp
                 )
@@ -6229,10 +6272,16 @@ private fun BoxScope.MikuLauncherObservatoryModals(
         com.miku.launcher.recents.MikuRecentsOverviewCarousel(
             tasks = recentTasks,
             onLaunchTask = { task -> bringTaskToFront(ctx, task) },
+            // These used to update the launcher's own list ONLY: the card vanished and the
+            // count went to zero while the app was never stopped and the task never removed —
+            // a completed action the user watched happen that had not happened. (The sibling
+            // CyberRecentsOverview host above always did call these.)
             onDismissTask = { task ->
+                dismissTask(ctx, task)
                 onRecentTasksChange(recentTasks.filter { it.taskId != task.taskId })
             },
             onClearAll = {
+                clearAllTasks(ctx, recentTasks)
                 onRecentTasksChange(emptyList())
             },
             onDismissRequest = onCloseRecents

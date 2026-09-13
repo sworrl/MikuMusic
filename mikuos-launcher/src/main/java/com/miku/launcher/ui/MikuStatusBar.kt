@@ -234,11 +234,13 @@ fun MikuStatusBar(
     val textColor = Color(0xFFE0FFFC)
     val profile by rememberPowerProfile()
     val profileGlyph = MikuPowerProfile.glyph(profile)
-    // Value tweens (250 ms) + thermal colour crossfade instead of snapping.
-    val thermalShown = animatedFloat(state.thermalC, "sbThermal")
-    val volumeShown = animatedInt(state.volumePct, "sbVolume")
-    val batteryShown = animatedInt(state.batteryPct, "sbBattery")
-    val bpmShown = animatedInt(state.bpm, "sbBpm")
+    // Colour crossfade only. The NUMBERS are printed raw: tweening them meant that on every
+    // unknown -> known transition (-1 -> 68 %, 0 -> 42 °C) the bar spent ~250 ms displaying
+    // readings that were never measured ("12%", "19°") as if they were live telemetry.
+    val thermalShown = state.thermalC
+    val volumeShown = state.volumePct
+    val batteryShown = state.batteryPct
+    val bpmShown = state.bpm
     val thermalTint = animatedColor(thermalColor(state.thermalC), "sbThermalColor")
     BoxWithConstraints(
         modifier

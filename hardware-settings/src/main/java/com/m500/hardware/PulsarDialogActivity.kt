@@ -41,7 +41,8 @@ fun PulsarSettingsScreen(onClose: () -> Unit) {
     var pulsarEnabled by remember { mutableStateOf(PulsarLight.isEnabled(ctx)) }
     var pulsarMode by remember { mutableStateOf(PulsarLight.getMode(ctx)) }
     var pulsarBrightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx).toFloat()) }
-    var bpmSyncOn by remember { mutableStateOf(true) }
+    // Probed, not assumed: on this unit the LED sysfs nodes are SELinux-locked.
+    val ledDrivable = remember { PulsarLight.isHardwareWritable() }
 
     Scaffold(
         topBar = {
@@ -74,9 +75,16 @@ fun PulsarSettingsScreen(onClose: () -> Unit) {
             // Master Toggle Card
             item {
                 HwSettingsSection("Master Indicator Control")
+                // Was "Front RGB indicator lighting for audio format status, BPM tempo pulse, and
+                // charging" - this module implements none of those three (no format, tempo or
+                // charge hook exists here), and the indicator is confirmed non-functional on this
+                // unit anyway. Now reports the probed hardware answer instead of a feature list.
                 HwSettingsToggleRow(
                     title = "Enable Pulsar Indicator",
-                    subtitle = "Front RGB indicator lighting for audio format status, BPM tempo pulse, and charging",
+                    subtitle = if (ledDrivable)
+                        "Front RGB indicator \u2014 the LED nodes are writable on this unit"
+                    else
+                        "Saved preference only \u2014 the LED nodes are not writable on this unit, so the indicator will not respond",
                     checked = pulsarEnabled
                 ) { enabled ->
                     pulsarEnabled = enabled
@@ -150,7 +158,16 @@ fun PulsarSettingsScreen(onClose: () -> Unit) {
                             .border(1.dp, HwMikuTeal.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
                             .padding(14.dp)
                     ) {
-                        Text("BIT-PERFECT LED HARDWARE STATUS", color = HwMikuPink, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                        // Was headed "BIT-PERFECT LED HARDWARE STATUS" - it is not status of any
+                        // kind: it is a static legend, nothing here ever colours the LED by format,
+                        // and the swatches were white / gold / green, which a dual-die RED+BLUE
+                        // indicator physically cannot produce. Kept as a labelled design reference.
+                        Text("FORMAT COLOUR REFERENCE (not a live reading)", color = HwMikuPink, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Design reference only. This screen does not colour the indicator by playing format, and the physical part is a red+blue dual-die LED with no green channel.",
+                            color = HwMuted, fontSize = 10.5.sp, lineHeight = 13.sp
+                        )
                         Spacer(Modifier.height(10.dp))
                         listOf(
                             "#FFFFFF" to "Direct Stream Digital (DSD64 - DSD256 / SACD ISO)",

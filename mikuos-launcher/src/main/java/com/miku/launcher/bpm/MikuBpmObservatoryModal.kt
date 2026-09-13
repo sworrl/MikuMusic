@@ -1284,7 +1284,17 @@ private fun ColumnScope.BpmBeatNodeStage(
                 // used to fabricate `timingOffsetMs = 0` + a GOOD judgment and write that
                 // row to bpm_tap_telemetry, inflating the rendered ACCURACY / LOGGED TAPS
                 // / lifetime goodHits stats with taps that were never judged at all.
-                val hasBeatReference = isPlaying && lastBeatEpochMs > 0L
+                // lastBeatEpochMs alone is NOT a beat reference: the metronome loop above
+                // free-runs from whenever isPlaying/beatIntervalMs last changed, so with no
+                // real pulse its phase is arbitrary — and the UI still printed
+                // "💖 PERFECT!! (+12ms)" and logged a deviationMs row against it. A judgment
+                // now requires a recent pulse from the detector itself.
+                // Read the pulse timestamp from the engine: this composable was extracted for the
+                // ART JIT limit and does not receive the whole BpmState.
+                val lastPulseMs = MikuBpmEngine.state.value.lastPulseEpochMs
+                val hasRecentPulse = lastPulseMs > 0L &&
+                    System.currentTimeMillis() - lastPulseMs < 5_000L
+                val hasBeatReference = isPlaying && lastBeatEpochMs > 0L && hasRecentPulse
                 if (hasBeatReference) {
                     val cycle = (now - lastBeatEpochMs).mod(beatIntervalMs)
                     val signedOffset = if (cycle > beatIntervalMs / 2) {

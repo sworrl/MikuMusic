@@ -22,7 +22,10 @@ class UsbDacTileService : TileService() {
         val active = UsbDacManager.isActive(applicationContext)
         tile.state = if (active) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = if (active) "USB DAC: ON" else "USB DAC: OFF"
-        tile.subtitle = if (active) "${UsbDacManager.getSampleRate(applicationContext) / 1000}kHz" else "MTP / ADB"
+        // Was "${'$'}{getSampleRate()/1000}kHz" - that is the SAVED PREFERENCE (default 192 kHz),
+        // printed on an ON tile as if it were the rate the host had negotiated. The real rate
+        // lives in /proc/asound and is shown on the USB DAC screen; the tile says "configured".
+        tile.subtitle = if (active) "configured ${UsbDacManager.getSampleRate(applicationContext) / 1000}kHz" else "MTP / ADB"
         tile.updateTile()
     }
 
@@ -78,9 +81,16 @@ class PulsarTileService : TileService() {
         val tile = qsTile ?: return
         val enabled = PulsarLight.isEnabled(applicationContext)
         val mode = PulsarLight.getMode(applicationContext)
-        tile.state = if (enabled) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        // The tile lit up "active" with a mode name as if the diode were glowing. It is a stored
+        // preference: on this unit the LED nodes are not writable, so say that instead.
+        val drivable = PulsarLight.isHardwareWritable()
+        tile.state = if (enabled && drivable) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = "Pulsar RGB"
-        tile.subtitle = if (enabled) mode.label else "Off"
+        tile.subtitle = when {
+            !drivable -> "LED inactive on this unit"
+            enabled -> mode.label
+            else -> "Off"
+        }
         tile.updateTile()
     }
 

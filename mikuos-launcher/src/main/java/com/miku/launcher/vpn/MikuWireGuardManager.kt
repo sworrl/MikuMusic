@@ -69,9 +69,13 @@ object MikuWireGuardManager {
             try {
                 val cfg = Config.parse(BufferedReader(StringReader(configText)))
                 _status.value = _status.value.copy(activeName = name, lastError = null)
-                backend(ctx).setState(tunnel, Tunnel.State.UP, cfg)
-                _status.value = _status.value.copy(state = Tunnel.State.UP, activeName = name)
-                Result.success(Unit)
+                // Use the state the BACKEND reports. This used to discard setState()'s return and
+                // hard-set UP, so any non-UP result that did not throw still lit "● CONNECTED" and
+                // the status-bar VPN lock.
+                val resulting = backend(ctx).setState(tunnel, Tunnel.State.UP, cfg)
+                _status.value = _status.value.copy(state = resulting, activeName = name)
+                if (resulting == Tunnel.State.UP) Result.success(Unit)
+                else Result.failure(IllegalStateException("tunnel did not come up (state=$resulting)"))
             } catch (t: Throwable) {
                 _status.value = _status.value.copy(state = Tunnel.State.DOWN, lastError = t.message ?: "connect failed")
                 Result.failure(t)
@@ -164,7 +168,10 @@ object MikuWireGuardManager {
         val cr = ctx.applicationContext.contentResolver
         android.provider.Settings.Secure.putString(cr, "always_on_vpn_app", pkg)
         android.provider.Settings.Secure.putInt(cr, "always_on_vpn_lockdown", if (lockdown) 1 else 0)
-        true
+        // VERIFY. It used to return true whenever the two writes did not throw — and a write that
+        // lands is still not proof that VpnManagerService accepted us as the always-on app, so the
+        // checkbox stayed ticked either way.
+        android.provider.Settings.Secure.getString(cr, "always_on_vpn_app") == pkg
     } catch (_: Throwable) {
         false
     }

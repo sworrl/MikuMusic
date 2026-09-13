@@ -169,12 +169,16 @@ object MikuBeatClickerEngine {
     private val _sessionPerfects = MutableStateFlow(0)
     val sessionPerfects: StateFlow<Int> = _sessionPerfects.asStateFlow()
 
+    /** -1 = no taps this session; there is no accuracy to report. It used to return 100f. */
     val sessionAccuracyPct: Float
-        get() = if (_sessionTaps.value > 0) (_sessionPerfects.value.toFloat() / _sessionTaps.value.toFloat()) * 100f else 100f
+        get() = if (_sessionTaps.value > 0) (_sessionPerfects.value.toFloat() / _sessionTaps.value.toFloat()) * 100f else -1f
 
     val sessionGrade: String
         get() = when {
-            _sessionTaps.value < 5 -> "🌸 SSS"
+            // Open the observatory having never tapped and this used to award "🌸 SSS" —
+            // a top grade over an empty set. No taps = no grade; under 5 = provisional count.
+            _sessionTaps.value == 0 -> "—"
+            _sessionTaps.value < 5 -> "— (${_sessionTaps.value}/5)"
             sessionAccuracyPct >= 96f -> "💖 SSS+"
             sessionAccuracyPct >= 90f -> "✨ SS"
             sessionAccuracyPct >= 80f -> "⭐ S"
@@ -204,6 +208,14 @@ object MikuBeatClickerEngine {
             s.copy(level = lvl)
         }
         _skills.value = updatedSkills
+
+        // Achievements were SAVED (see save(), "ach_<id>") but never restored, so the quests card
+        // reset to "0 of 5 Done" with every achievement re-locked after each launcher restart —
+        // and checkAchievements() re-granted rewardLeeks for conditions that were still met,
+        // silently inflating the Leek total every session.
+        _achievements.value = initialAchievements.map { a ->
+            a.copy(isUnlocked = p.getBoolean("ach_${a.id}", false))
+        }
 
         val skinName = p.getString("current_skin", BpmSkin.SAKURA_DREAM.name)
         _currentSkin.value = runCatching { BpmSkin.valueOf(skinName!!) }.getOrDefault(BpmSkin.SAKURA_DREAM)

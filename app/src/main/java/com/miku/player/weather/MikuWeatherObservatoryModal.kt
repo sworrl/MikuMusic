@@ -173,8 +173,24 @@ fun MikuWeatherObservatoryModal(
                                     fontFamily = AudiowideFont,
                                     letterSpacing = 0.8.sp
                                 )
+                                // FAKE-DATA FIX: with no fix this line read "Station: Local Station ·
+                                // Lat: 0.000° Lon: 0.000°" — an invented station name and the
+                                // unset-coordinate sentinel formatted as a real position (0,0 is in
+                                // the Gulf of Guinea). No fix now reads "awaiting GPS fix".
                                 Text(
-                                    text = "Station: ${if (weather.nwsStationId.isNotEmpty()) weather.nwsStationId + " · " else ""}${if (gps.fuzzyLocation.isNotEmpty()) gps.fuzzyLocation else if (gps.city.isNotEmpty()) gps.city else "Local Station"} · Lat: ${String.format(Locale.US, "%.3f", gps.latitude)}° Lon: ${String.format(Locale.US, "%.3f", gps.longitude)}°",
+                                    text = run {
+                                        val hasFix = gps.isLocked && (gps.latitude != 0.0 || gps.longitude != 0.0)
+                                        val stationPrefix = if (weather.nwsStationId.isNotEmpty()) weather.nwsStationId + " · " else ""
+                                        val place = when {
+                                            gps.fuzzyLocation.isNotEmpty() -> gps.fuzzyLocation
+                                            gps.city.isNotEmpty() -> gps.city
+                                            else -> "—"
+                                        }
+                                        val coords = if (hasFix)
+                                            " · Lat: ${String.format(Locale.US, "%.3f", gps.latitude)}° Lon: ${String.format(Locale.US, "%.3f", gps.longitude)}°"
+                                        else " · awaiting GPS fix"
+                                        "Station: $stationPrefix$place$coords"
+                                    },
                                     color = MikuCyan,
                                     fontSize = 7.5.sp,
                                     fontWeight = FontWeight.Bold,

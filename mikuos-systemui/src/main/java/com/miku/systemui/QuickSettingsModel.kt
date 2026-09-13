@@ -235,13 +235,18 @@ object QuickSettingsModel {
             )
         )
 
-        // 7. Pulsar Dual-Die RGB
-        val isPulsarActive = PulsarLight.getMode(ctx) != PulsarLight.Mode.OFF
+        // 7. Pulsar Dual-Die RGB - the tile used to light up "active" with the mode name as if
+        //    the diode were glowing. It is only a stored preference: the OS publishes whether the
+        //    LED can be driven at all (Settings.Global miku_pulsar_hw_writable) and on this unit
+        //    it cannot, so the tile says so instead of implying a lit indicator.
+        val pulsarLedDrivable = PulsarLight.isHardwareWritable(ctx)
+        val isPulsarActive = pulsarLedDrivable && PulsarLight.getMode(ctx) != PulsarLight.Mode.OFF
         list.add(
             QsTile(
                 id = "pulsar_light",
                 label = "Pulsar RGB",
-                subtitle = PulsarLight.getMode(ctx).label,
+                subtitle = if (!pulsarLedDrivable) "LED inactive on this unit"
+                           else PulsarLight.getMode(ctx).label,
                 icon = Icons.Default.Lightbulb,
                 isActive = isPulsarActive,
                 onClick = {

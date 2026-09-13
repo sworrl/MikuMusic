@@ -88,7 +88,11 @@ object ArcoClient {
     private val _connectionState = MutableStateFlow(ArcoConnectionState.UNPAIRED)
     val connectionState: StateFlow<ArcoConnectionState> = _connectionState.asStateFlow()
 
-    private val _activeEffect = MutableStateFlow("off")
+    // "" = the rig's effect has never been READ (no welcome/status frame yet, direct-key-only mode,
+    // disconnected, or reconnect backoff). It defaulted to "off", which the UI rendered as a live
+    // reading: "Active effect: off", "Fleet is blacked out", and an unchecked Power switch — a
+    // claim about hardware state we had never once heard from.
+    private val _activeEffect = MutableStateFlow("")
     val activeEffect: StateFlow<String> = _activeEffect.asStateFlow()
 
     private val _effects = MutableStateFlow<List<String>>(emptyList())

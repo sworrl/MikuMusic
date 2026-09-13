@@ -447,13 +447,23 @@ private fun TacticalMapView(
             // 2. Draw Cached Offline Topo Tiles if available
             if (gps.latitude != 0.0 && gps.longitude != 0.0) {
                 val (tileX, tileY) = MikuTopoTileCache.latLonToTile(gps.latitude, gps.longitude, zoom)
+                // Place the tile grid by the device's FRACTIONAL position inside its tile. The
+                // centre tile used to be drawn centred on the beacon, which silently asserted that
+                // the device sits at the tile's midpoint — an error of up to half a tile (several
+                // km at these zooms) between the "you are here" mark and the terrain under it.
+                val n = (1 shl zoom).toDouble()
+                val latRadPos = Math.toRadians(gps.latitude)
+                val txPos = (gps.longitude + 180.0) / 360.0 * n
+                val tyPos = (1.0 - asinh(tan(latRadPos)) / Math.PI) / 2.0 * n
+                val fracX = (txPos - kotlin.math.floor(txPos)).toFloat()
+                val fracY = (tyPos - kotlin.math.floor(tyPos)).toFloat()
                 for (dx in -1..1) {
                     for (dy in -1..1) {
                         val bmp = MikuTopoTileCache.getCachedTile(ctx, zoom, tileX + dx, tileY + dy)
                         if (bmp != null) {
                             val imgBmp = bmp.asImageBitmap()
-                            val destX = cx + (dx * 256f) - 128f
-                            val destY = cy + (dy * 256f) - 128f
+                            val destX = cx - (fracX * 256f) + (dx * 256f)
+                            val destY = cy - (fracY * 256f) + (dy * 256f)
                             drawImage(
                                 image = imgBmp,
                                 dstOffset = androidx.compose.ui.unit.IntOffset(destX.toInt(), destY.toInt()),

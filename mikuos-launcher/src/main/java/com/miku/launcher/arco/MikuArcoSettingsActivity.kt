@@ -387,7 +387,11 @@ private fun ArcoDashboardPane() {
 
     Column(arcoCardModifier(MikuCyan)) {
         ArcoCardTitle("LIVE STATUS", MikuCyan)
-        Text("Active effect: $activeEffect", color = MikuTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        // Blank = never read from the rig (see ArcoClient._activeEffect).
+        Text(
+            "Active effect: " + activeEffect.ifBlank { "— (not reported)" },
+            color = MikuTextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold
+        )
         Text("Link: ${connectionState.name}", color = MikuTextSecondary, fontSize = 9.5.sp)
     }
 
@@ -395,12 +399,18 @@ private fun ArcoDashboardPane() {
         ArcoCardTitle("POWER", com.miku.launcher.ui.MikuIdentity.Leek)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect != "off") com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFF8BA6A9))
+                // An unknown effect is neither ON nor "blacked out" — it used to assert the latter.
+                val effectKnown = activeEffect.isNotBlank()
+                val fleetOn = effectKnown && activeEffect != "off"
+                Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (fleetOn) com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFF8BA6A9))
                 Spacer(Modifier.width(6.dp))
-                Text(if (activeEffect != "off") "Fleet is ON" else "Fleet is blacked out", color = MikuTextPrimary, fontSize = 11.sp)
+                Text(
+                    if (!effectKnown) "Fleet state unknown" else if (fleetOn) "Fleet is ON" else "Fleet is blacked out",
+                    color = MikuTextPrimary, fontSize = 11.sp
+                )
             }
             Switch(
-                checked = activeEffect != "off",
+                checked = activeEffect.isNotBlank() && activeEffect != "off",
                 onCheckedChange = { on -> scope.launch { if (on) ArcoClient.startEffect(lastNonOff) else ArcoClient.stop() } },
                 colors = SwitchDefaults.colors(checkedThumbColor = com.miku.launcher.ui.MikuIdentity.Leek, checkedTrackColor = Color(0x3300E676))
             )

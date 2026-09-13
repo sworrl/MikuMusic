@@ -974,8 +974,8 @@ private fun MikuNetObsChannelSpectrogram(
 }
 
 /**
- * Unrestricted hardware wireless controls card: 802.11 power-save toggle and
- * radio band steering preference.
+ * Wi-Fi radio state card: operating band, channel/frequency and 802.11 standard,
+ * all read back from WifiInfo. Read-only on purpose — see the note inside.
  *
  * Extracted out of [MikuNetworkObservatoryModal]: that composable compiled to far
  * more than ART's 16384-dex-instruction JIT ceiling, so the JIT refused it and the
@@ -987,7 +987,7 @@ private fun MikuNetObsHardwareControls(
     wifi: MikuNetworkService.WifiGranularState
 ) {
     Text(
-        text = "UNRESTRICTED HARDWARE WIRELESS CONTROLS",
+        text = "RADIO STATE (READ-ONLY)",
         color = MikuCyan,
         fontSize = 9.sp,
         fontWeight = FontWeight.Bold,
@@ -1017,57 +1017,71 @@ private fun MikuNetObsHardwareControls(
                 .padding(10.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Wi-Fi 802.11 Power Save Mode
+                // FAKE-DATA FIX: this card used to host a "Wi-Fi Power Save / Sleep Mode"
+                // switch and an AUTO / 5G / 2.4G "Radio Band Steering Preference" selector.
+                // Neither one touched the radio. The switch shelled out to
+                // `su -c "iw dev wlan0 set power_save ..."` (there is no su on this device,
+                // and no `iw` binary) and then set its own state to whatever was tapped; the
+                // band buttons set state and nothing else — there was never a call to the
+                // Wi-Fi stack at all. Both echoed the tap straight back as "applied".
+                // They now read out the radio state the framework actually reports, and say
+                // "—" when the framework reports nothing.
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Wi-Fi Power Save / Sleep Mode", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                        Text("Dynamic 802.11 radio sleep (`iw dev wlan0 set power_save`)", color = MikuTextSecondary, fontSize = 7.sp)
+                        Text("Operating Band", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Text("From WifiInfo — band steering belongs to the OS, not to this screen", color = MikuTextSecondary, fontSize = 7.sp)
                     }
-                    Switch(
-                        checked = wifi.isPowerSaveOn,
-                        onCheckedChange = { MikuNetworkService.setPowerSaveMode(it) },
-                        colors = SwitchDefaults.colors(checkedThumbColor = MikuCyan, checkedTrackColor = Color(0x3300E5FF)),
-                        modifier = Modifier.scale(0.8f)
+                    Text(
+                        if (wifi.bandLabel.isNotBlank()) wifi.bandLabel else "—",
+                        color = MikuCyan,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
                     )
                 }
 
                 HorizontalDivider(color = Color(0x2200E5FF))
 
-                // Radio Band Preference
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("Radio Band Steering Preference", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                        Text("Force 5GHz High-Throughput or 2.4GHz Long-Range", color = MikuTextSecondary, fontSize = 7.sp)
+                        Text("Channel / Frequency", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Text("Live association readout", color = MikuTextSecondary, fontSize = 7.sp)
                     }
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        listOf("AUTO", "5G", "2.4G").forEach { mode ->
-                            val active = wifi.bandPreference == mode
-                            Box(
-                                Modifier
-                                    .clip(CutCornerShape(4.dp))
-                                    .background(if (active) MikuCyan else Color(0x2200E5FF))
-                                    .border(0.5.dp, MikuCyan, CutCornerShape(4.dp))
-                                    .clickable { MikuNetworkService.setBandPreference(mode) }
-                                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                            ) {
-                                Text(
-                                    mode,
-                                    color = if (active) Color.Black else MikuCyan,
-                                    fontSize = 7.sp,
-                                    fontWeight = FontWeight.Black,
-                                    fontFamily = AudiowideFont
-                                )
-                            }
-                        }
+                    Text(
+                        if (wifi.frequencyMhz > 0) "CH ${wifi.channel} · ${wifi.frequencyMhz} MHz" else "—",
+                        color = MikuCyan,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
+                }
+
+                HorizontalDivider(color = Color(0x2200E5FF))
+
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("802.11 Standard", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                        Text("Radio sleep is managed by the Wi-Fi framework — there is no root path here to override it", color = MikuTextSecondary, fontSize = 7.sp)
                     }
+                    Text(
+                        if (wifi.standard.isNotBlank()) wifi.standard else "—",
+                        color = MikuCyan,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont
+                    )
                 }
             }
         }

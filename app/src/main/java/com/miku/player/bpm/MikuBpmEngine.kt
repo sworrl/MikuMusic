@@ -30,9 +30,12 @@ object MikuBpmEngine {
     private var beatJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-    @Volatile var currentBpm: Float = 120.0f
+    // FAKE-DATA FIX: these used to start at 120 BPM / 500 ms, and that invented tempo was written
+    // straight into Settings.Global miku_live_bpm (and broadcast) on the first pause, before any
+    // track had ever been analysed. 0 = "no tempo known"; OS surfaces render that as "—".
+    @Volatile var currentBpm: Float = 0f
         private set
-    @Volatile var beatIntervalMs: Long = 500L
+    @Volatile var beatIntervalMs: Long = 0L
         private set
     @Volatile var isPlaying: Boolean = false
         private set
@@ -96,8 +99,16 @@ object MikuBpmEngine {
         scope.launch {
             val bpm = resolveBpm(context, mediaItem)
             currentBpm = bpm
+            if (bpm <= 0f) {
+                // No real tempo for this track: publish "unknown" and run no beat pulse at all,
+                // rather than driving the LED / ring / visualizers off an invented tempo.
+                beatIntervalMs = 0L
+                stopBeatPulse(context)
+                publishState(context, 0f, true)
+                return@launch
+            }
             beatIntervalMs = (60_000f / bpm).toLong().coerceIn(60L, 4000L)
-            
+
             publishState(context, bpm, true)
             startBeatPulse(context)
         }
@@ -123,9 +134,12 @@ object MikuBpmEngine {
             MikuBpmAnalyzer.analyze(path)?.let { extractedBpm = it }
         }
 
-        if (extractedBpm == 0f) {
-            extractedBpm = estimateTempo(title, artist, key)
-        }
+        // FAKE-DATA FIX: when the analyzer found nothing this used to call estimateTempo(), which
+        // made a BPM up out of words in the title ("dance" -> 132, "rock" -> 145, anything else ->
+        // 120), cached it, PERSISTED it, and published it to Settings.Global as this track's tempo.
+        // No tempo found is now 0f — unknown — and 0 is never persisted, so a later real analysis
+        // still gets its chance.
+        if (extractedBpm <= 0f) return 0f
 
         val finalBpm = extractedBpm.coerceIn(20f, 999f)
         bpmCache[key] = finalBpm
@@ -215,31 +229,22 @@ object MikuBpmEngine {
         if (a.isBlank() && t.isBlank()) return null
         val directKey = "$a|$t"
         PRESEEDED_BPM_DICTIONARY[directKey]?.let { return it }
+        // FAKE-DATA FIX: the fuzzy pass used to run with a blank artist, and `dictA.contains("")`
+        // is always true — so ANY artist-less track whose title merely contained "melt" was given
+        // supercell's 165/170 BPM as a measured tempo. Both sides must be real text now.
+        if (a.isBlank() || t.isBlank()) return null
         for ((k, bpm) in PRESEEDED_BPM_DICTIONARY) {
             val parts = k.split("|")
             if (parts.size == 2) {
                 val dictA = parts[0]
                 val dictT = parts[1]
+                if (dictA.isBlank() || dictT.isBlank()) continue
                 if (t.contains(dictT) && (a.contains(dictA) || dictA.contains(a))) {
                     return bpm
                 }
             }
         }
         return null
-    }
-
-    private fun estimateTempo(title: String, artist: String, seedKey: String): Float {
-        val text = "$title $artist".lowercase()
-        return when {
-            text.contains("cellphone") || text.contains("cell phone") -> 108f
-            text.contains("speed") || text.contains("fast") || text.contains("hardcore") || text.contains("dnb") -> 174f
-            text.contains("dance") || text.contains("club") || text.contains("remix") || text.contains("trance") -> 132f
-            text.contains("electro") || text.contains("vocaloid") || text.contains("miku") || text.contains("pop") -> 128f
-            text.contains("rock") || text.contains("metal") || text.contains("punk") -> 145f
-            text.contains("slow") || text.contains("ballad") || text.contains("lofi") || text.contains("chill") -> 85f
-            text.contains("hiphop") || text.contains("trap") || text.contains("r&b") -> 95f
-            else -> 120f
-        }
     }
 
     private fun startBeatPulse(context: Context) {
@@ -266,8 +271,11 @@ object MikuBpmEngine {
     private fun publishState(context: Context, bpm: Float, playing: Boolean) {
         try {
             val cr = context.contentResolver
-            Settings.Global.putFloat(cr, "miku_live_bpm", bpm)
-            Settings.Global.putInt(cr, "miku_beat_interval_ms", (60000f / bpm).toInt())
+            // bpm <= 0 means "not known": publish 0 for both so a consumer renders "—" instead of
+            // dividing by zero (this used to produce Int.MAX_VALUE as a beat interval).
+            val intervalMs = if (bpm > 0f) (60000f / bpm).toInt() else 0
+            Settings.Global.putFloat(cr, "miku_live_bpm", if (bpm > 0f) bpm else 0f)
+            Settings.Global.putInt(cr, "miku_beat_interval_ms", intervalMs)
             Settings.Global.putInt(cr, "miku_is_playing", if (playing) 1 else 0)
             Settings.Global.putInt(cr, "miku_album_dominant_color", dominantColor)
             // Now-playing metadata for OS surfaces (launcher AOD face, BPM observatory).
@@ -276,8 +284,8 @@ object MikuBpmEngine {
         } catch (_: Throwable) {}
 
         val intent = Intent(ACTION_BPM_UPDATE).apply {
-            putExtra(EXTRA_BPM, bpm)
-            putExtra(EXTRA_BEAT_INTERVAL_MS, (60000f / bpm).toLong())
+            putExtra(EXTRA_BPM, if (bpm > 0f) bpm else 0f)
+            putExtra(EXTRA_BEAT_INTERVAL_MS, if (bpm > 0f) (60000f / bpm).toLong() else 0L)
             putExtra(EXTRA_IS_PLAYING, playing)
             putExtra(EXTRA_DOMINANT_COLOR, dominantColor)
         }

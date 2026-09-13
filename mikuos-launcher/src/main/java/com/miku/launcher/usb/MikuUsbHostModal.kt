@@ -157,11 +157,23 @@ fun MikuUsbHostModal(
                         subtitle = "Expose the player as a UAC2 audio gadget (host selects the rate)",
                         accentColor = MikuCyan,
                         onClick = {
-                            MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_DAC, selectedDismissOption)
+                            // The sheet used to close immediately and save the preference as
+                            // though the switch had happened — the setter's Boolean was thrown
+                            // away and, before the fix in MikuUsbAudioHostManager, was an
+                            // unconditional `true` anyway. Persist and dismiss only on a
+                            // verified switch; otherwise say it did not take.
                             scope.launch {
-                                MikuUsbAudioHostManager.setUsbDacMode(ctx, true)
+                                val ok = MikuUsbAudioHostManager.setUsbDacMode(ctx, true)
+                                if (ok) {
+                                    MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_DAC, selectedDismissOption)
+                                    onDismissRequest()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx, "USB DAC mode could not be applied on this build",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
-                            onDismissRequest()
                         }
                     )
 
@@ -174,11 +186,18 @@ fun MikuUsbHostModal(
                         subtitle = "MTP file transfer — internal storage & SD card",
                         accentColor = Color(0xFF80D8FF),
                         onClick = {
-                            MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_MTP, selectedDismissOption)
                             scope.launch {
-                                MikuUsbAudioHostManager.setMtpMode(ctx)
+                                val ok = MikuUsbAudioHostManager.setMtpMode(ctx)
+                                if (ok) {
+                                    MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_MTP, selectedDismissOption)
+                                    onDismissRequest()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx, "MTP mode could not be applied on this build",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
-                            onDismissRequest()
                         }
                     )
 
@@ -190,11 +209,18 @@ fun MikuUsbHostModal(
                         subtitle = "Standard battery charging, data transfer disabled",
                         accentColor = Color(0xFF69F0AE),
                         onClick = {
-                            MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_CHARGE, selectedDismissOption)
                             scope.launch {
-                                MikuUsbAudioHostManager.setChargeOnlyMode(ctx)
+                                val ok = MikuUsbAudioHostManager.setChargeOnlyMode(ctx)
+                                if (ok) {
+                                    MikuUsbPreferences.savePreference(ctx, MikuUsbPreferences.MODE_CHARGE, selectedDismissOption)
+                                    onDismissRequest()
+                                } else {
+                                    android.widget.Toast.makeText(
+                                        ctx, "Charge-only mode could not be applied on this build",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
+                                }
                             }
-                            onDismissRequest()
                         }
                     )
 

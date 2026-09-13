@@ -310,7 +310,10 @@ fun MikuSettingsScreen(onBack: () -> Unit) {
             SettingsCategoryItem(
                 id = "device_info",
                 title = "About HiBy M500 DAP",
-                subtitle = "Snapdragon 665 · Dual CS43131 · Android 13 Core · Kernel",
+                // FAKE-DATA FIX: was "Snapdragon 665 · Dual CS43131 · Android 13 Core · Kernel",
+                // a spec claim on the menu row with the wrong DAC part and the wrong Android
+                // version. Describe the screen instead; the screen itself reads the real values.
+                subtitle = "SoC, RAM, panel, firmware, kernel & identity — read from the OS",
                 icon = Icons.Default.Info,
                 badge = "M500 DAP",
                 accentColor = MikuCyan,
@@ -1503,9 +1506,46 @@ fun MikuSecuritySettingsModal(onDismissRequest: () -> Unit) {
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CyberInfoRow("Encryption Status", "Qualcomm TrustZone AES-256 Active")
-                            CyberInfoRow("Biometric Hardware", "PIN / Pattern Lock Active")
-                            CyberInfoRow("SELinux Policy", "Enforcing (Custom Magisk Sandbox)")
+                            // FAKE-DATA FIX: these three rows were string literals -- "Qualcomm
+                            // TrustZone AES-256 Active", "PIN / Pattern Lock Active" and
+                            // "Enforcing (Custom Magisk Sandbox)" -- shown as this device's live
+                            // security posture no matter what the device was actually doing (the
+                            // SELinux row in particular claimed Enforcing unconditionally). Each
+                            // one is now a real read, and "—" when the OS will not say.
+                            val cryptoState: String = remember {
+                                val state: String? = readSystemProperty("ro.crypto.state")
+                                val type: String? = readSystemProperty("ro.crypto.type")
+                                when (state) {
+                                    null -> "—"
+                                    "encrypted" -> "Encrypted" + (type?.let { " ($it)" } ?: "")
+                                    "unencrypted" -> "Not encrypted"
+                                    "unsupported" -> "Not supported"
+                                    else -> state.toString()
+                                }
+                            }
+                            val lockState: String = remember {
+                                val km = ctx.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                                val secure = runCatching { km?.isDeviceSecure }.getOrNull()
+                                val fp = ctx.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_FINGERPRINT)
+                                when (secure) {
+                                    true -> if (fp) "Screen lock set · fingerprint HW present" else "Screen lock set · no fingerprint HW"
+                                    false -> if (fp) "No screen lock · fingerprint HW present" else "No screen lock · no fingerprint HW"
+                                    null -> "—"
+                                }
+                            }
+                            val selinuxState: String = remember {
+                                runCatching {
+                                    val f = File("/sys/fs/selinux/enforce")
+                                    if (!f.canRead()) null else when (f.readText().trim()) {
+                                        "1" -> "Enforcing"
+                                        "0" -> "Permissive"
+                                        else -> null
+                                    }
+                                }.getOrNull() ?: "—"
+                            }
+                            CyberInfoRow("Encryption Status", cryptoState)
+                            CyberInfoRow("Screen Lock / Biometrics", lockState)
+                            CyberInfoRow("SELinux Policy", selinuxState)
                         }
                     }
                 }
@@ -1540,7 +1580,9 @@ fun MikuAboutDeviceModal(
             val v = File("/proc/version").readText()
             v.substringBefore(" (").replace("Linux version ", "")
         } catch (_: Throwable) {
-            System.getProperty("os.version") ?: "4.19.157"
+            // FAKE-DATA FIX: the fallback used to be the literal string "4.19.157", which is not
+            // this device's kernel. Unknown now reads "—".
+            System.getProperty("os.version") ?: "—"
         }
     }
 
@@ -1561,6 +1603,68 @@ fun MikuAboutDeviceModal(
         } catch (_: Throwable) { "" }
     }
 
+    /** Real wlan0 hardware address. Android returns the 02:00:00:00:00:00 sentinel to apps that
+     *  don't hold LOCAL_MAC_ADDRESS — that is "not available", never an address to print. */
+    val wifiMac = remember {
+        val hidden = "02:00:00:00:00:00"
+        runCatching {
+            java.net.NetworkInterface.getNetworkInterfaces().toList()
+                .firstOrNull { it.name.equals("wlan0", ignoreCase = true) }
+                ?.hardwareAddress
+                ?.joinToString(":") { b -> "%02X".format(b) }
+        }.getOrNull()
+            ?.takeIf { it.isNotBlank() && !it.equals(hidden, ignoreCase = true) }
+            ?: "— (not exposed to apps)"
+    }
+
+    @Suppress("DEPRECATION", "MissingPermission", "HardwareIds")
+    val btMac = remember {
+        val hidden = "02:00:00:00:00:00"
+        val fromSettings = runCatching {
+            Settings.Secure.getString(ctx.contentResolver, "bluetooth_address")
+        }.getOrNull()
+        val fromAdapter = runCatching {
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            adapter?.address
+        }.getOrNull()
+        listOfNotNull(fromSettings, fromAdapter)
+            .firstOrNull { it.isNotBlank() && !it.equals(hidden, ignoreCase = true) }
+            ?.uppercase(Locale.US)
+            ?: "— (not exposed to apps)"
+    }
+
+    @Suppress("DEPRECATION", "MissingPermission", "HardwareIds")
+    val serialNumber = remember {
+        val fromBuild = runCatching {
+            if (Build.VERSION.SDK_INT >= 26) Build.getSerial() else Build.SERIAL
+        }.getOrNull()
+        val candidates = listOfNotNull(
+            fromBuild,
+            readSystemProperty("ro.serialno"),
+            readSystemProperty("ro.boot.serialno")
+        )
+        candidates.firstOrNull { it.isNotBlank() && !it.equals(Build.UNKNOWN, ignoreCase = true) } ?: "—"
+    }
+
+    /** Carrier straight from TelephonyManager, with the real SIM state — no assumed carrier. */
+    val simCarrier = remember {
+        runCatching {
+            val tm = ctx.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+            if (tm == null) "—" else when (tm.simState) {
+                android.telephony.TelephonyManager.SIM_STATE_ABSENT -> "No SIM"
+                android.telephony.TelephonyManager.SIM_STATE_READY -> {
+                    val name = tm.simOperatorName?.takeIf { it.isNotBlank() }
+                        ?: tm.networkOperatorName?.takeIf { it.isNotBlank() }
+                    name ?: "SIM ready · carrier not reported"
+                }
+                android.telephony.TelephonyManager.SIM_STATE_PIN_REQUIRED,
+                android.telephony.TelephonyManager.SIM_STATE_PUK_REQUIRED -> "SIM locked"
+                android.telephony.TelephonyManager.SIM_STATE_NOT_READY -> "SIM not ready"
+                else -> "—"
+            }
+        }.getOrDefault("—")
+    }
+
     val storageStats = remember {
         try {
             val stat = StatFs(Environment.getDataDirectory().path)
@@ -1569,8 +1673,93 @@ fun MikuAboutDeviceModal(
             val used = total - free
             Pair("${used} GB / ${total} GB", "${free} GB Free")
         } catch (_: Throwable) {
-            Pair("24.5 GB / 64 GB", "39.5 GB Free")
+            // FAKE-DATA FIX: this used to fall back to "24.5 GB / 64 GB" / "39.5 GB Free", a made-up
+            // storage report rendered exactly like the real StatFs one.
+            Pair("—", "—")
         }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // FAKE-DATA FIX: every row in this modal used to be a hand-written spec sheet -- SoC, core
+    // count/clock, RAM, panel, battery capacity, Android version, security patch, baseband and
+    // firmware string were all string literals presented as this device's readout, and several
+    // were simply wrong (it claimed "Android 13 / API 33" and "CS43131"). They are read from the
+    // OS now, and anything the OS will not tell us reads "—".
+    // ---------------------------------------------------------------------------------------
+    val socName = remember {
+        val soc = if (Build.VERSION.SDK_INT >= 31) Build.SOC_MODEL.takeIf { it.isNotBlank() && it != Build.UNKNOWN } else null
+        val manu = if (Build.VERSION.SDK_INT >= 31) Build.SOC_MANUFACTURER.takeIf { it.isNotBlank() && it != Build.UNKNOWN } else null
+        val board = Build.BOARD.takeIf { it.isNotBlank() && it != Build.UNKNOWN }
+        val hw = Build.HARDWARE.takeIf { it.isNotBlank() && it != Build.UNKNOWN }
+        listOfNotNull(manu, soc ?: board ?: hw).joinToString(" ").ifBlank { "—" }
+    }
+
+    val cpuSummary = remember {
+        val cores = Runtime.getRuntime().availableProcessors()
+        val maxKhz = (0 until cores).mapNotNull { i ->
+            runCatching {
+                File("/sys/devices/system/cpu/cpu$i/cpufreq/cpuinfo_max_freq")
+                    .takeIf { it.canRead() }?.readText()?.trim()?.toLongOrNull()
+            }.getOrNull()
+        }.maxOrNull()
+        val abi = Build.SUPPORTED_ABIS.firstOrNull()?.let { if (it.contains("64")) "64-bit" else "32-bit" } ?: "—"
+        if (maxKhz != null) "${cores} cores · up to ${"%.2f".format(Locale.US, maxKhz / 1_000_000.0)} GHz · $abi"
+        else "${cores} cores · clock — · $abi"
+    }
+
+    val ramSummary = remember {
+        runCatching {
+            val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val mi = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(mi)
+            "%.1f GB total · %.1f GB free".format(
+                Locale.US, mi.totalMem / 1073741824.0, mi.availMem / 1073741824.0
+            )
+        }.getOrDefault("—")
+    }
+
+    val panelSummary = remember {
+        runCatching {
+            val dm = ctx.resources.displayMetrics
+            val hz = (ctx.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager)
+                .defaultDisplay.refreshRate
+            "${dm.widthPixels} x ${dm.heightPixels} · ${dm.densityDpi} dpi · ${"%.0f".format(Locale.US, hz)} Hz"
+        }.getOrDefault("—")
+    }
+
+    /** Design capacity in mAh from the platform power profile — "—" when the profile is absent. */
+    val batteryCapacity = remember {
+        runCatching {
+            val cls = Class.forName("com.android.internal.os.PowerProfile")
+            val inst = cls.getConstructor(Context::class.java).newInstance(ctx)
+            val mah = cls.getMethod("getBatteryCapacity").invoke(inst) as Double
+            if (mah > 0.0) "${mah.toInt()} mAh (design)" else "—"
+        }.getOrDefault("—")
+    }
+
+    val dacSummary = remember {
+        // The DAC part is a fixed fact of this hardware; what varies is whether this process can
+        // actually see its kernel nodes, so say that instead of asserting a live link.
+        val readable = runCatching { File(CirrusLogicManager.SYSFS_BASE).exists() }.getOrDefault(false)
+        "Dual Cirrus Logic CS43198 · sysfs " + if (readable) "present" else "not visible"
+    }
+
+    val androidSummary = remember {
+        "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+    }
+    val securityPatch = remember { Build.VERSION.SECURITY_PATCH.takeIf { !it.isNullOrBlank() } ?: "—" }
+    val basebandVersion = remember {
+        runCatching { Build.getRadioVersion() }.getOrNull()?.takeIf { it.isNotBlank() } ?: "—"
+    }
+    val firmwareRelease = remember {
+        Build.DISPLAY.takeIf { it.isNotBlank() } ?: Build.ID.takeIf { it.isNotBlank() } ?: "—"
+    }
+
+    /** True only if an `su` binary actually exists on PATH — the badge used to claim "ROOTED DAP"
+     *  unconditionally, on a device that has no su at all. */
+    val hasSuBinary = remember {
+        listOf("/sbin/su", "/system/bin/su", "/system/xbin/su", "/su/bin/su", "/debug_ramdisk/su")
+            .any { runCatching { File(it).exists() }.getOrDefault(false) }
     }
 
     AlertDialog(
@@ -1623,7 +1812,15 @@ fun MikuAboutDeviceModal(
                                             .border(1.dp, Color(0xFF00E676), RoundedCornerShape(6.dp))
                                             .padding(horizontal = 6.dp, vertical = 2.dp)
                                     ) {
-                                        Text("ROOTED DAP", color = Color(0xFF00E676), fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                                        // FAKE-DATA FIX: this badge read "ROOTED DAP" unconditionally.
+                                        // MikuOS is platform-signed and has no su; the badge now
+                                        // reports what an actual probe for an su binary found.
+                                        Text(
+                                            if (hasSuBinary) "ROOTED DAP" else "PLATFORM-SIGNED",
+                                            color = Color(0xFF00E676),
+                                            fontSize = 8.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                                 Spacer(Modifier.height(4.dp))
@@ -1658,15 +1855,14 @@ fun MikuAboutDeviceModal(
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CyberInfoRow("SoC Processor", "Qualcomm Snapdragon 665 (SM6125)")
-                            CyberInfoRow("CPU Cores", "8x Kryo 260 @ 2.0 GHz (64-Bit Octa-Core)")
-                            CyberInfoRow("Audio DAC", "Dual Cirrus Logic CS43131 MasterHIFI™")
-                            CyberInfoRow("Max PCM / DSD", "Direct ALSA 384kHz 32-Bit / DSD256")
-                            CyberInfoRow("RAM Memory", "4.0 GB LPDDR4x Ultra High Speed")
+                            CyberInfoRow("SoC Processor", socName)
+                            CyberInfoRow("CPU Cores", cpuSummary)
+                            CyberInfoRow("Audio DAC", dacSummary)
+                            CyberInfoRow("RAM Memory", ramSummary)
                             CyberInfoRow("Internal Flash", storageStats.first + " (${storageStats.second})")
                             CyberInfoRow("MicroSD Storage", MikuVolumes.removableLabel(ctx)?.let { "$it (Mounted)" } ?: "No card inserted")
-                            CyberInfoRow("Display Panel", "4.0\" IPS Retina 1080x540 (300 PPI)")
-                            CyberInfoRow("Battery Cell", "3200 mAh Li-Po w/ QuickCharge 3.0")
+                            CyberInfoRow("Display Panel", panelSummary)
+                            CyberInfoRow("Battery Cell", batteryCapacity)
                         }
                     }
 
@@ -1693,11 +1889,11 @@ fun MikuAboutDeviceModal(
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CyberInfoRow("Android Version", "Android 13 Custom Core (API 33)")
-                            CyberInfoRow("Security Patch", "2026-08-01")
+                            CyberInfoRow("Android Version", androidSummary)
+                            CyberInfoRow("Security Patch", securityPatch)
                             CyberInfoRow("Linux Kernel", kernelVersion)
-                            CyberInfoRow("Baseband / Modem", "MPSS.AT.4.4.c4-00041-NICOBAR")
-                            CyberInfoRow("Firmware Release", "v0.9.179-MikuCustom (HiBy M500 Pro)")
+                            CyberInfoRow("Baseband / Modem", basebandVersion)
+                            CyberInfoRow("Firmware Release", firmwareRelease)
 
                             // Build Number (Interactive 7-Tap Developer Unlock)
                             Box(
@@ -1760,12 +1956,18 @@ fun MikuAboutDeviceModal(
                                 .padding(12.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CyberInfoRow("Wi-Fi IP Address", wifiIp)
-                            CyberInfoRow("Wi-Fi MAC Address", "74:97:79:D3:A2:18")
-                            CyberInfoRow("Bluetooth MAC", "74:97:79:D3:A2:19")
+                            // FAKE-DATA FIX: the MAC, Bluetooth MAC, serial number and carrier rows
+                            // were literals -- "74:97:79:D3:A2:18", the same address +1 for BT,
+                            // "M500A192800472" and "Google Fi (Data-Only Shield Active)" -- printed
+                            // as this unit's identity regardless of the hardware or the SIM. Each is
+                            // now a real read; Android's per-app MAC randomisation sentinel
+                            // (02:00:00:00:00:00) counts as "not available", not as an address.
+                            CyberInfoRow("Wi-Fi IP Address", wifiIp.ifBlank { "—" })
+                            CyberInfoRow("Wi-Fi MAC Address", wifiMac)
+                            CyberInfoRow("Bluetooth MAC", btMac)
                             CyberInfoRow("System Uptime", uptimeFormatted)
-                            CyberInfoRow("Serial Number", "M500A192800472")
-                            CyberInfoRow("SIM Carrier Link", "Google Fi (Data-Only Shield Active)")
+                            CyberInfoRow("Serial Number", serialNumber)
+                            CyberInfoRow("SIM Carrier Link", simCarrier)
                         }
                     }
                 }
@@ -1806,11 +2008,14 @@ fun MikuDeveloperOptionsModal(
         } catch (_: Throwable) { "" }
     }
 
+
     var usbDebugging by remember {
         mutableStateOf(
+            // FAKE-DATA FIX: both the missing-row default and the catch used to be "on", so an
+            // unreadable setting rendered as "USB Debugging enabled". AOSP's real default is off.
             try {
-                Settings.Global.getInt(ctx.contentResolver, Settings.Global.ADB_ENABLED, 1) == 1
-            } catch (_: Throwable) { true }
+                Settings.Global.getInt(ctx.contentResolver, Settings.Global.ADB_ENABLED, 0) == 1
+            } catch (_: Throwable) { false }
         )
     }
 
@@ -1830,7 +2035,16 @@ fun MikuDeveloperOptionsModal(
         )
     }
 
-    var animScale by remember { mutableFloatStateOf(0.5f) }
+    // FAKE-DATA FIX: animScale was hardcoded to 0.5f, so this screen always claimed the device was
+    // running at "0.5x (FAST)" and highlighted that chip regardless of the real system value. Read
+    // the live Settings.Global scale instead (1.0 is the platform default when unset).
+    var animScale by remember {
+        mutableFloatStateOf(
+            runCatching {
+                Settings.Global.getFloat(ctx.contentResolver, Settings.Global.WINDOW_ANIMATION_SCALE, 1.0f)
+            }.getOrDefault(1.0f)
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
@@ -1887,22 +2101,43 @@ fun MikuDeveloperOptionsModal(
                                     Switch(
                                         checked = isAdbEnabled,
                                         onCheckedChange = { next ->
-                                            isAdbEnabled = next
+                                            // FAKE-DATA FIX: this used to set isAdbEnabled = next and
+                                            // immediately toast "⚡ Wireless ADB Started on <ip>:5555"
+                                            // while the only actual work was `su -c setprop ...`. There
+                                            // is no su on this device, so the property never changed and
+                                            // the card sat there reading "🟢 Active" over a closed port.
+                                            // The switch now writes the property directly (this app is
+                                            // platform-signed), then READS service.adb.tcp.port back and
+                                            // reports only what the read says.
                                             kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
-                                                val cmd = if (next) {
-                                                    "setprop service.adb.tcp.port 5555 && stop adbd && start adbd"
-                                                } else {
-                                                    "setprop service.adb.tcp.port -1 && stop adbd && start adbd"
+                                                val port = if (next) "5555" else "-1"
+                                                runCatching {
+                                                    val cls = Class.forName("android.os.SystemProperties")
+                                                    cls.getMethod("set", String::class.java, String::class.java)
+                                                        .invoke(null, "service.adb.tcp.port", port)
                                                 }
-                                                try {
-                                                    Runtime.getRuntime().exec(arrayOf("su", "-c", cmd)).waitFor()
-                                                } catch (_: Throwable) {}
+                                                runCatching {
+                                                    Runtime.getRuntime()
+                                                        .exec(arrayOf("setprop", "service.adb.tcp.port", port))
+                                                        .waitFor()
+                                                }
+                                                kotlinx.coroutines.delay(400L)
+                                                val livePort = readSystemProperty("service.adb.tcp.port")
+                                                val applied = livePort == "5555"
+                                                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                                                    isAdbEnabled = applied
+                                                    Toast.makeText(
+                                                        ctx,
+                                                        when {
+                                                            applied && next -> "⚡ Wireless ADB listening on $wifiIp:5555\nRun: adb connect $wifiIp:5555"
+                                                            !applied && !next -> "Wireless ADB stopped"
+                                                            else -> "Couldn't change the ADB TCP port — service.adb.tcp.port is still " +
+                                                                (livePort ?: "unset")
+                                                        },
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
                                             }
-                                            Toast.makeText(
-                                                ctx,
-                                                if (next) "⚡ Wireless ADB Started on $wifiIp:5555\nRun: adb connect $wifiIp:5555" else "Wireless ADB Stopped",
-                                                Toast.LENGTH_LONG
-                                            ).show()
                                         },
                                         colors = SwitchDefaults.colors(
                                             checkedThumbColor = Color.Black,
@@ -2025,12 +2260,19 @@ fun MikuDeveloperOptionsModal(
                                             .background(if (isSelected) MikuCyan else Color.White.copy(alpha = 0.08f))
                                             .border(1.dp, if (isSelected) MikuCyan else CyberGlassBorder, RoundedCornerShape(8.dp))
                                             .clickable {
-                                                animScale = scale
-                                                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
-                                                    try {
-                                                        Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put global window_animation_scale $scale && settings put global transition_animation_scale $scale && settings put global animator_duration_scale $scale")).waitFor()
-                                                    } catch (_: Throwable) {}
+                                                // FAKE-DATA FIX: this used to move the highlight to the
+                                                // tapped chip and then push the three scales through
+                                                // `su -c settings put ...`, which cannot run here (no su),
+                                                // so the selection never matched the system. Write them
+                                                // directly, then read the real value back and show that.
+                                                runCatching {
+                                                    Settings.Global.putFloat(ctx.contentResolver, Settings.Global.WINDOW_ANIMATION_SCALE, scale)
+                                                    Settings.Global.putFloat(ctx.contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, scale)
+                                                    Settings.Global.putFloat(ctx.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, scale)
                                                 }
+                                                animScale = runCatching {
+                                                    Settings.Global.getFloat(ctx.contentResolver, Settings.Global.WINDOW_ANIMATION_SCALE, 1.0f)
+                                                }.getOrDefault(animScale)
                                             }
                                             .padding(vertical = 8.dp),
                                         contentAlignment = Alignment.Center
@@ -2046,6 +2288,23 @@ fun MikuDeveloperOptionsModal(
         },
         confirmButton = {}
     )
+}
+
+/**
+ * Real read of an Android system property (android.os.SystemProperties by reflection, falling back
+ * to `getprop`). Returns null when the property is absent or empty — callers must render "—", never
+ * a guessed value.
+ */
+private fun readSystemProperty(key: String): String? {
+    runCatching {
+        val cls = Class.forName("android.os.SystemProperties")
+        val v = cls.getMethod("get", String::class.java).invoke(null, key) as? String
+        if (!v.isNullOrBlank()) return v
+    }
+    return runCatching {
+        val p = Runtime.getRuntime().exec(arrayOf("getprop", key))
+        p.inputStream.bufferedReader().readText().trim().takeIf { it.isNotEmpty() }
+    }.getOrNull()
 }
 
 @Composable

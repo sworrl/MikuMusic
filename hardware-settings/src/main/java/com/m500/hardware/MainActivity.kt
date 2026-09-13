@@ -63,6 +63,8 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
     var csDsdComp by remember { mutableStateOf<Int?>(null) }
     var csOutput by remember { mutableStateOf<CirrusLogicManager.OutputMode?>(null) }
     var csBalance by remember { mutableStateOf<Float?>(null) }
+    // Pulsar: whether the diode can be driven AT ALL on this unit (probed, not assumed).
+    var pulsarDrivable by remember { mutableStateOf<Boolean?>(null) }
 
     // Fn Switch & Pocket Lock
     var fnMode by remember {
@@ -114,7 +116,10 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
             csTurbo = CirrusLogicManager.isHighPowerEnabled(ctx)
             csDsdComp = CirrusLogicManager.getDsdGainCompensate(ctx)
             csOutput = CirrusLogicManager.getOutputMode(ctx)
-            csBalance = CirrusLogicManager.getBalance(ctx).toFloat()
+            // getBalance() substitutes 0 when nothing is readable, which the UI then printed as
+            // "Center" on an enabled slider. Only show a position when a real source reported one.
+            csBalance = CirrusLogicManager.getBalanceOrNull(ctx)?.toFloat()
+            pulsarDrivable = PulsarLight.isHardwareWritable()
         }
     }
 
@@ -383,9 +388,17 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         .border(1.dp, HwMikuTeal.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
                         .padding(14.dp)
                 ) {
+                    // Was an unqualified "Controls front RGB notification indicator and TrueColor
+                    // PWM". Every write goes to LED sysfs nodes that are SELinux-denied on this
+                    // unit (isHardwareWritable() probes it), so the control stores a preference and
+                    // nothing lights up. Say which of the two it is instead of implying control.
                     HwSettingsToggleRow(
                         title = "Pulsar RGB Master Control",
-                        subtitle = "Controls front RGB notification indicator and TrueColor PWM",
+                        subtitle = when (pulsarDrivable) {
+                            null -> "Probing whether the LED nodes are writable\u2026"
+                            true -> "Front RGB indicator: LED nodes are writable on this unit"
+                            false -> "Saved preference only \u2014 the LED nodes are not writable on this unit, so the indicator will not respond"
+                        },
                         checked = pulsarEnabled
                     ) { enabled ->
                         pulsarEnabled = enabled
@@ -456,10 +469,13 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         subtitle = if (usbDacActive) "uac2 is in the live USB gadget config (sys.usb.state)" else "Exposes the M500 as a USB Audio Class 2 DAC to a PC/Mac",
                         checked = usbDacActive
                     ) { enabled ->
-                        usbDacActive = enabled
                         scope.launch {
                             UsbDacManager.setUsbDacMode(ctx, enabled)
-                            if (enabled) {
+                            // Was "usbDacActive = enabled" straight off the tap. The setprop path
+                            // needs su and normally fails, so the row reported UAC2 composed when
+                            // the gadget had not changed. isActive() reads sys.usb.state.
+                            usbDacActive = withContext(Dispatchers.IO) { UsbDacManager.isActive(ctx) }
+                            if (usbDacActive) {
                                 val intent = android.content.Intent(ctx, UsbDacActivity::class.java).apply {
                                     flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                                 }
@@ -528,13 +544,19 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                         .border(1.dp, HwMikuTeal.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
                         .padding(14.dp)
                 ) {
+                    // Was optimistic: the switch was set from the tap and never re-checked, while
+                    // CpuPerformance.setEnabled() returns immediately when there is no su (the
+                    // normal state here) - so the row claimed the cores were pinned when the
+                    // governor had not moved. Now re-read from cpu0/cpufreq/scaling_governor.
                     HwSettingsToggleRow(
                         title = "Peak Clock Performance Governor",
-                        subtitle = "Locks CPU cores at peak clock frequency to eliminate buffer underruns during DSD256 decoding",
+                        subtitle = "Sets every CPU core's scaling_governor to \"performance\". Needs root on this build; the switch follows the governor the kernel actually reports.",
                         checked = cpuGovernorOn
                     ) { enabled ->
-                        cpuGovernorOn = enabled
-                        scope.launch { CpuPerformance.setEnabled(ctx, enabled) }
+                        scope.launch {
+                            CpuPerformance.setEnabled(ctx, enabled)
+                            cpuGovernorOn = withContext(Dispatchers.IO) { CpuPerformance.isEnabled(ctx) }
+                        }
                     }
                 }
             }

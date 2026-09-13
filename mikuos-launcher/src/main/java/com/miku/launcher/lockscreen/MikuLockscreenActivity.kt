@@ -1771,18 +1771,42 @@ private fun LockscreenNowPlayingWidget(
                                         }
                                     }
 
-                                    // Rhythm Timing Offset & Accuracy Calculation
-                                    val offsetMs = if (beatPeriodMs > 0) ((now % beatPeriodMs) - (beatPeriodMs / 2)).toInt() else 0
-                                    val absOffset = Math.abs(offsetMs)
+                                    // Rhythm Timing Offset & Accuracy Calculation.
+                                    //
+                                    // WAS: offsetMs = (elapsedRealtime % beatPeriod) - beatPeriod/2.
+                                    // That is the phase relative to DEVICE BOOT — nothing in this
+                                    // widget ever read a beat pulse or a playback position — so the
+                                    // "💖 PERFECT / ✨ GOOD" judgment was a function of the boot
+                                    // clock, not of the tap. Worse, with no tempo (every third-party
+                                    // session, every un-analysed file) beatPeriodMs is 0, offsetMs
+                                    // was 0, and EVERY tap scored PERFECT against a beat that did
+                                    // not exist. Those fabricated judgments were then written into
+                                    // the arcade grade, the lifetime PERFECTS badge and the tap
+                                    // telemetry table that backs the displayed ACCURACY %.
+                                    //
+                                    // NOW: a judgment requires a real, recent beat pulse from the
+                                    // detector, and the offset is measured against THAT pulse.
+                                    val pulseEpochMs = com.miku.launcher.bpm.MikuBpmEngine.state.value.lastPulseEpochMs
+                                    val nowEpochMs = System.currentTimeMillis()
+                                    val hasBeatReference = beatPeriodMs > 0 && pulseEpochMs > 0L &&
+                                        nowEpochMs - pulseEpochMs < 5_000L
+                                    val offsetMs: Int? = if (hasBeatReference) {
+                                        val sincePulse = (nowEpochMs - pulseEpochMs) % beatPeriodMs
+                                        // Signed distance to the nearest beat, in [-period/2, +period/2].
+                                        (if (sincePulse > beatPeriodMs / 2) sincePulse - beatPeriodMs else sincePulse).toInt()
+                                    } else null
                                     val accuracy = when {
-                                        absOffset <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
-                                        absOffset <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
+                                        offsetMs == null -> null
+                                        Math.abs(offsetMs) <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
+                                        Math.abs(offsetMs) <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
                                         else -> com.miku.launcher.bpm.HitAccuracy.MISS
                                     }
                                     miniJudgment = when (accuracy) {
                                         com.miku.launcher.bpm.HitAccuracy.PERFECT -> "💖 PERFECT"
                                         com.miku.launcher.bpm.HitAccuracy.GOOD -> "✨ GOOD"
                                         com.miku.launcher.bpm.HitAccuracy.MISS -> "🎵 TAP"
+                                        // No beat to judge against — the tap still counts as a tap.
+                                        null -> "🎵 FREE TAP"
                                     }
 
                                     coroutineScope.launch {
@@ -1795,32 +1819,41 @@ private fun LockscreenNowPlayingWidget(
                                     // Play ascending pentatonic chime melody synchronized with combo
                                     com.miku.launcher.audio.MikuSeasonalAudioEngine.playComboMelody(miniTapCount, miniTapCount >= 20)
 
-                                    // Record Beat Clicker & Seasons Economy
-                                    com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
-                                    com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
-                                        accuracy = accuracy,
-                                        currentCombo = miniTapCount,
-                                        scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
-                                        currentBpm = liveTapped
-                                    )
+                                    // Record Beat Clicker & Seasons Economy — only a judgment that
+                                    // was actually measured may feed the scored economy and the
+                                    // accuracy statistics.
+                                    if (accuracy != null) {
+                                        com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
+                                        com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
+                                            accuracy = accuracy,
+                                            currentCombo = miniTapCount,
+                                            scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
+                                            currentBpm = liveTapped
+                                        )
+                                    }
 
-                                    // Log Calibration Telemetry to SQLite Database
+                                    // Log Calibration Telemetry to SQLite Database. A tap with no
+                                    // beat reference is NOT logged: it would otherwise write a
+                                    // fabricated deviationMs/accuracy into the table that backs the
+                                    // displayed lifetime "ACCURACY %".
                                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                                         val trackArt = nowPlaying.artist ?: "Unknown Artist"
                                         val trackTit = nowPlaying.title ?: "Unknown Track"
-                                        bpmDb.logTapTelemetry(
-                                            com.miku.launcher.bpm.MikuBpmDatabase.TapTelemetryRecord(
-                                                artist = trackArt,
-                                                title = trackTit,
-                                                tapEpochMs = System.currentTimeMillis(),
-                                                targetBeatMs = beatPeriodMs,
-                                                deviationMs = offsetMs,
-                                                accuracy = accuracy.name,
-                                                instantaneousBpm = liveTapped,
-                                                comboAtTap = miniTapCount,
-                                                isFever = miniTapCount >= 20
+                                        if (offsetMs != null && accuracy != null) {
+                                            bpmDb.logTapTelemetry(
+                                                com.miku.launcher.bpm.MikuBpmDatabase.TapTelemetryRecord(
+                                                    artist = trackArt,
+                                                    title = trackTit,
+                                                    tapEpochMs = System.currentTimeMillis(),
+                                                    targetBeatMs = beatPeriodMs,
+                                                    deviationMs = offsetMs,
+                                                    accuracy = accuracy.name,
+                                                    instantaneousBpm = liveTapped,
+                                                    comboAtTap = miniTapCount,
+                                                    isFever = miniTapCount >= 20
+                                                )
                                             )
-                                        )
+                                        }
                                         if (miniTapCount >= 6 && miniTappedBpm != null) {
                                             bpmDb.saveTrackBpm(
                                                 com.miku.launcher.bpm.MikuBpmDatabase.TrackBpmRecord(
@@ -1829,8 +1862,27 @@ private fun LockscreenNowPlayingWidget(
                                                     canonicalBpm = miniTappedBpm!!,
                                                     rawDetectedBpm = nowPlaying.bpm,
                                                     userTappedBpm = miniTappedBpm!!,
-                                                    tempoMultiplier = if (miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
-                                                    confidence = 0.98f,
+                                                    // tempoMultiplier used to be 2.0f whenever
+                                                    // nowPlaying.bpm was 0 (the common case), i.e.
+                                                    // an octave claim out of nothing; it is only
+                                                    // meaningful against a real detected tempo.
+                                                    tempoMultiplier = if (nowPlaying.bpm in 40f..300f &&
+                                                        miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
+                                                    // Was a hardcoded 0.98 for a 6-tap tap-tempo.
+                                                    // Nothing computed it, and the DB documents 0 as
+                                                    // "no confidence was ever computed". Derive it
+                                                    // from the actual spread of the user's taps.
+                                                    confidence = run {
+                                                        val iv = (1 until miniTapTimestamps.size)
+                                                            .map { (miniTapTimestamps[it] - miniTapTimestamps[it - 1]).toDouble() }
+                                                        if (iv.size < 2) 0f else {
+                                                            val mean = iv.average()
+                                                            if (mean <= 0.0) 0f else {
+                                                                val sd = kotlin.math.sqrt(iv.sumOf { (it - mean) * (it - mean) } / iv.size)
+                                                                (1.0 - (sd / mean)).coerceIn(0.0, 1.0).toFloat()
+                                                            }
+                                                        }
+                                                    },
                                                     source = "USER_LOCKSCREEN_TAP",
                                                     tapCount = miniTapCount
                                                 )

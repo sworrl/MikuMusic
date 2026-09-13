@@ -53,44 +53,45 @@ object MikuWeatherService {
         val fuzzyLocation: String = "Detecting Location..."
     )
 
+    // Defaults are "no reading" (NaN / -1 / blank), not the invented 72 °F "Clear" they were.
     data class HourlyPrecipPoint(
-        val timeLabel: String = "Now",
-        val precipInches: Float = 0f,
-        val precipProbPct: Int = 0,
-        val weatherCode: Int = 0,
-        val tempF: Float = 72f,
-        val summary: String = "Clear",
-        val icon: String = "☀️"
+        val timeLabel: String = "",
+        val precipInches: Float = Float.NaN,
+        val precipProbPct: Int = -1,
+        val weatherCode: Int = -1,
+        val tempF: Float = Float.NaN,
+        val summary: String = "",
+        val icon: String = ""
     )
 
     data class HourlyMeteogramPoint(
-        val timeLabel: String = "12:00",
-        val dayLabel: String = "Today",
-        val tempF: Float = 72f,
-        val feelsLikeF: Float = 70f,
-        val precipInches: Float = 0f,
-        val precipProbPct: Int = 0,
-        val windSpeedMph: Float = 5f,
-        val windGustsMph: Float = 8f,
-        val windDirectionDeg: Int = 0,
-        val windDirectionCompass: String = "N",
-        val weatherCode: Int = 0,
-        val summary: String = "Clear",
-        val icon: String = "☀️",
+        val timeLabel: String = "",
+        val dayLabel: String = "",
+        val tempF: Float = Float.NaN,
+        val feelsLikeF: Float = Float.NaN,
+        val precipInches: Float = Float.NaN,
+        val precipProbPct: Int = -1,
+        val windSpeedMph: Float = Float.NaN,
+        val windGustsMph: Float = Float.NaN,
+        val windDirectionDeg: Int = -1,
+        val windDirectionCompass: String = "",
+        val weatherCode: Int = -1,
+        val summary: String = "",
+        val icon: String = "",
         val isDay: Boolean = true
     )
 
     data class DailyForecastPoint(
-        val dayName: String = "Today",
-        val dateFormatted: String = "08/18",
-        val maxTempF: Float = 75f,
-        val minTempF: Float = 55f,
-        val precipSumIn: Float = 0f,
-        val precipProbMax: Int = 0,
-        val maxWindSpeedMph: Float = 10f,
-        val weatherCode: Int = 0,
-        val summary: String = "Clear Sky",
-        val icon: String = "☀️"
+        val dayName: String = "",
+        val dateFormatted: String = "",
+        val maxTempF: Float = Float.NaN,
+        val minTempF: Float = Float.NaN,
+        val precipSumIn: Float = Float.NaN,
+        val precipProbMax: Int = -1,
+        val maxWindSpeedMph: Float = Float.NaN,
+        val weatherCode: Int = -1,
+        val summary: String = "",
+        val icon: String = ""
     )
 
     data class MoonPhaseInfo(
@@ -101,40 +102,52 @@ object MikuWeatherService {
         val ageDays: Float = 11.2f
     )
 
+    /**
+     * FAKE-DATA FIX: every default below used to be a complete, plausible, entirely invented
+     * weather report - 72 °F "Clear Sky", feels like 70, 45 % humidity, 5 mph wind gusting 8,
+     * high 75 / low 55, dew point 50, 29.92 inHg, 10 % cloud, 10 mi visibility, UV 5, AQI 30
+     * "Good", sunrise 06:00 AM, sunset 08:00 PM, sources "NWS · Open-Meteo". [WeatherState]
+     * holds one of these from construction, so any surface that read it before (or instead of) a
+     * successful fetch rendered that invention as a live observation.
+     *
+     * Defaults are now explicit "no reading": NaN for measurements, -1 for whole-number indices,
+     * empty strings for text. [hasData] is the gate - it is true only once a fetch has stamped
+     * lastUpdatedTime, and UI must show "—" until then.
+     */
     data class WeatherCondition(
-        val code: Int = 0,
-        val summary: String = "Clear Sky",
-        val icon: String = "☀️",
-        val tempF: Float = 72f,
-        val feelsLikeF: Float = 70f,
-        val humidityPct: Int = 45,
-        val windSpeedMph: Float = 5f,
-        val windGustMph: Float = 8f,
-        val windDirectionDeg: Int = 0,
-        val windDirectionCompass: String = "N",
-        val precipitationIn: Float = 0f,
-        val precipitationProbPct: Int = 0,
-        val highTempF: Float = 75f,
-        val lowTempF: Float = 55f,
-        val dewPointF: Float = 50f,
-        val pressureInHg: Float = 29.92f,
-        val cloudCoverPct: Int = 10,
-        val visibilityMiles: Float = 10f,
-        val uvIndex: Float = 5f,
-        val aqi: Int = 30,
-        val aqiCategory: String = "Good",
-        val sunrise: String = "06:00 AM",
-        val sunset: String = "08:00 PM",
-        val solarFraction: Float = 0.5f,
+        val code: Int = -1,
+        val summary: String = "",
+        val icon: String = "",
+        val tempF: Float = Float.NaN,
+        val feelsLikeF: Float = Float.NaN,
+        val humidityPct: Int = -1,
+        val windSpeedMph: Float = Float.NaN,
+        val windGustMph: Float = Float.NaN,
+        val windDirectionDeg: Int = -1,
+        val windDirectionCompass: String = "",
+        val precipitationIn: Float = Float.NaN,
+        val precipitationProbPct: Int = -1,
+        val highTempF: Float = Float.NaN,
+        val lowTempF: Float = Float.NaN,
+        val dewPointF: Float = Float.NaN,
+        val pressureInHg: Float = Float.NaN,
+        val cloudCoverPct: Int = -1,
+        val visibilityMiles: Float = Float.NaN,
+        val uvIndex: Float = Float.NaN,
+        val aqi: Int = -1,
+        val aqiCategory: String = "—",
+        val sunrise: String = "",
+        val sunset: String = "",
+        val solarFraction: Float = Float.NaN,
         val isDay: Boolean = true,
         val moonPhase: MoonPhaseInfo = calculateMoonPhase(),
         val nextPrecipLabel: String = "",
-        val todayCond: String = "Clear",
-        val tomorrowDay: String = "Tomorrow",
-        val tomorrowHi: Float = 75f,
-        val tomorrowLo: Float = 55f,
-        val tomorrowCond: String = "Clear",
-        val sourcesUsed: String = "NWS · Open-Meteo",
+        val todayCond: String = "",
+        val tomorrowDay: String = "",
+        val tomorrowHi: Float = Float.NaN,
+        val tomorrowLo: Float = Float.NaN,
+        val tomorrowCond: String = "",
+        val sourcesUsed: String = "",
         val hourlySparklineTemps: List<Int> = emptyList(),
         val nwsStationId: String = "",
         val severeWarning: String? = null,
@@ -142,7 +155,10 @@ object MikuWeatherService {
         val hourlyPrecip6h: List<HourlyPrecipPoint> = emptyList(),
         val hourlyMeteogram: List<HourlyMeteogramPoint> = emptyList(),
         val dailyForecast: List<DailyForecastPoint> = emptyList()
-    )
+    ) {
+        /** False until a real fetch completed. Surfaces MUST check this before rendering anything. */
+        val hasData: Boolean get() = lastUpdatedTime > 0L
+    }
 
     fun calculateMoonPhase(timestamp: Long = System.currentTimeMillis()): MoonPhaseInfo {
         val synodicMonthMs = 29.530588853 * 86400000.0
@@ -433,9 +449,9 @@ object MikuWeatherService {
             if (_state.value.weather.lastUpdatedTime >= updated) return
             _state.value = _state.value.copy(
                 weather = _state.value.weather.copy(
-                    tempF = p.getFloat("wx_tempf", 72f),
-                    summary = p.getString("wx_summary", "Clear Sky") ?: "Clear Sky",
-                    icon = p.getString("wx_icon", "☀️") ?: "☀️",
+                    tempF = p.getFloat("wx_tempf", Float.NaN),
+                    summary = p.getString("wx_summary", "") ?: "",
+                    icon = p.getString("wx_icon", "") ?: "",
                     severeWarning = p.getString("wx_severe", null),
                     lastUpdatedTime = updated
                 )
@@ -672,21 +688,26 @@ object MikuWeatherService {
                     val daily = json.optJSONObject("daily")
                     val hourly = json.optJSONObject("hourly")
 
-                    var tempF = current?.optDouble("temperature_2m", 70.0)?.toFloat() ?: 70f
-                    var feelsLike = current?.optDouble("apparent_temperature", tempF.toDouble())?.toFloat() ?: tempF
-                    var humidity = current?.optInt("relative_humidity_2m", 45) ?: 45
+                    // A 200 response that omits a field used to become an invented reading:
+                    // 70 degF, 45 % humidity, 1013.25 hPa (textbook sea-level pressure), and
+                    // feels-like silently equal to the temperature. NaN/-1 = no reading.
+                    var tempF = current?.optDouble("temperature_2m", Double.NaN)?.toFloat() ?: Float.NaN
+                    var feelsLike = current?.optDouble("apparent_temperature", Double.NaN)?.toFloat() ?: Float.NaN
+                    var humidity = current?.optInt("relative_humidity_2m", -1) ?: -1
                     var wCode = current?.optInt("weather_code", 0) ?: 0
                     var windSpeed = current?.optDouble("wind_speed_10m", 0.0)?.toFloat() ?: 0f
                     var windDir = current?.optInt("wind_direction_10m", 0) ?: 0
                     val precipIn = current?.optDouble("precipitation", 0.0)?.toFloat() ?: 0f
-                    val pressureHpa = current?.optDouble("surface_pressure", 1013.25)?.toFloat() ?: 1013.25f
+                    val pressureHpa = current?.optDouble("surface_pressure", Double.NaN)?.toFloat() ?: Float.NaN
                     val pressureInHg = pressureHpa * 0.02953f
                     val cloudCover = current?.optInt("cloud_cover", 0) ?: 0
                     var isDay = (current?.optInt("is_day", 1) ?: 1) == 1
 
-                    // Sunrise and Sunset parsing from onthe8s
-                    var sunriseStr = "06:00 AM"
-                    var sunsetStr = "08:00 PM"
+                    // Sunrise and Sunset parsing from onthe8s. These were seeded with a literal
+                    // 06:00 AM / 08:00 PM, which was displayed AND fed to the solar-arc maths, so
+                    // a response without astronomy produced a made-up sunrise and day progress.
+                    var sunriseStr = ""
+                    var sunsetStr = ""
                     val srRaw = daily?.optJSONArray("sunrise")?.optString(0) ?: ""
                     val ssRaw = daily?.optJSONArray("sunset")?.optString(0) ?: ""
                     if (srRaw.isNotEmpty() && ssRaw.isNotEmpty()) {
@@ -698,13 +719,23 @@ object MikuWeatherService {
                         } catch (_: Throwable) {}
                     }
 
-                    val (solarFraction, calculatedIsDay) = calculateSolarProgress(sunriseStr, sunsetStr)
-                    isDay = calculatedIsDay
+                    // Only compute the solar arc from REAL sunrise/sunset; otherwise leave it
+                    // unknown (NaN) and keep the API's own is_day flag.
+                    val solarFraction: Float
+                    if (sunriseStr.isNotEmpty() && sunsetStr.isNotEmpty()) {
+                        val (frac, calculatedIsDay) = calculateSolarProgress(sunriseStr, sunsetStr)
+                        solarFraction = frac
+                        isDay = calculatedIsDay
+                    } else {
+                        solarFraction = Float.NaN
+                    }
 
                     val maxTemps = daily?.optJSONArray("temperature_2m_max")
                     val minTemps = daily?.optJSONArray("temperature_2m_min")
-                    val highTemp = if (maxTemps != null && maxTemps.length() > 0) maxTemps.optDouble(0, tempF.toDouble()).toFloat() else tempF
-                    val lowTemp = if (minTemps != null && minTemps.length() > 0) minTemps.optDouble(0, tempF.toDouble()).toFloat() else tempF
+                    // Fell back to the CURRENT temperature, so a missing daily array printed
+                    // "high 68 / low 68" as if that were the forecast. NaN = no reading.
+                    val highTemp = if (maxTemps != null && maxTemps.length() > 0) maxTemps.optDouble(0, Double.NaN).toFloat() else Float.NaN
+                    val lowTemp = if (minTemps != null && minTemps.length() > 0) minTemps.optDouble(0, Double.NaN).toFloat() else Float.NaN
 
                     val (summary, icon) = mapWeatherCode(wCode, isDay)
                     val compass = degreesToCompass(windDir)
@@ -803,9 +834,12 @@ object MikuWeatherService {
 
                     // Look-ahead precipitation classifier from onthe8s
                     var nextPrecip = ""
-                    var dewPointVal = tempF - 15f
-                    var visibilityVal = 10f
-                    var uvVal = 4f
+                    // Were: dew point INVENTED as "temperature minus 15", visibility pinned at
+                    // 10 miles and UV at 4 - three numbers the UI printed as measurements with no
+                    // source behind them. NaN until the hourly arrays actually report them.
+                    var dewPointVal = Float.NaN
+                    var visibilityVal = Float.NaN
+                    var uvVal = Float.NaN
 
                     for (i in startIdx until minOf(totalHourlyPoints, startIdx + 24)) {
                         val rawTime = hourlyTimes?.optString(i, "") ?: ""
@@ -828,24 +862,26 @@ object MikuWeatherService {
                         val pIn = hourlyPrecip?.optDouble(i, 0.0)?.toFloat() ?: 0f
                         val prob = hourlyPrecipProbs?.optInt(i, 0) ?: 0
                         val code = hourlyCodes?.optInt(i, 0) ?: 0
-                        val tF = hourlyTemps?.optDouble(i, 70.0)?.toFloat() ?: 70f
-                        val appTF = hourlyFeels?.optDouble(i, tF.toDouble())?.toFloat() ?: tF
+                        // Same substitution problem per hour: 70 degF, feels-like = temp, gust =
+                        // wind speed. All become NaN ("no reading") rather than a plausible lie.
+                        val tF = hourlyTemps?.optDouble(i, Double.NaN)?.toFloat() ?: Float.NaN
+                        val appTF = hourlyFeels?.optDouble(i, Double.NaN)?.toFloat() ?: Float.NaN
                         val wSpd = hourlyWindSpeed?.optDouble(i, 0.0)?.toFloat() ?: 0f
-                        val wGst = hourlyWindGusts?.optDouble(i, wSpd.toDouble())?.toFloat() ?: wSpd
+                        val wGst = hourlyWindGusts?.optDouble(i, Double.NaN)?.toFloat() ?: Float.NaN
                         val wDegree = hourlyWindDir?.optInt(i, 0) ?: 0
                         val ptIsDay = (hourlyIsDay?.optInt(i, 1) ?: 1) == 1
                         val (s, ic) = mapWeatherCode(code, ptIsDay)
 
                         if (i == startIdx) {
-                            dewPointVal = hourlyDewPoints?.optDouble(i, (tempF - 15.0))?.toFloat() ?: (tempF - 15f)
-                            val vM = hourlyVis?.optDouble(i, 16000.0) ?: 16000.0
-                            visibilityVal = (vM / 1609.34).toFloat().coerceIn(1f, 15f)
-                            uvVal = hourlyUv?.optDouble(i, 4.0)?.toFloat() ?: 4f
+                            dewPointVal = hourlyDewPoints?.optDouble(i, Double.NaN)?.toFloat() ?: Float.NaN
+                            val vM = hourlyVis?.optDouble(i, Double.NaN) ?: Double.NaN
+                            visibilityVal = if (vM.isNaN()) Float.NaN else (vM / 1609.34).toFloat().coerceIn(1f, 15f)
+                            uvVal = hourlyUv?.optDouble(i, Double.NaN)?.toFloat() ?: Float.NaN
                         }
 
                         // Collect 8-point temperature sparkline
-                        if (sparklineTemps.size < 8) {
-                            sparklineTemps.add(tF.roundToInt())
+                        if (sparklineTemps.size < 8 && !tF.isNaN()) {
+                            sparklineTemps.add(tF.roundToInt())   // skip hours with no reading
                         }
 
                         // Look-ahead precipitation classifier logic
@@ -908,15 +944,17 @@ object MikuWeatherService {
                     val dayNameSdf = SimpleDateFormat("EEEE", Locale.US)
                     val shortDateSdf = SimpleDateFormat("MM/dd", Locale.US)
 
-                    var tomorrowDName = "Tomorrow"
-                    var tomorrowHiVal = highTemp
-                    var tomorrowLoVal = lowTemp
-                    var tomorrowSummary = "Clear"
+                    // Seeded from TODAY's high/low and a literal "Clear": with no day-1 entry the
+                    // card showed today's numbers under "Tomorrow". Blank/NaN until day 1 parses.
+                    var tomorrowDName = ""
+                    var tomorrowHiVal = Float.NaN
+                    var tomorrowLoVal = Float.NaN
+                    var tomorrowSummary = ""
 
                     for (d in 0 until totalDailyDays) {
                         val dStr = dailyTimes?.optString(d, "") ?: ""
                         var dName = "Day $d"
-                        var dFormatted = "08/18"
+                        var dFormatted = ""          // was a hard-coded "08/18"
                         try {
                             val parsedDate = dateParseSdf.parse(dStr)
                             if (parsedDate != null) {
@@ -926,11 +964,13 @@ object MikuWeatherService {
                         } catch (_: Throwable) {}
 
                         val dCode = dailyCodes?.optInt(d, 0) ?: 0
-                        val dMax = dailyMaxTemps?.optDouble(d, 75.0)?.toFloat() ?: 75f
-                        val dMin = dailyMinTemps?.optDouble(d, 55.0)?.toFloat() ?: 55f
-                        val dPrecipSum = dailyPrecipSums?.optDouble(d, 0.0)?.toFloat() ?: 0f
-                        val dProb = dailyPrecipProbMax?.optInt(d, 0) ?: 0
-                        val dWind = dailyMaxWind?.optDouble(d, 0.0)?.toFloat() ?: 0f
+                        // Were 75.0 / 55.0 fallbacks: a day the API did not forecast came out as
+                        // "high 75 / low 55" and was drawn like a real forecast. NaN = no reading.
+                        val dMax = dailyMaxTemps?.optDouble(d, Double.NaN)?.toFloat() ?: Float.NaN
+                        val dMin = dailyMinTemps?.optDouble(d, Double.NaN)?.toFloat() ?: Float.NaN
+                        val dPrecipSum = dailyPrecipSums?.optDouble(d, Double.NaN)?.toFloat() ?: Float.NaN
+                        val dProb = dailyPrecipProbMax?.optInt(d, -1) ?: -1
+                        val dWind = dailyMaxWind?.optDouble(d, Double.NaN)?.toFloat() ?: Float.NaN
                         val (s, ic) = mapWeatherCode(dCode, true)
 
                         if (d == 1) {
@@ -968,11 +1008,11 @@ object MikuWeatherService {
                         humidityPct = humidity,
                         windSpeedMph = windSpeed,
                         // Real gust from the current hour's Open-Meteo wind_gusts_10m (was windSpeed × 1.35, invented).
-                        windGustMph = meteogramList.firstOrNull()?.windGustsMph ?: windSpeed,
+                        windGustMph = meteogramList.firstOrNull()?.windGustsMph ?: Float.NaN,
                         windDirectionDeg = windDir,
                         windDirectionCompass = compass,
                         precipitationIn = precipIn,
-                        precipitationProbPct = if (precipList6h.isNotEmpty()) precipList6h[0].precipProbPct else 0,
+                        precipitationProbPct = if (precipList6h.isNotEmpty()) precipList6h[0].precipProbPct else -1,
                         highTempF = highTemp,
                         lowTempF = lowTemp,
                         dewPointF = dewPointVal,

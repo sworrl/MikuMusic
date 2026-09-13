@@ -37,6 +37,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -351,7 +352,12 @@ fun MikuWeatherObservatoryModal(
                                             )
                                             Spacer(Modifier.height(1.dp))
                                             Text(
-                                                text = "▲ High ${weather.highTempF.roundToInt()}°F  ▼ Low ${weather.lowTempF.roundToInt()}°F",
+                                                // 0 = no daily block in the last fetch (and a
+                                                // partial cache restore leaves it 0 too). It used
+                                                // to print "▲ High 0°F ▼ Low 0°F" as a forecast.
+                                                text = if (weather.highTempF != 0f || weather.lowTempF != 0f)
+                                                    "▲ High ${weather.highTempF.roundToInt()}°F  ▼ Low ${weather.lowTempF.roundToInt()}°F"
+                                                else "▲ High —  ▼ Low —",
                                                 color = MikuTextSecondary,
                                                 fontSize = 11.5.sp
                                             )
@@ -406,28 +412,34 @@ fun MikuWeatherObservatoryModal(
                                         .border(0.8.dp, MikuCyan.copy(alpha = 0.4f), CutCornerShape(10.dp))
                                         .padding(8.dp)
                                 ) {
+                                    val hasAstro = weather.sunrise.isNotBlank() && weather.sunset.isNotBlank()
                                     Column {
                                         Row(
                                             Modifier.fillMaxWidth(),
                                             horizontalArrangement = Arrangement.SpaceBetween,
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
+                                            // Blank sunrise/sunset = the fetch carried no astro
+                                            // (or this is a partial cache restore). It used to
+                                            // render "🌅 SUNRISE " / "🌇 SUNSET " with an empty
+                                            // time and a 0 %-filled arc as if they were readings.
                                             Text(
-                                                text = "🌅 SUNRISE ${weather.sunrise}",
+                                                text = "🌅 SUNRISE ${weather.sunrise.ifBlank { "—" }}",
                                                 color = com.miku.launcher.ui.MikuIdentity.Gold,
                                                 fontSize = 10.5.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 fontFamily = AudiowideFont
                                             )
                                             Text(
-                                                text = if (weather.isDay) "☀️ DAYLIGHT PHASE" else "🌙 LUNAR NIGHT PHASE",
-                                                color = if (weather.isDay) com.miku.launcher.ui.MikuIdentity.Gold else Color(0xFF80DEEA),
+                                                text = if (!hasAstro) "— PHASE UNKNOWN"
+                                                    else if (weather.isDay) "☀️ DAYLIGHT PHASE" else "🌙 LUNAR NIGHT PHASE",
+                                                color = if (hasAstro && weather.isDay) com.miku.launcher.ui.MikuIdentity.Gold else Color(0xFF80DEEA),
                                                 fontSize = 10.5.sp,
                                                 fontWeight = FontWeight.Black,
                                                 fontFamily = AudiowideFont
                                             )
                                             Text(
-                                                text = "🌇 SUNSET ${weather.sunset}",
+                                                text = "🌇 SUNSET ${weather.sunset.ifBlank { "—" }}",
                                                 color = Color(0xFFFF9100),
                                                 fontSize = 10.5.sp,
                                                 fontWeight = FontWeight.Bold,
@@ -444,7 +456,7 @@ fun MikuWeatherObservatoryModal(
                                         ) {
                                             Box(
                                                 Modifier
-                                                    .fillMaxWidth(weather.solarFraction)
+                                                    .fillMaxWidth(if (hasAstro) weather.solarFraction.coerceIn(0f, 1f) else 0f)
                                                     .fillMaxHeight()
                                                     .clip(RoundedCornerShape(3.dp))
                                                     .background(
@@ -462,16 +474,20 @@ fun MikuWeatherObservatoryModal(
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "WIND / GUSTS",
+                                        // 0 gust = wind_gusts_10m was not reported for this hour.
+                                        // It used to print windSpeed * 1.35 as a measured gust.
                                         value = "${weather.windSpeedMph.roundToInt()} mph ${weather.windDirectionCompass}",
-                                        sub = "Gusts to ${weather.windGustMph.roundToInt()} mph",
+                                        sub = if (weather.windGustMph > 0f) "Gusts to ${weather.windGustMph.roundToInt()} mph" else "Gusts —",
                                         icon = Icons.Default.Air,
                                         color = MikuCyan
                                     )
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "HUMIDITY / DEW",
-                                        value = "${weather.humidityPct}%",
-                                        sub = "Dew Point ${weather.dewPointF.roundToInt()}°F",
+                                        // 0 = never reported (see WeatherCondition's neutral
+                                        // defaults); the dew point used to be faked as temp-15°F.
+                                        value = if (weather.humidityPct > 0) "${weather.humidityPct}%" else "—",
+                                        sub = if (weather.dewPointF != 0f) "Dew Point ${weather.dewPointF.roundToInt()}°F" else "Dew Point —",
                                         icon = Icons.Default.WaterDrop,
                                         color = Color(0xFF2979FF)
                                     )
@@ -481,7 +497,11 @@ fun MikuWeatherObservatoryModal(
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "BAROMETER / CLOUD",
-                                        value = "${String.format(Locale.US, "%.2f", weather.pressureInHg)} inHg",
+                                        // 0 = no surface_pressure in the response. It used to fall
+                                        // back to 1013.25 hPa — the standard atmosphere — and print
+                                        // "29.92 inHg" as a barometer reading.
+                                        value = if (weather.pressureInHg > 0f)
+                                            "${String.format(Locale.US, "%.2f", weather.pressureInHg)} inHg" else "— inHg",
                                         sub = "${weather.cloudCoverPct}% Cloud Cover",
                                         icon = Icons.Default.Speed,
                                         color = com.miku.launcher.ui.MikuIdentity.Gold
@@ -489,8 +509,12 @@ fun MikuWeatherObservatoryModal(
                                     WeatherMetricBadge(
                                         modifier = Modifier.weight(1f),
                                         title = "SOLAR / UV & AIR",
-                                        value = "UV ${weather.uvIndex.roundToInt()} · AQI ${weather.aqi}",
-                                        sub = "Air Quality: ${weather.aqiCategory}",
+                                        // UV 0 = not reported (was a flat 4). AQI is the -1
+                                        // "no AQI source wired up" sentinel — it used to be printed
+                                        // raw, so the tile literally read "AQI -1".
+                                        value = "UV " + (if (weather.uvIndex > 0f) "${weather.uvIndex.roundToInt()}" else "—") +
+                                            " · AQI " + (if (weather.aqi >= 0) "${weather.aqi}" else "—"),
+                                        sub = if (weather.aqiCategory.isNotBlank()) "Air Quality: ${weather.aqiCategory}" else "Air Quality: —",
                                         icon = Icons.Default.WbSunny,
                                         color = Color(0xFFFF9100)
                                     )
@@ -934,8 +958,19 @@ data class RadarFrameInfo(
 
 /**
  * Hatsune Miku Live Doppler Radar Suite (RainViewer High-Res Composite).
- * Fetches real timestamped Doppler radar tiles over dark basemap with playback scrubber and dBZ scale.
+ * Fetches real timestamped RainViewer radar tiles over a dark basemap with a playback scrubber.
+ *
+ * Everything drawn here is tied to the REAL fix and the REAL web-mercator tile scale:
+ *  - no fix => no tiles fetched and no station mark drawn (it used to fall back to a hardcoded
+ *    35.0844/-106.6504 and show Albuquerque's radar as the user's own),
+ *  - the station mark sits at the device's fractional position inside the tile, not at the tile
+ *    centre (at z6 a tile is ~600 km wide, so "centre" was up to ~300 km from the truth),
+ *  - the range rings are labelled with distances computed from the tile scale, not the old
+ *    hardcoded 20/40/60/80 NM, which described a range this imagery never had.
  */
+private const val RADAR_ZOOM = 6
+/** Web-mercator equatorial circumference, metres — for the real ground scale of a radar tile. */
+private const val EARTH_CIRCUMFERENCE_M = 40075016.686
 @Composable
 fun MikuLiveDopplerRadarTab(
     gps: MikuWeatherService.GpsTelemetry,
@@ -946,6 +981,9 @@ fun MikuLiveDopplerRadarTab(
     var currentFrameIndex by remember { mutableIntStateOf(0) }
     var isPlaying by remember { mutableStateOf(true) }
     var isLoading by remember { mutableStateOf(true) }
+    // Real pixel size of the radar viewport — the only way to turn a ring radius in pixels into a
+    // distance on the ground. Zero until the first layout pass, which renders every label as "—".
+    var viewportPx by remember { mutableStateOf(androidx.compose.ui.unit.IntSize.Zero) }
 
     val infiniteTransition = rememberInfiniteTransition(label = "RadarSweep")
     val sweepAngle by infiniteTransition.animateFloat(
@@ -958,14 +996,38 @@ fun MikuLiveDopplerRadarTab(
         label = "radarAngle"
     )
 
+    // A radar picture is only honest when we know where the device actually is.
+    val hasFix = gps.latitude != 0.0 || gps.longitude != 0.0
+
+    // Real ground scale of the drawn tile. The 256 px tile is drawn with ContentScale.Crop, so it
+    // covers max(w, h) px; one tile spans EARTH_CIRCUMFERENCE * cos(lat) / 2^zoom metres.
+    val metersPerPx: Double? = if (hasFix && viewportPx.width > 0 && viewportPx.height > 0) {
+        val drawnTilePx = maxOf(viewportPx.width, viewportPx.height).toDouble()
+        (EARTH_CIRCUMFERENCE_M * cos(Math.toRadians(gps.latitude)) / (1 shl RADAR_ZOOM)) / drawnTilePx
+    } else null
+    // Outer range ring, in nautical miles, MEASURED from that scale (was a hardcoded "80NM").
+    val outerRingNm: Double? = metersPerPx?.let {
+        val maxRadiusPx = minOf(viewportPx.width, viewportPx.height) / 2.0 - 8.0
+        if (maxRadiusPx <= 0) null else maxRadiusPx * it / 1852.0
+    }
+
     // Load Live RainViewer Radar Frames & CartoDB Dark Basemap
     LaunchedEffect(gps.latitude, gps.longitude) {
+        // WAS: fell through to a hardcoded Albuquerque (35.0844/-106.6504) with no fix, so the
+        // user saw a stranger's storms under "TARGET: STATION". NOW: no fix => no radar.
+        if (!hasFix) {
+            pastFrames = emptyList()
+            basemapBitmap = null
+            currentFrameIndex = 0
+            isLoading = false
+            return@LaunchedEffect
+        }
         isLoading = true
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                val lat = if (gps.latitude != 0.0) gps.latitude else 35.0844
-                val lon = if (gps.longitude != 0.0) gps.longitude else -106.6504
-                val zoom = 6
+                val lat = gps.latitude
+                val lon = gps.longitude
+                val zoom = RADAR_ZOOM
                 val tileX = ((lon + 180.0) / 360.0 * (1 shl zoom)).toInt()
                 val latRad = Math.toRadians(lat)
                 val tileY = ((1.0 - kotlin.math.ln(kotlin.math.tan(latRad) + 1.0 / kotlin.math.cos(latRad)) / Math.PI) / 2.0 * (1 shl zoom)).toInt()
@@ -1056,7 +1118,11 @@ fun MikuLiveDopplerRadarTab(
                     fontFamily = AudiowideFont
                 )
                 Text(
-                    text = "RANGE: 80NM · BASE REFLECTIVITY (0.5°) · dBZ SCALE",
+                    // WAS: "RANGE: 80NM · BASE REFLECTIVITY (0.5°) · dBZ SCALE" — none of which was
+                    // true of a RainViewer z6 composite tile. NOW: the source, and the outer-ring
+                    // distance actually computed from the tile's ground scale ("—" before layout).
+                    text = "RAINVIEWER COMPOSITE · z$RADAR_ZOOM · OUTER RING " +
+                        (outerRingNm?.let { "${"%.0f".format(it)} NM" } ?: "—"),
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 7.sp,
                     fontWeight = FontWeight.Bold
@@ -1092,6 +1158,7 @@ fun MikuLiveDopplerRadarTab(
                 .clip(CutCornerShape(12.dp))
                 .background(Color(0xFF02090E))
                 .border(1.dp, MikuCyan.copy(alpha = 0.8f), CutCornerShape(12.dp))
+                .onSizeChanged { viewportPx = it }
         ) {
             // 1. Dark Basemap Tile (if loaded)
             basemapBitmap?.let { bmp ->
@@ -1116,50 +1183,66 @@ fun MikuLiveDopplerRadarTab(
                 }
             }
 
-            // 3. Cyber Range Rings & Tactical Scanner Grid
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                val center = Offset(size.width / 2f, size.height / 2f)
-                val maxRadius = kotlin.math.min(size.width, size.height) / 2f - 8f
+            // 3. Cyber Range Rings & Tactical Scanner Grid — drawn ONLY with a real fix, and
+            //    centred on the device's real position inside the tile (was the tile centre, which
+            //    at z6 is up to ~300 km away from where the user actually is).
+            if (hasFix) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    // ContentScale.Crop draws the 256 px tile at max(w, h) px, centred.
+                    val drawn = kotlin.math.max(size.width, size.height)
+                    val originX = (size.width - drawn) / 2f
+                    val originY = (size.height - drawn) / 2f
+                    val n = (1 shl RADAR_ZOOM).toDouble()
+                    val latRad = Math.toRadians(gps.latitude)
+                    val tx = (gps.longitude + 180.0) / 360.0 * n
+                    val ty = (1.0 - kotlin.math.ln(kotlin.math.tan(latRad) + 1.0 / kotlin.math.cos(latRad)) / Math.PI) / 2.0 * n
+                    val fracX = (tx - kotlin.math.floor(tx)).toFloat()
+                    val fracY = (ty - kotlin.math.floor(ty)).toFloat()
+                    val center = Offset(originX + fracX * drawn, originY + fracY * drawn)
+                    val maxRadius = kotlin.math.min(size.width, size.height) / 2f - 8f
 
-                // Range Rings: 20NM, 40NM, 60NM, 80NM
-                val rings = listOf(0.25f, 0.50f, 0.75f, 1.0f)
-                rings.forEach { frac ->
-                    drawCircle(
-                        color = MikuCyan.copy(alpha = 0.25f),
-                        radius = maxRadius * frac,
-                        center = center,
-                        style = Stroke(width = 1.dp.toPx())
+                    // Range rings at 1/4, 1/2, 3/4 and the full computed radius. Their real
+                    // distances are printed by the labels below, from [outerRingNm].
+                    val rings = listOf(0.25f, 0.50f, 0.75f, 1.0f)
+                    rings.forEach { frac ->
+                        drawCircle(
+                            color = MikuCyan.copy(alpha = 0.25f),
+                            radius = maxRadius * frac,
+                            center = center,
+                            style = Stroke(width = 1.dp.toPx())
+                        )
+                    }
+
+                    // Crosshairs
+                    drawLine(
+                        color = MikuCyan.copy(alpha = 0.35f),
+                        start = Offset(center.x - maxRadius, center.y),
+                        end = Offset(center.x + maxRadius, center.y),
+                        strokeWidth = 1.dp.toPx()
+                    )
+                    drawLine(
+                        color = MikuCyan.copy(alpha = 0.35f),
+                        start = Offset(center.x, center.y - maxRadius),
+                        end = Offset(center.x, center.y + maxRadius),
+                        strokeWidth = 1.dp.toPx()
+                    )
+
+                    // Station Point Marker — the device's real spot on this tile.
+                    drawCircle(com.miku.launcher.ui.MikuIdentity.Coral, radius = 4.dp.toPx(), center = center)
+                    drawCircle(Color.White, radius = 2.dp.toPx(), center = center)
+
+                    // Decorative sweep arm. It is an ANIMATION, not a scan: the imagery is a
+                    // downloaded composite frame, so the arm never uncovers or refreshes anything.
+                    val sweepRad = Math.toRadians(sweepAngle.toDouble())
+                    val beamEndX = center.x + (maxRadius * kotlin.math.cos(sweepRad)).toFloat()
+                    val beamEndY = center.y + (maxRadius * kotlin.math.sin(sweepRad)).toFloat()
+                    drawLine(
+                        color = MikuCyan.copy(alpha = 0.9f),
+                        start = center,
+                        end = Offset(beamEndX, beamEndY),
+                        strokeWidth = 2.dp.toPx()
                     )
                 }
-
-                // Crosshairs
-                drawLine(
-                    color = MikuCyan.copy(alpha = 0.35f),
-                    start = Offset(center.x - maxRadius, center.y),
-                    end = Offset(center.x + maxRadius, center.y),
-                    strokeWidth = 1.dp.toPx()
-                )
-                drawLine(
-                    color = MikuCyan.copy(alpha = 0.35f),
-                    start = Offset(center.x, center.y - maxRadius),
-                    end = Offset(center.x, center.y + maxRadius),
-                    strokeWidth = 1.dp.toPx()
-                )
-
-                // Station Center Point Marker
-                drawCircle(com.miku.launcher.ui.MikuIdentity.Coral, radius = 4.dp.toPx(), center = center)
-                drawCircle(Color.White, radius = 2.dp.toPx(), center = center)
-
-                // Rotating 360-degree radar beam sweep
-                val sweepRad = Math.toRadians(sweepAngle.toDouble())
-                val beamEndX = center.x + (maxRadius * kotlin.math.cos(sweepRad)).toFloat()
-                val beamEndY = center.y + (maxRadius * kotlin.math.sin(sweepRad)).toFloat()
-                drawLine(
-                    color = MikuCyan.copy(alpha = 0.9f),
-                    start = center,
-                    end = Offset(beamEndX, beamEndY),
-                    strokeWidth = 2.dp.toPx()
-                )
             }
 
             if (isLoading) {
@@ -1171,11 +1254,45 @@ fun MikuLiveDopplerRadarTab(
                 ) {
                     CircularProgressIndicator(color = MikuCyan, modifier = Modifier.size(24.dp))
                 }
+            } else if (!hasFix) {
+                // Honest empty state. The old code silently substituted a hardcoded city here.
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color(0xAA000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "NO LOCATION FIX · RADAR UNAVAILABLE",
+                        color = Color(0xFFFFB300),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else if (pastFrames.isEmpty()) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color(0xAA000000)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "NO RADAR FRAMES RETRIEVED",
+                        color = Color(0xFFFFB300),
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = AudiowideFont,
+                        textAlign = TextAlign.Center
+                    )
+                }
             }
 
-            // Radar Range Labels
+            // Radar Range Labels — distances MEASURED from the tile scale. They were hardcoded
+            // "80NM" / "40NM", which had nothing to do with the imagery on screen.
             Text(
-                "80NM",
+                outerRingNm?.let { "${"%.0f".format(it)}NM" } ?: "—",
                 color = MikuCyan,
                 fontSize = 7.sp,
                 fontFamily = AudiowideFont,
@@ -1184,7 +1301,7 @@ fun MikuLiveDopplerRadarTab(
                     .padding(top = 4.dp)
             )
             Text(
-                "40NM",
+                outerRingNm?.let { "${"%.0f".format(it / 2.0)}NM" } ?: "—",
                 color = MikuCyan.copy(alpha = 0.7f),
                 fontSize = 6.5.sp,
                 fontFamily = AudiowideFont,
@@ -1193,7 +1310,13 @@ fun MikuLiveDopplerRadarTab(
                     .offset(y = (-32).dp)
             )
             Text(
-                "TARGET: ${if (gps.city.isNotEmpty()) gps.city else "STATION"}",
+                // Only names a place the geocoder actually resolved; "STATION" used to stand in for
+                // a location we did not have at all.
+                text = when {
+                    gps.city.isNotEmpty() -> "TARGET: ${gps.city}"
+                    hasFix -> "TARGET: ${"%.3f".format(gps.latitude)}, ${"%.3f".format(gps.longitude)}"
+                    else -> "TARGET: —"
+                },
                 color = Color.White,
                 fontSize = 7.5.sp,
                 fontWeight = FontWeight.Bold,
@@ -1257,8 +1380,11 @@ fun MikuLiveDopplerRadarTab(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("REFLECTIVITY (dBZ)", color = MikuCyan, fontSize = 7.sp, fontFamily = AudiowideFont)
-                Text("15    30    45    55    65+", color = Color.White.copy(alpha = 0.7f), fontSize = 7.sp, fontFamily = AudiowideFont)
+                // The bar below is Miku brand colour, NOT RainViewer's tile palette, so it cannot
+                // be read as a dBZ key. It used to be labelled "REFLECTIVITY (dBZ) 15 30 45 55 65+",
+                // inviting the user to decode real reflectivity values off colours that mean nothing.
+                Text("PRECIPITATION INTENSITY", color = MikuCyan, fontSize = 7.sp, fontFamily = AudiowideFont)
+                Text("LIGHT → HEAVY", color = Color.White.copy(alpha = 0.7f), fontSize = 7.sp, fontFamily = AudiowideFont)
             }
             Spacer(Modifier.height(4.dp))
             Box(

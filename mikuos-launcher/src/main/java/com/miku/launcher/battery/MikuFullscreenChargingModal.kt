@@ -97,8 +97,12 @@ fun MikuFullscreenChargingModal(
                 }
                 val tempFile = File("/sys/class/power_supply/battery/temp")
                 if (tempFile.exists() && tempFile.canRead()) {
+                    // This node is unambiguously deci-°C. The old `if (rawT > 100f)` heuristic
+                    // meant any genuinely cold cell (≤ 10.0 °C, i.e. raw ≤ 100) was printed
+                    // straight through as up to "100.0°C • HOT".
                     tempFile.readText().trim().toFloatOrNull()?.let { rawT ->
-                        batteryTempC = if (rawT > 100f) rawT / 10f else rawT
+                        val c = rawT / 10f
+                        if (c in 10f..115f) batteryTempC = c
                     }
                 }
             } catch (_: Throwable) {}
@@ -260,8 +264,11 @@ fun MikuFullscreenChargingModal(
                         val w = size.width
                         val h = size.height
                         // Unknown level = empty tank (no fluid), never a 5%-looking sliver.
+                        // The clamp used to be 0.05..0.98, which made a real 0-4 % look identical
+                        // to 5 % and a real 99-100 % look like 98 % — distorting exactly the
+                        // readings that matter most.
                         val fillHeight = if (pctKnown)
-                            h * (1f - (batteryPct / 100f).coerceIn(0.05f, 0.98f)) else h
+                            h * (1f - (batteryPct / 100f).coerceIn(0f, 1f)) else h
 
                         val wavePath = Path().apply {
                             moveTo(0f, h)
@@ -301,8 +308,19 @@ fun MikuFullscreenChargingModal(
                             fontFamily = AudiowideFont
                         )
                         Text(
-                            text = if (isCharging) "CHARGING" else "DISCHARGING",
-                            color = if (isCharging) Color(0xFF00FF88) else MikuTextSecondary,
+                            // The framework "charging" status is not the same thing as current
+                            // flowing IN: on this device plugged-but-net-draining is a real,
+                            // documented state, and this label used to shout "CHARGING" in green
+                            // directly above a CURRENT card reading e.g. "-350mA".
+                            text = when {
+                                haveCurrent && currentMa > 10 -> "CHARGING"
+                                haveCurrent && currentMa < -10 -> "NET DRAIN ON CABLE"
+                                haveCurrent -> "HOLDING"
+                                isCharging -> "CHARGING (status only)"
+                                else -> "DISCHARGING"
+                            },
+                            color = if (haveCurrent && currentMa < -10) Color(0xFFFF9100)
+                                    else if (isCharging) Color(0xFF00FF88) else MikuTextSecondary,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = AudiowideFont,

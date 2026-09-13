@@ -1,6 +1,8 @@
 package com.miku.player
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.mutableStateMapOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +15,7 @@ import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -24,7 +27,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  * only ever inspected once.
  */
 object TrackYear {
+    // THREADING FIX (same defect TrackTech.kt already carried and fixed): `cache` is object-scope
+    // Compose state (a SnapshotStateMap) that composition READS, and it was also being WRITTEN from
+    // the IO probe coroutine — the exact "modified by composition as well as outside composition"
+    // condition Recomposer.applyAndCheck crashes on — and persist() traversed it from that same IO
+    // thread. `data` is now the authoritative plain map every thread uses; `cache` is only a mirror,
+    // written from a fresh main-looper message purely so a composable recomposes when a year lands.
+    private val data = ConcurrentHashMap<Long, Int>()
     private val cache = mutableStateMapOf<Long, Int>()   // 0 = probed, nothing found
+    private val mainH = Handler(Looper.getMainLooper())
     private val inFlight = HashSet<Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val ioGate = Semaphore(2)
@@ -37,16 +48,30 @@ object TrackYear {
     private val dirty = AtomicBoolean(false)
     @Volatile private var flushJob: Job? = null
 
+    private fun isMain(): Boolean = Looper.myLooper() == Looper.getMainLooper()
+
+    /** Store a result: the authoritative map immediately (any thread), the Compose mirror from a
+     *  fresh main-looper message so composition neither races it nor is the one writing it. */
+    private fun publish(id: Long, year: Int) {
+        data[id] = year
+        mainH.post { cache[id] = year }
+    }
+
     private fun ensureLoaded(ctx: Context) {
         if (loaded) return
         synchronized(this) {
             if (loaded) return
             cacheFile = File(ctx.filesDir, "track_year.json")
+            val fromDisk = HashMap<Long, Int>()
             runCatching {
                 val o = JSONObject(cacheFile!!.readText())
-                o.keys().forEach { k -> cache[k.toLong()] = o.getInt(k) }
+                o.keys().forEach { k -> fromDisk[k.toLong()] = o.getInt(k) }
             }
+            data.putAll(fromDisk)
             loaded = true
+            // One bulk mirror write on the main looper, never thousands of entries written from
+            // whichever background thread happened to call in first.
+            if (fromDisk.isNotEmpty()) mainH.post { cache.putAll(fromDisk) }
         }
     }
 
@@ -65,7 +90,9 @@ object TrackYear {
         val f = cacheFile ?: return
         runCatching {
             val o = JSONObject()
-            cache.forEach { (k, v) -> o.put(k.toString(), v) }
+            // Iterate the plain map: persist() runs on the IO probe coroutine, and a
+            // SnapshotStateMap must not be traversed from there.
+            for ((k, v) in data) o.put(k.toString(), v)
             val tmp = File(f.parentFile, f.name + ".tmp")
             tmp.writeText(o.toString())
             if (!tmp.renameTo(f)) { f.writeText(o.toString()); tmp.delete() }
@@ -78,16 +105,20 @@ object TrackYear {
     fun yearFor(ctx: Context, track: Track): Int? {
         if (track.year > 0) return track.year
         ensureLoaded(ctx)
-        cache[track.id]?.let { return it }
+        // Touch the Compose mirror on the main thread ONLY to register the snapshot read — that is
+        // what wakes the row when publish() later fills this id in. The value itself always comes
+        // from the plain map, so background callers never touch Compose state at all.
+        if (isMain()) cache[track.id]
+        data[track.id]?.let { return it }
         if (track.path.isBlank() || !track.path.endsWith(".flac", ignoreCase = true)) {
-            cache[track.id] = 0
+            publish(track.id, 0)
             return 0
         }
         synchronized(inFlight) { if (!inFlight.add(track.id)) return null }
         scope.launch {
             ioGate.withPermit {
                 val y = runCatching { flacYear(track.path) }.getOrNull() ?: 0
-                cache[track.id] = y
+                publish(track.id, y)
                 synchronized(inFlight) { inFlight.remove(track.id) }
                 schedulePersist()
             }

@@ -111,7 +111,9 @@ fun openAospSettings(ctx: Context, action: String, fallbackMsg: String = "Not av
 
 enum class SettingsSection(val title: String, val icon: ImageVector, val desc: String) {
     AUDIO_DAC("DAC & Audio", Icons.Default.Headphones, "Cirrus Dual CS43198 MasterHIFI, Gain, Filters & USB DAC"),
-    PULSAR_RGB("Pulsar Light", Icons.Default.Lightbulb, "Dual-die front RGB LED, dynamic modes & BPM pulse"),
+    // Was "dynamic modes & BPM pulse": this screen stores a mode, it does not animate anything,
+    // and the indicator is non-functional on this unit.
+    PULSAR_RGB("Pulsar Light", Icons.Default.Lightbulb, "Front RGB indicator preferences (indicator is inactive on this unit)"),
     FN_SWITCH("FN Switch & Keys", Icons.Default.ToggleOn, "Hardware Fn lock switch (Screen & Keys Lock default)"),
     WIRELESS("Network & ADB", Icons.Default.Wifi, "Wi-Fi, Wireless ADB, Hotspot & Network tools"),
     BLUETOOTH("Bluetooth", Icons.Default.Bluetooth, "Audio streaming codecs, LDAC, aptX & paired gear"),
@@ -1045,6 +1047,9 @@ fun PulsarScreen(ctx: Context) {
     var mode by remember { mutableStateOf(PulsarLight.getMode(ctx)) }
     var brightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx)) }
     var bpmSync by remember { mutableStateOf(PulsarLight.isBpmSyncEnabled(ctx)) }
+    // REAL answer from the OS (Settings.Global miku_pulsar_hw_writable), not an assumption.
+    // On this unit the LED sysfs nodes are SELinux-locked, so this is normally false.
+    val ledDrivable = remember { PulsarLight.isHardwareWritable(ctx) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1059,9 +1064,17 @@ fun PulsarScreen(ctx: Context) {
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(Modifier.height(6.dp))
+                // Was: "Dual-die red & blue PWM cross-fading for dynamic audio tier status,
+                // beats-per-minute sync, and ambient battery glow" - none of which this screen
+                // does (a mode writes one static colour pair) and none of which is visible,
+                // because the indicator is confirmed non-functional on this unit. Now reports
+                // what the OS says about the diode and nothing more.
                 Text(
-                    "SGM31324 constant-current LED driver hardware controller. Dual-die red & blue PWM cross-fading for dynamic audio tier status, beats-per-minute sync, and ambient battery glow.",
-                    color = MikuMuted,
+                    if (ledDrivable)
+                        "SGM31324 constant-current LED driver. The OS reports the indicator as drivable; the mode you pick below is stored and handed to the MikuOS Pulsar engine."
+                    else
+                        "SGM31324 constant-current LED driver. The OS reports this unit's indicator as NOT drivable (LED nodes are SELinux-locked), so the settings below are stored preferences only \u2014 the light will not respond.",
+                    color = if (ledDrivable) MikuMuted else MikuGold,
                     fontSize = 12.sp,
                     lineHeight = 16.sp
                 )
@@ -1127,7 +1140,16 @@ fun PulsarScreen(ctx: Context) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Audiophile BPM Pulse Sync", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                        Text("Pulse LED brightness in rhythm with track tempo (BPM)", color = MikuMuted, fontSize = 11.5.sp)
+                        // Was "Pulse LED brightness in rhythm with track tempo (BPM)" on a switch
+                        // that only wrote this app's private pref - the BPM engine lives in the
+                        // launcher and never saw it. The op is now forwarded to the OS, and the
+                        // copy no longer promises a light that cannot turn on.
+                        Text(
+                            if (ledDrivable) "Asks the MikuOS Pulsar engine to pulse the indicator with track tempo"
+                            else "Stored and sent to MikuOS \u2014 no visible effect: this unit's indicator does not respond",
+                            color = if (ledDrivable) MikuMuted else MikuGold,
+                            fontSize = 11.5.sp
+                        )
                     }
                     Switch(
                         checked = bpmSync,
@@ -1568,13 +1590,19 @@ fun WirelessScreen(ctx: Context) {
                 Spacer(Modifier.height(6.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Text("Force T-Mobile network", color = Color.White, fontSize = 13.sp)
+                    // Was: "manual = on" straight off the tap, with the failure only logged - a
+                    // refused setNetworkSelectionModeManual left the switch showing the network as
+                    // pinned. Re-read networkSelectionMode and show what the modem actually is on.
                     Switch(checked = manual, onCheckedChange = { on ->
-                        manual = on
                         Thread {
                             try {
                                 if (on) tm?.setNetworkSelectionModeManual("310260", true)
                                 else tm?.setNetworkSelectionModeAutomatic()
                             } catch (t: Throwable) { android.util.Log.w("MikuSettings", "network selection failed", t) }
+                            val actual = try {
+                                tm?.networkSelectionMode == android.telephony.TelephonyManager.NETWORK_SELECTION_MODE_MANUAL
+                            } catch (_: Throwable) { false }
+                            android.os.Handler(android.os.Looper.getMainLooper()).post { manual = actual }
                         }.start()
                     })
                 }
@@ -2101,8 +2129,9 @@ fun BluetoothScreen(ctx: Context) {
                     // Live rows come from the stack; hardware spec rows are static datasheet facts.
                     AboutSpecRow("Active A2DP Codec", activeCodec ?: (if (connectedCount > 0) "connected · codec not reported" else "— (nothing streaming)"))
                     AboutSpecRow("Connected Devices", if (connectedCount > 0) "$connectedCount" else "none")
-                    AboutSpecRow("RF Transceiver", "Qualcomm WCN3988 (SM6225 companion)")
-                    AboutSpecRow("Bluetooth Version", "Bluetooth 5.0 / BLE")
+                    // Static datasheet claims, not probed - say so; the two rows above them ARE live.
+                    AboutSpecRow("RF Transceiver (spec)", "Qualcomm WCN3988 (SM6225 companion)")
+                    AboutSpecRow("Bluetooth Version (spec)", "Bluetooth 5.0 / BLE")
 
                     Spacer(Modifier.height(12.dp))
                     Button(
@@ -2205,13 +2234,15 @@ fun DisplayScreen(ctx: Context) {
                     Switch(
                         checked = isProtectorMode,
                         onCheckedChange = { enabled ->
-                            isProtectorMode = enabled
                             val v = if (enabled) 1 else 0
-                            try {
-                                Settings.Secure.putInt(cr, "touch_sensitivity_enabled", v)
-                                Settings.System.putInt(cr, "touch_sensitivity_enabled", v)
-                                Settings.System.putInt(cr, "screen_protector_mode", v)
-                            } catch (_: Throwable) {}
+                            // Was: one try/catch that swallowed every failure, then an unconditional
+                            // "…Enabled" toast and a switch set straight from the tap. If all three
+                            // writes were refused the user was still told touch boost was on. Now
+                            // each write is tracked and the switch shows what actually persisted.
+                            var wrote = false
+                            runCatching { Settings.Secure.putInt(cr, "touch_sensitivity_enabled", v) }.onSuccess { wrote = true }
+                            runCatching { Settings.System.putInt(cr, "touch_sensitivity_enabled", v) }.onSuccess { wrote = true }
+                            runCatching { Settings.System.putInt(cr, "screen_protector_mode", v) }.onSuccess { wrote = true }
                             RootShell.execFast(
                                 "settings put secure touch_sensitivity_enabled $v; " +
                                 "settings put system touch_sensitivity_enabled $v; " +
@@ -2219,10 +2250,19 @@ fun DisplayScreen(ctx: Context) {
                                 "setprop persist.sys.screen_protector $v; " +
                                 "setprop persist.sys.touch_sensitivity $v"
                             )
+                            val readBack = try {
+                                Settings.Secure.getInt(cr, "touch_sensitivity_enabled", -1) == v ||
+                                Settings.System.getInt(cr, "touch_sensitivity_enabled", -1) == v ||
+                                Settings.System.getInt(cr, "screen_protector_mode", -1) == v
+                            } catch (_: Throwable) { false }
+                            isProtectorMode = if (readBack) enabled else !enabled
                             Toast.makeText(
                                 ctx,
-                                if (enabled) "Screen Protector Mode (Touch Boost) Enabled"
-                                else "Screen Protector Mode Disabled",
+                                when {
+                                    !wrote || !readBack -> "Could not change screen protector mode \u2014 the setting was refused"
+                                    enabled -> "touch_sensitivity_enabled = 1 (applied if the touch firmware honours it)"
+                                    else -> "touch_sensitivity_enabled = 0"
+                                },
                                 Toast.LENGTH_SHORT
                             ).show()
                         },
@@ -2353,7 +2393,10 @@ fun DisplayScreen(ctx: Context) {
         item {
             Column(Modifier.mikuCard().padding(14.dp)) {
                 Text("SYSTEM NAVIGATION MODE", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Text("Configure Pixel-style edge swipe back & navigation bar", color = MikuMuted, fontSize = 10.sp)
+                Text(
+                    "Sets Settings.Secure navigation_mode. Swapping the navbar OVERLAY itself needs root, so the bar may not change appearance even when the value takes.",
+                    color = MikuMuted, fontSize = 10.sp, lineHeight = 13.sp
+                )
                 Spacer(Modifier.height(10.dp))
 
                 // null = navigation_mode not set on this device → neither option pre-selected
@@ -2382,15 +2425,19 @@ fun DisplayScreen(ctx: Context) {
                                 RoundedCornerShape(8.dp)
                             )
                             .clickable {
-                                isGestureNav = true
-                                RootShell.execFast(
-                                    "cmd overlay enable com.android.internal.systemui.navbar.gestural; " +
-                                    "cmd overlay disable com.android.internal.systemui.navbar.threebutton; " +
-                                    "settings put secure navigation_mode 2; " +
-                                    "settings put secure back_gesture_inset_scale_left 2; " +
-                                    "settings put secure back_gesture_inset_scale_right 2"
-                                )
-                                Toast.makeText(ctx, "Gesture Navigation (Pixel Swipe Back) Enabled", Toast.LENGTH_SHORT).show()
+                                // Was: RootShell-ONLY (`cmd overlay ...` / `settings put secure ...`)
+                                // plus an immediate selection and a "...Enabled" toast. There is no
+                                // su on this device, so every one of those commands was a silent
+                                // no-op while the UI reported the mode as applied. Write through the
+                                // root-free ContentResolver path, then report what actually stuck.
+                                val ok = applyNavigationMode(cr, gesture = true)
+                                isGestureNav = readNavigationMode(cr)
+                                Toast.makeText(
+                                    ctx,
+                                    if (ok) "navigation_mode set to gesture (2)"
+                                    else "Could not change navigation mode \u2014 the write was refused",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                             .padding(vertical = 10.dp, horizontal = 8.dp),
                         contentAlignment = Alignment.Center
@@ -2414,13 +2461,16 @@ fun DisplayScreen(ctx: Context) {
                                 RoundedCornerShape(8.dp)
                             )
                             .clickable {
-                                isGestureNav = false
-                                RootShell.execFast(
-                                    "cmd overlay enable com.android.internal.systemui.navbar.threebutton; " +
-                                    "cmd overlay disable com.android.internal.systemui.navbar.gestural; " +
-                                    "settings put secure navigation_mode 0"
-                                )
-                                Toast.makeText(ctx, "3-Button Navigation Bar Enabled", Toast.LENGTH_SHORT).show()
+                                // Same fix as the gesture option above: real write, then report the
+                                // value the system actually holds rather than the one we asked for.
+                                val ok = applyNavigationMode(cr, gesture = false)
+                                isGestureNav = readNavigationMode(cr)
+                                Toast.makeText(
+                                    ctx,
+                                    if (ok) "navigation_mode set to 3-button (0)"
+                                    else "Could not change navigation mode \u2014 the write was refused",
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                             .padding(vertical = 10.dp, horizontal = 8.dp),
                         contentAlignment = Alignment.Center
@@ -2543,7 +2593,8 @@ fun BatteryScreen(ctx: Context) {
             Icon(
                 Icons.Default.BatteryChargingFull,
                 contentDescription = null,
-                tint = if ((pct ?: 100) > 20) MikuTealBright else MikuPinkBright,
+                // Was "(pct ?: 100) > 20": an UNKNOWN level was tinted as a healthy battery.
+                tint = when { pct == null -> MikuMuted; pct > 20 -> MikuTealBright; else -> MikuPinkBright },
                 modifier = Modifier.size(48.dp)
             )
         }
@@ -2657,22 +2708,28 @@ fun AboutScreen(ctx: Context) {
         AboutSpecRow("Android Release", "$androidRelease (API ${android.os.Build.VERSION.SDK_INT})$gkiTag")
         AboutSpecRow("Build", buildDisplay)
         AboutSpecRow("SoC", "$socModel · $cores cores")
-        AboutSpecRow("DAC Hardware", "Dual Cirrus Logic CS43198 MasterHIFI™")
-        AboutSpecRow("RGB Controller", "SGM31324 LED driver")
+        // Not read from the running system like the rows around them - these are datasheet facts
+        // about the board, so they are labelled as such rather than sitting in a list the section
+        // header calls "as reported by the running system".
+        AboutSpecRow("DAC Hardware (spec)", "Dual Cirrus Logic CS43198 MasterHIFI™")
+        AboutSpecRow("RGB Controller (spec)", "SGM31324 LED driver · indicator inactive on this unit")
         AboutSpecRow("Linux Kernel", "$kernel ($abi)")
         AboutSpecRow("Privilege", privilege)
         AboutSpecRow("Security Patch", android.os.Build.VERSION.SECURITY_PATCH ?: "unknown")
 
         Spacer(Modifier.height(14.dp))
 
+        // This row used to write "miku_onboarding_completed=false" into com.miku.settings' OWN
+        // SharedPreferences and then go Home. The wizard flag lives in com.miku.launcher's sandbox,
+        // which this app cannot touch, so the wizard never re-opened: it was a dressed-up Home
+        // button that claimed to re-run provisioning. The dead write is gone and the row now says
+        // exactly what it does (the launcher has no re-run entry point to call).
         SettingsLinkRow(
-            icon = Icons.Default.AutoFixHigh,
-            title = "MikuOS Setup & Provisioning Wizard",
-            subtitle = "Re-configure Google services, streaming platforms & DAC filters",
+            icon = Icons.Default.Home,
+            title = "Open MikuOS Home",
+            subtitle = "Re-running the first-boot setup wizard is done from the launcher itself",
             onClick = {
                 try {
-                    val prefs = ctx.getSharedPreferences("miku_launcher_prefs", Context.MODE_PRIVATE)
-                    prefs.edit().putBoolean("miku_onboarding_completed", false).apply()
                     val homeIntent = Intent(Intent.ACTION_MAIN).apply {
                         addCategory(Intent.CATEGORY_HOME)
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -2750,6 +2807,34 @@ fun AboutSpecRow(label: String, value: String) {
         Text(label, color = MikuMuted, fontSize = 12.sp)
         Text(value, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
+}
+
+/** The value the system actually holds; null when navigation_mode is unset/unreadable. */
+fun readNavigationMode(cr: android.content.ContentResolver): Boolean? = try {
+    Settings.Secure.getString(cr, "navigation_mode")?.trim()?.toIntOrNull()?.let { it == 2 }
+} catch (_: Throwable) { null }
+
+/**
+ * Root-free navigation_mode write, VERIFIED. Returns true only when the setting reads back as the
+ * requested value. RootShell is kept as an optional extra for rooted units (it also flips the
+ * navbar overlay, which the ContentResolver path cannot do) but is never treated as success.
+ */
+fun applyNavigationMode(cr: android.content.ContentResolver, gesture: Boolean): Boolean {
+    val want = if (gesture) 2 else 0
+    runCatching { Settings.Secure.putInt(cr, "navigation_mode", want) }
+    if (gesture) {
+        runCatching { Settings.Secure.putInt(cr, "back_gesture_inset_scale_left", 2) }
+        runCatching { Settings.Secure.putInt(cr, "back_gesture_inset_scale_right", 2) }
+    }
+    RootShell.execFast(
+        if (gesture)
+            "cmd overlay enable com.android.internal.systemui.navbar.gestural; " +
+            "cmd overlay disable com.android.internal.systemui.navbar.threebutton"
+        else
+            "cmd overlay enable com.android.internal.systemui.navbar.threebutton; " +
+            "cmd overlay disable com.android.internal.systemui.navbar.gestural"
+    )
+    return readNavigationMode(cr) == gesture
 }
 
 fun applyDisplayDensity(cr: android.content.ContentResolver, dpi: Int) {

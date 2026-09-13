@@ -1682,7 +1682,16 @@ private fun MikuNetObsWireGuardQrModal(
                                 if (result.resultCode == android.app.Activity.RESULT_OK) {
                                     pendingConf?.let { c -> scope.launch {
                                         MikuWireGuardManager.saveAndConnect(ctx, "miku", c)
-                                        if (alwaysOn) MikuWireGuardManager.registerAlwaysOn(ctx)
+                                        // The checkbox used to stay ticked whether or not the
+                                        // system accepted us as the always-on VPN app. Untick and
+                                        // say so when the verified registration fails.
+                                        if (alwaysOn && !MikuWireGuardManager.registerAlwaysOn(ctx)) {
+                                            alwaysOn = false
+                                            android.widget.Toast.makeText(
+                                                ctx, "Couldn't register always-on VPN on this build",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                     } }
                                 }
                                 pendingConf = null
@@ -1774,7 +1783,16 @@ private fun MikuNetObsWireGuardQrModal(
                                         if (intent != null) { pendingConf = confText; consentLauncher.launch(intent) }
                                         else scope.launch {
                                             MikuWireGuardManager.saveAndConnect(ctx, "miku", confText)
-                                            if (alwaysOn) MikuWireGuardManager.registerAlwaysOn(ctx)
+                                            // The checkbox used to stay ticked whether or not the
+                                        // system accepted us as the always-on VPN app. Untick and
+                                        // say so when the verified registration fails.
+                                        if (alwaysOn && !MikuWireGuardManager.registerAlwaysOn(ctx)) {
+                                            alwaysOn = false
+                                            android.widget.Toast.makeText(
+                                                ctx, "Couldn't register always-on VPN on this build",
+                                                android.widget.Toast.LENGTH_SHORT
+                                            ).show()
+                                        }
                                         }
                                     }
                                 },

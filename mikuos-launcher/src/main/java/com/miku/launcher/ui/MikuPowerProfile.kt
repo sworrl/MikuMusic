@@ -77,25 +77,31 @@ object MikuPowerProfile {
         _mode.value = if (m == "perf" || m == "save") m else "auto"
     }
     fun nextMode(current: String): String = when (current) { "auto" -> "perf"; "perf" -> "save"; else -> "auto" }
-    /** Sets the user power MODE directly ("auto" | "perf" | "save") and persists it. */
+    /**
+     * Sets the user power MODE directly ("auto" | "perf" | "save") and persists it.
+     *
+     * Returns the mode the SYSTEM actually holds after the write — not the one that was asked for.
+     * Both of these used to set `_mode.value = m` optimistically before writing, and then swallow
+     * every failure, so a refused write still lit the Performance chip and made the thermal
+     * observatory's header read "miku_power_mode · live: PERFORMANCE" for a value the system never
+     * accepted and Miku Music's governor would never see.
+     */
     fun setMode(ctx: Context, mode: String): String {
         val m = if (mode == "perf" || mode == "save") mode else "auto"
-        _mode.value = m
         val app = ctx.applicationContext
-        try { Settings.Global.putString(app.contentResolver, MODE_KEY, m) } catch (_: Throwable) {
-            try { com.miku.launcher.RootShell.execFast("settings put global $MODE_KEY $m") } catch (_: Throwable) {}
-        }
-        return m
+        try { Settings.Global.putString(app.contentResolver, MODE_KEY, m) } catch (_: Throwable) {}
+        // Read back: the ContentObserver handles the success path too, but a caller that uses the
+        // return value must never be handed an unverified mode.
+        readMode(app)
+        return _mode.value
     }
-    /** Cycles auto → perf → save → auto and persists it (root-shell fallback if the write is refused). */
+    /** Cycles auto → perf → save → auto, persists it, and returns the VERIFIED resulting mode. */
     fun cycleMode(ctx: Context): String {
         val next = nextMode(_mode.value)
-        _mode.value = next
         val app = ctx.applicationContext
-        try { Settings.Global.putString(app.contentResolver, MODE_KEY, next) } catch (_: Throwable) {
-            try { com.miku.launcher.RootShell.execFast("settings put global $MODE_KEY $next") } catch (_: Throwable) {}
-        }
-        return next
+        try { Settings.Global.putString(app.contentResolver, MODE_KEY, next) } catch (_: Throwable) {}
+        readMode(app)
+        return _mode.value
     }
     /** Kawaii glyph for the MODE (perf ⚡ / save ☾) or, in auto, for the live profile. */
     fun modeGlyph(mode: String, profile: String): String = when (mode) {

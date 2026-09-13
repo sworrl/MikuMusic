@@ -325,8 +325,16 @@ fun detectSystemTimeZone(ctx: Context): String? {
     return null
 }
 
-/** Applies time zone and 24-hour time formatting across MikuOS and Android framework. */
-fun applyDateTimeSettings(ctx: Context, timeZone: String, is24Hour: Boolean) {
+/**
+ * Applies time zone and 24-hour time formatting, and reports what the SYSTEM actually holds
+ * afterwards as (timeZoneApplied, timeFormatApplied).
+ *
+ * This used to return Unit with all three of its paths swallowing failure — Settings.System needs
+ * WRITE_SETTINGS (not declared), AlarmManager.setTimeZone needs SET_TIME_ZONE (not declared), and
+ * the RootShell path cannot run at all without su. The wizard then printed the user's SELECTION
+ * back at them in the configuration summary as though it had been applied.
+ */
+fun applyDateTimeSettings(ctx: Context, timeZone: String, is24Hour: Boolean): Pair<Boolean, Boolean> {
     try {
         val timeFormatString = if (is24Hour) "24" else "12"
         Settings.System.putString(ctx.contentResolver, Settings.System.TIME_12_24, timeFormatString)
@@ -344,9 +352,23 @@ fun applyDateTimeSettings(ctx: Context, timeZone: String, is24Hour: Boolean) {
         val am = ctx.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
         am?.setTimeZone(timeZone)
     } catch (_: Throwable) {}
+
+    // Verified read-back — never report the request, only the result.
+    val tzOk = runCatching { java.util.TimeZone.getDefault().id == timeZone }.getOrDefault(false)
+    val fmtOk = runCatching {
+        Settings.System.getString(ctx.contentResolver, Settings.System.TIME_12_24) ==
+            (if (is24Hour) "24" else "12")
+    }.getOrDefault(false)
+    return tzOk to fmtOk
 }
 
-/** Applies high-sensitivity Screen Protector Mode for tempered glass screen protectors. */
+/**
+ * Stores the high-sensitivity Screen Protector preference.
+ *
+ * NOTE: `touch_sensitivity_enabled` / `screen_protector_mode` have no reader anywhere in this tree
+ * and are not AOSP setting keys, so this is a stored preference, not a confirmed hardware change.
+ * The summary line must not claim more than that.
+ */
 fun applyScreenProtectorMode(ctx: Context, enabled: Boolean) {
     val cr = ctx.contentResolver
     val v = if (enabled) 1 else 0
@@ -1497,9 +1519,29 @@ fun CompletionScreen(
             Spacer(Modifier.height(10.dp))
 
             SummaryItem(Icons.Default.Language, "Language", SystemLanguages.firstOrNull { it.code == lang }?.nativeName ?: "English")
-            SummaryItem(Icons.Default.AccessTime, "Time Zone", SupportedTimeZones.firstOrNull { it.id == timeZone }?.name ?: timeZone)
-            SummaryItem(Icons.Default.Schedule, "Time Format", if (is24Hour) "24-Hour (Military)" else "12-Hour (AM/PM)")
-            SummaryItem(Icons.Default.TouchApp, "Screen Protector", if (isScreenProtectorMode) "High Sensitivity Enabled" else "Standard")
+            // VERIFIED system state, not the selection. These three lines used to echo whatever
+            // the user picked, even though every write path can (and on this build does) fail
+            // silently — see applyDateTimeSettings.
+            val liveTz = runCatching { java.util.TimeZone.getDefault().id }.getOrNull()
+            SummaryItem(
+                Icons.Default.AccessTime, "Time Zone",
+                if (liveTz == timeZone) (SupportedTimeZones.firstOrNull { it.id == timeZone }?.name ?: timeZone)
+                else (liveTz ?: "—") + " (couldn't apply your choice)"
+            )
+            val liveFmt = runCatching {
+                Settings.System.getString(ctx.contentResolver, Settings.System.TIME_12_24)
+            }.getOrNull()
+            SummaryItem(
+                Icons.Default.Schedule, "Time Format",
+                when (liveFmt) {
+                    "24" -> "24-Hour (Military)"
+                    "12" -> "12-Hour (AM/PM)"
+                    else -> "— (system default)"
+                }
+            )
+            // Stored preference only — nothing in MikuOS reads these keys back (see
+            // applyScreenProtectorMode), so this may not claim the touch panel was retuned.
+            SummaryItem(Icons.Default.TouchApp, "Screen Protector", if (isScreenProtectorMode) "High sensitivity (preference saved)" else "Standard")
             // Label matches the value: this is the SELECTION count, not a confirmed install count.
             SummaryItem(Icons.Default.Apps, "Selected Apps", "$appsCount selected")
             // Real default IME from Settings.Secure — the wizard never sets or queries an IME, so

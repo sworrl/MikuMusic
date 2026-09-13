@@ -195,7 +195,10 @@ fun readRealHardwareBattery(context: Context): RealHardwareBatteryTelemetry {
         .firstOrNull { File(it).exists() }
     if (fuelGaugeDir != null) {
         readSysfsInt("$fuelGaugeDir/voltage_now")?.takeIf { it > 1000 }?.let { voltageMv = it / 1000 }
-        readSysfsInt("$fuelGaugeDir/temp")?.let { tempC = it / 10f }
+        // deci-°C. It used to overwrite the already-good ACTION_BATTERY_CHANGED value with no
+        // sanity gate at all, so a node reporting 0 (unsupported) erased a real temperature and a
+        // milli-°C node would have rendered "350.0 °C".
+        readSysfsInt("$fuelGaugeDir/temp")?.let { it / 10f }?.takeIf { it in 10f..115f }?.let { tempC = it }
         readSysfsInt("$fuelGaugeDir/charge_full_design")?.takeIf { it > 0 }?.let { designCapacityMah = it / 1000 }
         readSysfsInt("$fuelGaugeDir/charge_now")?.takeIf { it > 0 }?.let { if (remainingMah == 0) remainingMah = it / 1000 }
         if (!hasCurrent) readSysfsInt("$fuelGaugeDir/current_now")?.takeIf { it != 0 }?.let {
@@ -299,7 +302,11 @@ fun MikuBatteryObservatoryModal(
         while (true) {
             val t = withContext(Dispatchers.IO) { readRealHardwareBattery(ctx) }
             telemetry = t
-            if (t.hasCurrent) currentHistory = (currentHistory + kotlin.math.abs(t.currentMa)).takeLast(20)
+            // SIGNED. It stored abs(), so the bar colour had to come from the INSTANTANEOUS
+            // current instead — and the moment the user unplugged, the previous 24 s of charging
+            // bars all repainted as discharge (and vice versa), asserting a direction for past
+            // samples that was never recorded.
+            if (t.hasCurrent) currentHistory = (currentHistory + t.currentMa).takeLast(20)
             if (t.voltageMv > 0) voltageHistory = (voltageHistory + t.voltageMv).takeLast(20)
             delay(1200L)
         }
@@ -569,7 +576,12 @@ fun MikuBatteryObservatoryModal(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        text = "⚡ REAL-TIME POWER DRAIN & VOLTAGE HISTOGRAM",
+                                        // "REAL-TIME" only over an actual series; it used to head
+                                        // a permanently empty canvas on a unit that exposes no
+                                        // current node.
+                                        text = if (currentHistory.isEmpty() && voltageHistory.isEmpty())
+                                            "⚡ POWER DRAIN & VOLTAGE HISTOGRAM · NO SAMPLES"
+                                        else "⚡ REAL-TIME POWER DRAIN & VOLTAGE HISTOGRAM",
                                         color = batteryColor,
                                         fontSize = 9.5.sp,
                                         fontWeight = FontWeight.Bold,
@@ -599,17 +611,19 @@ fun MikuBatteryObservatoryModal(
                                     val slots = 20
                                     val barWidth = (w / slots) * 0.75f
                                     val barGap = (w / slots) * 0.25f
-                                    val maxVal = (currentHistory.maxOrNull() ?: 1).coerceAtLeast(1).toFloat()
+                                    val maxVal = (currentHistory.maxOfOrNull { kotlin.math.abs(it) } ?: 1).coerceAtLeast(1).toFloat()
 
                                     // Draw histogram bars
                                     val offset = slots - currentHistory.size
                                     currentHistory.forEachIndexed { i, curVal ->
                                         val idx = offset + i
-                                        val barHeight = ((curVal.toFloat() / maxVal) * (h * 0.82f)).coerceIn(3f, h)
+                                        val barHeight = ((kotlin.math.abs(curVal).toFloat() / maxVal) * (h * 0.82f)).coerceIn(3f, h)
                                         val x = idx * (barWidth + barGap)
                                         val y = h - barHeight
-                                        val barColor = if (telemetry.currentMa > 0) com.miku.launcher.ui.MikuIdentity.Leek
-                                                       else if (isNetDischargingOnUsb) Color(0xFFFF9100)
+                                        // Colour from THIS sample's own sign, not from whatever the
+                                        // current happens to be right now.
+                                        val barColor = if (curVal > 0) com.miku.launcher.ui.MikuIdentity.Leek
+                                                       else if (telemetry.isPlugged) Color(0xFFFF9100)
                                                        else Color(0xFF00E5FF).copy(alpha = 0.75f)
 
                                         drawRect(

@@ -199,13 +199,15 @@ fun MikuArcoModal(onDismissRequest: () -> Unit) {
                     // Power / blackout row
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect != "off") com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFF8BA6A9), modifier = Modifier.size(16.dp))
+                            // Blank = never reported by the rig; that is not the same as "off".
+                            Icon(Icons.Default.PowerSettingsNew, contentDescription = null, tint = if (activeEffect.isNotBlank() && activeEffect != "off") com.miku.launcher.ui.MikuIdentity.Leek else Color(0xFF8BA6A9), modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(6.dp))
                             Text("Power", color = MikuTextSecondary, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                         Switch(
-                            checked = activeEffect != "off",
-                            enabled = isConnected && !isBusyAction,
+                            checked = activeEffect.isNotBlank() && activeEffect != "off",
+                            // An unknown effect can't drive a meaningful toggle position.
+                            enabled = isConnected && !isBusyAction && activeEffect.isNotBlank(),
                             onCheckedChange = { turnOn ->
                                 isBusyAction = true
                                 scope.launch {

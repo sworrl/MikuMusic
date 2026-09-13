@@ -23,14 +23,23 @@ object PulsarLight {
     private const val SYSFS_SGM_RGB = "/sys/class/leds/sgm31324-leds/rgb_val"
     private const val SYSFS_SGM_PATTERN = "/sys/class/leds/sgm31324-leds/led_pattern"
 
+    /**
+     * HONESTY NOTE (fake-data sweep): the descriptions promised effects the user would SEE - a
+     * liquid morph, a tempo pulse, a heartbeat, sine-wave breathing, a battery gauge. The
+     * animation loops below are real, but every one of them is gated on [isHardwareWritable],
+     * which is FALSE on this unit: the M500's RGB indicator is confirmed non-functional (LED sysfs
+     * nodes SELinux-locked, no consumer LED service, no factory-test config), so nothing lights
+     * up. "Audiophile BPM Pulse" was doubly wrong - it runs a plain breathing loop, it has never
+     * read a tempo or an audio format. Descriptions now state the stored intent only.
+     */
     enum class Mode(val id: String, val label: String, val description: String) {
-        PURPLE_TEAL_FADE("purple_teal_fade", "Dual-Die Chroma Wave", "Liquid continuous morph through Red ↔ Magenta ↔ Purple ↔ Blue"),
-        DUAL_CHROMA_WAVE("chroma_rainbow", "Dual-Die Chroma Wave", "Liquid continuous morph through Red ↔ Magenta ↔ Purple ↔ Blue"),
-        AUDIOPHILE_AUTO("audiophile_auto", "Audiophile BPM Pulse", "Dynamic format color and tempo pulse"),
-        CYBER_HEARTBEAT("cyber_heartbeat", "Cyber Heartbeat", "Dual-pulse heartbeat glow in cyber violet/magenta"),
-        SMOOTH_BREATHING("smooth_breathing", "Analog Breathing Glow", "Deep analog sine-wave brightness breathing in Miku Blue"),
-        SIGNATURE_TEAL("signature_teal", "Signature Miku Blue", "Solid futuristic Miku Cyan-Blue"),
-        BATTERY_MONITOR("battery_monitor", "Battery & Charging Glow", "Continuous chromatic gauge from Red (empty) to Cyan-Blue (full)"),
+        PURPLE_TEAL_FADE("purple_teal_fade", "Dual-Die Chroma Wave", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        DUAL_CHROMA_WAVE("chroma_rainbow", "Dual-Die Chroma Wave", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        AUDIOPHILE_AUTO("audiophile_auto", "Audiophile BPM Pulse", "Saved preference only — not tempo- or format-driven, and the indicator does not respond on this unit"),
+        CYBER_HEARTBEAT("cyber_heartbeat", "Cyber Heartbeat", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        SMOOTH_BREATHING("smooth_breathing", "Analog Breathing Glow", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        SIGNATURE_TEAL("signature_teal", "Signature Miku Blue", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        BATTERY_MONITOR("battery_monitor", "Battery & Charging Glow", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
         OFF("off", "Off", "Pulsar indicator disabled")
     }
 
@@ -88,6 +97,15 @@ object PulsarLight {
         writeDual(red, blue, brightness)
     }
 
+    /**
+     * Was a stub that returned TRUE unconditionally: when the reflective SystemProperties.set threw
+     * (the normal case for a non-privileged setprop) it fired RootShell.execFast - which returns
+     * Unit and silently does nothing without su - and still reported success. Callers logged /
+     * displayed that as "applied". It now reports only what actually happened.
+     *
+     * @return true only when the reflective set() completed; false when the write was refused and
+     *         only the optional (usually absent) root path was attempted.
+     */
     fun setSystemProperty(key: String, value: String): Boolean {
         return try {
             val c = Class.forName("android.os.SystemProperties")
@@ -96,7 +114,7 @@ object PulsarLight {
             true
         } catch (_: Throwable) {
             RootShell.execFast("setprop $key '$value'")
-            true
+            false
         }
     }
 
@@ -247,8 +265,12 @@ object PulsarLight {
                     val l = bi?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
                     val sc = bi?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100) ?: 100
                     if (l >= 0 && sc > 0) (l * 100 / sc).coerceIn(0, 100)
-                    else (bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 50).coerceIn(0, 100)
+                    // Was "?: 50" - an invented half-charge when neither source reports. -1 means
+                    // unknown, and an unknown level must not be drawn as a gauge position.
+                    else bm?.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY)
+                        ?.takeIf { it in 0..100 } ?: -1
                 }
+                if (level < 0) return@launch   // no real level: leave the indicator alone
                 val t = level / 100f
                 val r = ((1f - t) * 255f).toInt().coerceIn(0, 255)
                 val b = (t * 255f).toInt().coerceIn(0, 255)

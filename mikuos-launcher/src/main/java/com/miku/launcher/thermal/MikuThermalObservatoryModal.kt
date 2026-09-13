@@ -47,8 +47,11 @@ data class ThermalZoneData(
 
 data class ThermalChronologicalPoint(
     val timestampMs: Long,
-    val cpuTempC: Float,
-    val batteryTempC: Float,
+    // null = that channel had no readable sensor for this sample. These were Float and stored 0f,
+    // which the waveform normalised to the bottom of the plot and stroked as a solid line — a flat
+    // "sub-20 °C" trace under a legend dot reading CPU Peak / Battery, for a reading never taken.
+    val cpuTempC: Float?,
+    val batteryTempC: Float?,
     val maxTempC: Float
 )
 
@@ -66,7 +69,7 @@ fun MikuThermalObservatoryModal(
 ) {
     val ctx = LocalContext.current
     var thermalZones by remember { mutableStateOf<List<ThermalZoneData>>(emptyList()) }
-    var cpuFrequencies by remember { mutableStateOf<List<Long>>(emptyList()) }
+    var cpuFrequencies by remember { mutableStateOf<List<Long?>>(emptyList()) }
     // Real power mode/profile (Settings.Global) instead of a local, non-functional selector.
     val powerMode by com.miku.launcher.ui.rememberPowerMode()
     val powerProfile by com.miku.launcher.ui.rememberPowerProfile()
@@ -119,15 +122,26 @@ fun MikuThermalObservatoryModal(
                     } catch (_: Throwable) {}
                 }
 
-                val freqs = mutableListOf<Long>()
-                for (core in 0..7) {
+                // Enumerate the REAL cores and keep the list INDEXED BY CORE NUMBER (null =
+                // that core's cpufreq node is missing/offline). It used to append only readable
+                // cores to a flat list, so with cpu0 offline the UI printed cpu1's clock under
+                // the label "C0" — and the panel always claimed exactly 4 cores regardless of
+                // the SoC, because the empty case was a hardcoded List(4).
+                val coreCount = try {
+                    File("/sys/devices/system/cpu").listFiles()
+                        ?.count { it.name.matches(Regex("cpu[0-9]+")) } ?: 0
+                } catch (_: Throwable) { 0 }
+                val freqs = mutableListOf<Long?>()
+                for (core in 0 until coreCount) {
+                    var mhz: Long? = null
                     try {
                         val freqFile = File("/sys/devices/system/cpu/cpu$core/cpufreq/scaling_cur_freq")
                         if (freqFile.exists() && freqFile.canRead()) {
-                            val khz = freqFile.readText().trim().toLongOrNull() ?: 0L
-                            freqs.add(khz / 1000L) // in MHz
+                            val khz = freqFile.readText().trim().toLongOrNull()
+                            if (khz != null && khz > 0L) mhz = khz / 1000L
                         }
                     } catch (_: Throwable) {}
+                    freqs.add(mhz)
                 }
 
                 thermalZones = zones
@@ -146,8 +160,8 @@ fun MikuThermalObservatoryModal(
                     chronologicalHistory.add(
                         ThermalChronologicalPoint(
                             timestampMs = System.currentTimeMillis(),
-                            cpuTempC = currentCpuMax ?: 0f,
-                            batteryTempC = currentBatMax ?: 0f,
+                            cpuTempC = currentCpuMax,
+                            batteryTempC = currentBatMax,
                             maxTempC = peak
                         )
                     )
@@ -358,28 +372,42 @@ fun MikuThermalObservatoryModal(
                                 val cpuPath = Path()
                                 val batPath = Path()
                                 val fillPath = Path()
+                                // A null channel is a GAP, not a zero: the pen lifts and the fill
+                                // restarts. Previously every unreadable sample was drawn at 0 °C.
+                                var cpuStarted = false
+                                var batStarted = false
+                                var fillOpen = false
 
                                 pts.forEachIndexed { i, pt ->
                                     val x = (30 - pts.size + i) * dx
-                                    val cpuNorm = ((pt.cpuTempC - 20f) / 60f).coerceIn(0f, 1f)
-                                    val batNorm = ((pt.batteryTempC - 20f) / 60f).coerceIn(0f, 1f)
-                                    val yCpu = h * (1f - cpuNorm)
-                                    val yBat = h * (1f - batNorm)
+                                    val cpu = pt.cpuTempC
+                                    val bat = pt.batteryTempC
 
-                                    if (i == 0) {
-                                        cpuPath.moveTo(x, yCpu)
-                                        batPath.moveTo(x, yBat)
-                                        fillPath.moveTo(x, h)
-                                        fillPath.lineTo(x, yCpu)
-                                    } else {
-                                        cpuPath.lineTo(x, yCpu)
-                                        batPath.lineTo(x, yBat)
-                                        fillPath.lineTo(x, yCpu)
+                                    if (cpu != null) {
+                                        val yCpu = h * (1f - ((cpu - 20f) / 60f).coerceIn(0f, 1f))
+                                        if (!cpuStarted) { cpuPath.moveTo(x, yCpu); cpuStarted = true }
+                                        else cpuPath.lineTo(x, yCpu)
+                                        if (!fillOpen) {
+                                            fillPath.moveTo(x, h); fillPath.lineTo(x, yCpu); fillOpen = true
+                                        } else fillPath.lineTo(x, yCpu)
+                                    } else if (fillOpen) {
+                                        // close the fill at the last real x before the gap
+                                        fillPath.lineTo(x - dx, h); fillPath.close(); fillOpen = false
+                                        cpuStarted = false
                                     }
 
-                                    if (i == pts.size - 1) {
+                                    if (bat != null) {
+                                        val yBat = h * (1f - ((bat - 20f) / 60f).coerceIn(0f, 1f))
+                                        if (!batStarted) { batPath.moveTo(x, yBat); batStarted = true }
+                                        else batPath.lineTo(x, yBat)
+                                    } else {
+                                        batStarted = false
+                                    }
+
+                                    if (i == pts.size - 1 && fillOpen) {
                                         fillPath.lineTo(x, h)
                                         fillPath.close()
+                                        fillOpen = false
                                     }
                                 }
 
@@ -412,9 +440,11 @@ fun MikuThermalObservatoryModal(
                             Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("-30s", color = MikuTextSecondary, fontSize = 7.sp)
-                            Text("-20s", color = MikuTextSecondary, fontSize = 7.sp)
-                            Text("-10s", color = MikuTextSecondary, fontSize = 7.sp)
+                            // 30 samples at the real 1.2 s poll = a 36 s window. The axis used to
+                            // be labelled -30/-20/-10 s, so every time read off the chart was 20 % out.
+                            Text("-36s", color = MikuTextSecondary, fontSize = 7.sp)
+                            Text("-24s", color = MikuTextSecondary, fontSize = 7.sp)
+                            Text("-12s", color = MikuTextSecondary, fontSize = 7.sp)
                             // "LIVE" only with a real sample — it used to label a blank chart.
                             Text(if (hasThermal) "LIVE" else "—", color = thermoclineColor, fontSize = 7.sp, fontWeight = FontWeight.Bold)
                         }
@@ -521,8 +551,10 @@ fun MikuThermalObservatoryModal(
                         Spacer(Modifier.height(4.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             // cpufreq sysfs only; unreadable cores show "—" instead of a presumed clock.
-                            val freqs: List<Long?> = if (cpuFrequencies.isNotEmpty()) cpuFrequencies else List(4) { null }
-                            freqs.take(4).forEachIndexed { i, freq ->
+                            // Every core the device actually has. Empty = cpufreq is not readable
+                            // from this process at all, and the row says so rather than drawing
+                            // four invented "C0..C3" boxes.
+                            cpuFrequencies.forEachIndexed { i, freq ->
                                 Box(
                                     Modifier
                                         .weight(1f)
@@ -537,6 +569,13 @@ fun MikuThermalObservatoryModal(
                                         Text(if (freq != null && freq > 0L) "${freq}M" else "—", color = Color.White, fontSize = 8.5.sp, fontWeight = FontWeight.Black, fontFamily = AudiowideFont)
                                     }
                                 }
+                            }
+                            if (cpuFrequencies.isEmpty()) {
+                                Text(
+                                    "cpufreq not readable from this process",
+                                    color = MikuTextSecondary,
+                                    fontSize = 7.5.sp
+                                )
                             }
                         }
                     }

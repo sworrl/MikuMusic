@@ -598,9 +598,12 @@ private fun readAnatomyFacts(ctx: Context): AnatomyFacts {
         val f = java.io.File("/dev/radio0")
         if (f.exists()) (if (f.canRead()) "present · readable" else "present · no access") else "not visible"
     }.getOrDefault("not visible")
+    // "idle" was an ASSERTION: miku_now_playing_format currently has no writer anywhere in the
+    // tree (the player publishes miku_now_playing_title/_artist but not _format), so this pill
+    // declared the device idle while music was playing. Unset now reads as "not published".
     val nowPlayingFormat = runCatching {
         android.provider.Settings.Global.getString(ctx.contentResolver, "miku_now_playing_format")?.takeIf { it.isNotBlank() }
-    }.getOrNull() ?: "idle"
+    }.getOrNull() ?: "— (not published)"
 
     val ledDriver = runCatching {
         val nodes = listOf("/sys/class/leds/sgm31324-leds", "/sys/class/leds/red", "/sys/class/leds/blue")

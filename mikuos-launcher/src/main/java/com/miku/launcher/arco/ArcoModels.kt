@@ -60,7 +60,7 @@ data class ArcoApiError(
 
 @Serializable
 data class ArcoStatusResponse(
-    val current_effect: String = "off"
+    val current_effect: String = ""
 )
 
 @Serializable
@@ -239,7 +239,7 @@ data class ArcoNotificationEvent(
 data class ArcoWelcomePayload(
     val server_name: String = "",
     val server_version: String = "",
-    val current_effect: String = "off",
+    val current_effect: String = "",
     val device_id: String = "",
     val device_name: String = "",
     val timestamp: Long = 0
@@ -247,7 +247,7 @@ data class ArcoWelcomePayload(
 
 @Serializable
 data class ArcoStatusChangePayload(
-    val current_effect: String = "off"
+    val current_effect: String = ""
 )
 
 // ---------------------------------------------------------------------------

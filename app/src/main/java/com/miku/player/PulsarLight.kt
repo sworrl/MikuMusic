@@ -65,15 +65,22 @@ object PulsarLight {
         STANDARD("Standard Compressed (MP3/AAC)", DualColor(0, 150, "Soft Blue"), 2, "low")
     }
 
+    /**
+     * Descriptions state the STORED INTENT, not an effect the user will see. The old copy here
+     * advertised "pulses to track tempo", "hypnotic continuous crossfade" and "sine-wave brightness
+     * breathing"; two of those were never implemented even in the engine (a mode applies ONE static
+     * colour pair), and none of them can light anything on this unit, whose LED nodes are
+     * SELinux-locked. The launcher's copy was corrected earlier — this one now matches it.
+     */
     enum class Mode(val id: String, val label: String, val description: String) {
-        AUDIOPHILE_AUTO("audiophile_auto", "Audiophile BPM Pulse", "Colors LED by audio format tier & pulses to track tempo"),
-        CHROMA_RAINBOW("chroma_rainbow", "Dual-Die Chroma Wave", "Hypnotic continuous crossfade through Red ↔ Magenta ↔ Purple ↔ Blue"),
-        CYBER_HEARTBEAT("cyber_heartbeat", "Cyber Heartbeat", "Dual-pulse heartbeat glow in cyber violet/magenta"),
-        SMOOTH_BREATHING("smooth_breathing", "Analog Breathing Glow", "Deep analog sine-wave brightness breathing in Miku Blue"),
-        DYNAMIC_STROBE("dynamic_strobe", "Rhythmic Music Strobe", "Energetic transient flashes synchronized to playback rhythm"),
-        BATTERY_MONITOR("battery_monitor", "Battery & Charging Glow", "Continuous chromatic gauge from Red (empty) to Cyan-Blue (full)"),
-        SIGNATURE_TEAL("signature_teal", "Signature Miku Blue", "Solid futuristic Miku Cyan-Blue"),
-        CUSTOM_COLOR("custom_color", "Custom Dual-Die Mix", "User-defined Red & Blue 8-bit PWM blend"),
+        AUDIOPHILE_AUTO("audiophile_auto", "Audiophile BPM Pulse", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        CHROMA_RAINBOW("chroma_rainbow", "Dual-Die Chroma Wave", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        CYBER_HEARTBEAT("cyber_heartbeat", "Cyber Heartbeat", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        SMOOTH_BREATHING("smooth_breathing", "Analog Breathing Glow", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        DYNAMIC_STROBE("dynamic_strobe", "Rhythmic Music Strobe", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        BATTERY_MONITOR("battery_monitor", "Battery & Charging Glow", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        SIGNATURE_TEAL("signature_teal", "Signature Miku Blue", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
+        CUSTOM_COLOR("custom_color", "Custom Dual-Die Mix", "Saved preference only — the M500's RGB indicator does not respond on this unit"),
         OFF("off", "Off", "Pulsar indicator disabled")
     }
 

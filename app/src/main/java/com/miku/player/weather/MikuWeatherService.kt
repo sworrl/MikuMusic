@@ -589,7 +589,10 @@ object MikuWeatherService {
         if (state.isNotEmpty()) {
             parts.add(state)
         }
-        return if (parts.isNotEmpty()) parts.joinToString(", ") else "Local Station"
+        // FAKE-DATA FIX: with nothing geocoded this returned the invented place name
+        // "Local Station", which then rendered as the observatory's station. Empty = unknown,
+        // and every caller already treats an empty fuzzyLocation as "no place yet".
+        return if (parts.isNotEmpty()) parts.joinToString(", ") else ""
     }
 
     /**

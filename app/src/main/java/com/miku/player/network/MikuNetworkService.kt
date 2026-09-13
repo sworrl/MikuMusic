@@ -74,9 +74,7 @@ object MikuNetworkService {
         val gateway: String = "",
         val dns1: String = "",
         val dns2: String = "",
-        val macAddress: String = "",
-        val isPowerSaveOn: Boolean = false,
-        val bandPreference: String = "AUTO" // "AUTO", "5GHZ_ONLY", "24GHZ_ONLY"
+        val macAddress: String = ""
     )
 
     data class CellularGranularState(
@@ -620,9 +618,7 @@ object MikuNetworkService {
             ipAddress = ipStr,
             gateway = gateway,
             dns1 = dns1,
-            dns2 = dns2,
-            isPowerSaveOn = _state.value.wifi.isPowerSaveOn,
-            bandPreference = _state.value.wifi.bandPreference
+            dns2 = dns2
         )
 
         val simState = tm?.simState ?: TelephonyManager.SIM_STATE_UNKNOWN
@@ -870,15 +866,10 @@ object MikuNetworkService {
         }
     }
 
-    fun setPowerSaveMode(enabled: Boolean) {
-        scope.launch {
-            val flag = if (enabled) "on" else "off"
-            runShellCommand("iw dev wlan0 set power_save $flag")
-            _state.value = _state.value.copy(
-                wifi = _state.value.wifi.copy(isPowerSaveOn = enabled)
-            )
-        }
-    }
+    // FAKE-DATA FIX: setPowerSaveMode() used to run `su -c "iw dev wlan0 set power_save ..."`
+    // and then set isPowerSaveOn to whatever was asked for regardless of the result. There is no
+    // su and no `iw` on this device, so the write always failed while the UI reported it applied.
+    // Removed along with its switch; the observatory now only reads the radio state back.
 
     fun runShellCommand(cmd: String): String {
         return try {
@@ -908,13 +899,9 @@ object MikuNetworkService {
         }
     }
 
-    fun setBandPreference(mode: String) {
-        scope.launch {
-            _state.value = _state.value.copy(
-                wifi = _state.value.wifi.copy(bandPreference = mode)
-            )
-        }
-    }
+    // FAKE-DATA FIX: setBandPreference() only wrote its own state field — it never called the
+    // Wi-Fi stack, so the highlighted AUTO / 5G / 2.4G chip was pure theatre. Removed; the real
+    // band the radio is associated on is already published as WifiGranularState.bandLabel.
 
     fun frequencyToChannel(freq: Int): Int {
         return when {

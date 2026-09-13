@@ -120,12 +120,11 @@ object MikuVolumeManager {
         val ok = try {
             Settings.Global.putInt(ctx.applicationContext.contentResolver, key, value)
         } catch (_: Throwable) { false }
-        if (!ok) {
-            scope.launch(Dispatchers.IO) {
-                try { Runtime.getRuntime().exec(arrayOf("su", "-c", "settings put global $key $value")).waitFor() }
-                catch (_: Throwable) {}
-            }
-        }
+        // FAKE-DATA FIX: the failure path used to fire `su -c "settings put global ..."`, which
+        // cannot run on this device (no su) — it just made a failed write look handled. This app is
+        // platform-signed, so the direct write above IS the real route; a failure is now logged as
+        // a failure instead of being papered over.
+        if (!ok) android.util.Log.w("MikuVolumeManager", "Settings.Global write refused for $key=$value")
     }
 
     fun init(ctx: Context) {

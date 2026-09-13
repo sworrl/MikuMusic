@@ -51,7 +51,7 @@ class SettingsSearchIndexablesProvider : ContentProvider() {
     private fun queryRawData(): Cursor {
         val cursor = MatrixCursor(INDEXABLES_RAW_COLUMNS)
         addRawItem(cursor, "cirrus_dac_settings", "Cirrus Logic CS43198 MasterHIFI", "Audiophile DAC Filters, Gain, DSD & NOS modes", "com.m500.hardware.action.DAC_SETTINGS")
-        addRawItem(cursor, "pulsar_rgb_settings", "Pulsar RGB LED Matrix", "SGM31324 LED patterns, BPM sync, breathing animation", "com.m500.hardware.action.PULSAR_SETTINGS")
+        addRawItem(cursor, "pulsar_rgb_settings", "Pulsar RGB LED Matrix", "SGM31324 front indicator preferences (no breathing/pulse animation; indicator inactive on this unit)", "com.m500.hardware.action.PULSAR_SETTINGS")
         addRawItem(cursor, "wireless_adb_settings", "Wireless Debugging & ADB", "Root shell, ADB over Wi-Fi 5555, dev tools", "android.settings.DEVELOPER_OPTIONS")
         addRawItem(cursor, "wifi_settings", "Wi-Fi & Networks", "2.4GHz / 5GHz WLAN connections", "android.settings.WIFI_SETTINGS")
         addRawItem(cursor, "bluetooth_settings", "Bluetooth & LDAC", "Bluetooth audio codecs, LDAC 990kbps, AptX-HD", "android.settings.BLUETOOTH_SETTINGS")

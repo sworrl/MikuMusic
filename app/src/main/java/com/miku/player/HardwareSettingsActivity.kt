@@ -228,11 +228,14 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                // FAKE-DATA FIX: this status dot was hardcoded green, so the banner
+                                // read "healthy" even when not one sa_sound_setting node could be
+                                // read and every field below said "—". It now tracks the real probe.
                                 Box(
                                     Modifier
                                         .size(10.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFF00E676))
+                                        .background(if (auditState.isSysfsReadable) Color(0xFF00E676) else Color(0xFF6B7A80))
                                 )
                                 Spacer(Modifier.width(8.dp))
                                 Text(
@@ -274,7 +277,8 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                                 .padding(10.dp)
                         ) {
                             Text(
-                                "LIVE KERNEL SYSFS STATE (/sys/.../sa_sound_setting/)",
+                                if (auditState.isSysfsReadable) "LIVE KERNEL SYSFS STATE (/sys/.../sa_sound_setting/)"
+                                else "KERNEL SYSFS NOT READABLE BY THIS PROCESS (/sys/.../sa_sound_setting/)",
                                 color = MikuCyan,
                                 fontSize = 9.sp,
                                 fontWeight = FontWeight.Bold,

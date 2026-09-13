@@ -335,6 +335,20 @@ object CirrusLogicManager {
         Log.i(TAG, "Applied Output Routing: ${mode.id}")
     }
 
+    /**
+     * Null when NO real source reports a balance. [getBalance] falls back to 0 so callers that need
+     * a number have one, but display surfaces must use this: an unreadable node was being printed
+     * as "Center" next to an enabled slider, i.e. an unknown shown as a measurement.
+     */
+    fun getBalanceOrNull(ctx: Context): Int? {
+        readSysfs("lrbalance")?.toIntOrNull()?.let { return it }
+        val cr = ctx.contentResolver
+        return try {
+            Settings.Global.getString(cr, "vendor.audio.hiby.hw.lrbalance")?.trim()?.toIntOrNull()
+                ?: Settings.Global.getString(cr, "vendor.audio.hiby.lrbalance")?.trim()?.toIntOrNull()
+        } catch (_: Throwable) { null }
+    }
+
     fun getBalance(ctx: Context): Int {
         val kernelVal = readSysfs("lrbalance")
         if (!kernelVal.isNullOrBlank()) {

@@ -22,10 +22,16 @@ object WirelessAdbManager {
 
     fun isEnabled(): Boolean = currentPort() != null
 
+    /**
+     * Was a stub: it fired the setprop through RootShell (no su on this device, so a no-op) and
+     * returned `true` regardless, i.e. it reported "wireless ADB is now on" without checking.
+     * It now waits for adbd to come back and returns what the port property ACTUALLY says.
+     */
     suspend fun setEnabled(enabled: Boolean): Boolean = withContext(Dispatchers.IO) {
         val port = if (enabled) "$DEFAULT_PORT" else "-1"
         RootShell.execFast("setprop service.adb.tcp.port $port; stop adbd; start adbd")
-        true
+        kotlinx.coroutines.delay(800)          // adbd restart
+        (currentPort() != null) == enabled
     }
 
     fun getWifiIpAddress(context: Context): String? {
