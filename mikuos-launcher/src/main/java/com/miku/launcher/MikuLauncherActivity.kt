@@ -183,6 +183,8 @@ class MikuLauncherActivity : ComponentActivity() {
         var requestedRecentsOpen by mutableStateOf(false)
         /** Set by an `open_ingest` launch extra (Miku Music's Ingress button) → opens the ingest observatory. */
         var requestedIngestOpen by mutableStateOf(false)
+        /** Set when the HOME intent re-arrives while we're already on top (gesture-pill swipe up): dismiss overlays. */
+        var requestedHome by mutableStateOf(false)
     }
 
     private fun hideSystemBars() {
@@ -416,6 +418,10 @@ class MikuLauncherActivity : ComponentActivity() {
         if (intent.getBooleanExtra("open_ingest", false)) {
             requestedIngestOpen = true
         }
+        // Pixel behaviour: the home gesture while the app drawer / recents are open closes them.
+        if (intent.hasCategory(Intent.CATEGORY_HOME) && !intent.getBooleanExtra("open_recents", false)) {
+            requestedHome = true
+        }
     }
 }
 
@@ -466,6 +472,14 @@ fun MikuLauncherScreen() {
         if (MikuLauncherActivity.requestedIngestOpen) {
             isFsIngestModalOpen = true
             MikuLauncherActivity.requestedIngestOpen = false
+        }
+    }
+
+    LaunchedEffect(MikuLauncherActivity.requestedHome) {
+        if (MikuLauncherActivity.requestedHome) {
+            isAllAppsOpen = false
+            isRecentsOpen = false
+            MikuLauncherActivity.requestedHome = false
         }
     }
 
@@ -2635,6 +2649,7 @@ fun CyberAllAppsDrawer(
         // here and dismisses the drawer past a threshold. Works alongside the back arrow.
         var pullDownAccum by remember { mutableFloatStateOf(0f) }
         val dismissThresholdPx = with(LocalDensity.current) { 90.dp.toPx() }
+        val upFlingDismissPxPerSec = with(LocalDensity.current) { 900.dp.toPx() }
         val latestClose = rememberUpdatedState(onClose)
         val swipeDownDismiss = remember(dismissThresholdPx, sheet) {
             object : NestedScrollConnection {
@@ -2669,6 +2684,16 @@ fun CyberAllAppsDrawer(
                 override suspend fun onPreFling(available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
                     if (sheet != null && (sheet.dragging || sheet.progress.value < 0.999f)) {
                         if (sheet.releasePull(available.y)) latestClose.value()
+                        return available
+                    }
+                    return androidx.compose.ui.unit.Velocity.Zero
+                }
+                // Swipe UP past the end of the grid also dismisses: a fling the grid couldn't consume
+                // (it is already at its bottom) arrives here with its upward velocity intact. The
+                // velocity gate keeps a short list (which never consumes) from closing on a slow nudge.
+                override suspend fun onPostFling(consumed: androidx.compose.ui.unit.Velocity, available: androidx.compose.ui.unit.Velocity): androidx.compose.ui.unit.Velocity {
+                    if (available.y < -upFlingDismissPxPerSec) {
+                        latestClose.value()
                         return available
                     }
                     return androidx.compose.ui.unit.Velocity.Zero
