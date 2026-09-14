@@ -258,6 +258,17 @@ object PulsarLight {
     /** Is the diode actually drivable by this process? Published to clients as miku_pulsar_hw_writable. */
     fun isHardwareWritable(): Boolean = ledWritable
 
+    // LIGHTS HAL, settled with evidence 2026-09-13 — do not re-investigate without new information.
+    // The indicator is NOT reachable from an app on this device by any route:
+    //   * /sys/class/leds/* — SELinux-denied to apps (ledWritable is false, every write is a no-op)
+    //   * android.hardware.lights.LightsManager — CONTROL_DEVICE_LIGHTS IS granted to us
+    //     (platform-signed, verified granted=true) and getLights() still returns ZERO lights;
+    //     that API only surfaces input-device/player lights, not this notification-class LED.
+    // vendor.qti.hardware.lights.service IS running and android.hardware.light.ILights/default IS
+    // registered, so something below the app layer drives the diode — the vendor/kernel default.
+    // The only remaining app-level lever is a notification on a channel with lights enabled, which
+    // would ADD a light through NotificationManagerService; it cannot take the vendor's away.
+
     /** Momentary double-pulse when a track is liked/unliked. */
     fun indicateHearted(ctx: Context, hearted: Boolean) {
         if (!ledWritable) return
