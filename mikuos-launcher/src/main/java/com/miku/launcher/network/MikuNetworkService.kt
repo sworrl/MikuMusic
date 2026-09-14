@@ -20,6 +20,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import com.miku.launcher.RootShell
 import com.miku.launcher.metrics.MikuMetricDatabase
+import com.miku.launcher.ui.MikuPowerProfile
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -143,9 +144,18 @@ object MikuNetworkService {
         val appContext = ctx.applicationContext
         registerScanReceiver(appContext)
 
-        // Continuous Network Telemetry Poller
+        // Network Telemetry Poller — VISIBILITY-GATED (2026-09-13).
+        // Everything this fills is launcher UI (status bar, network observatory, quilt badge). It
+        // used to poll every 2.5 s FOREVER: ~1,440 rounds of WifiManager/TelephonyManager/
+        // ConnectivityManager binder calls per hour against a dark screen. With the device idle
+        // overnight that was the launcher's main-thread burn and a real chunk of battery. Now it
+        // suspends on awaitVisible() while hidden — no polling at all, not even a wakeup.
         scope.launch {
             while (isActive) {
+                if (!MikuPowerProfile.visible.value) {
+                    MikuPowerProfile.awaitVisible()
+                    continue
+                }
                 try {
                     pollNetworkTelemetry(appContext)
                 } catch (t: Throwable) {
@@ -188,7 +198,10 @@ object MikuNetworkService {
                 } catch (t: Throwable) {
                     Log.w(TAG, "Auto-rejoin error: ${t.message}")
                 }
-                delay(4000L)
+                // Auto-rejoin keeps running while hidden (reconnecting Wi-Fi in the background is
+                // the point of it), but 4 s is a foreground cadence — backing off to 60 s off-screen
+                // costs at most a minute of reconnect latency nobody is waiting on.
+                delay(if (MikuPowerProfile.visible.value) 4_000L else 60_000L)
             }
         }
 
