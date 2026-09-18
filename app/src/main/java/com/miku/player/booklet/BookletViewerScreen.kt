@@ -352,7 +352,7 @@ private fun ClosedCover(page: ArtPage, fold: Float, fullPx: Int, onTap: () -> Un
                     letterSpacing = 2.sp, fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "rotate for wide pages · pinch to zoom", color = Muted.copy(alpha = 0.8f), fontSize = 9.5.sp,
+                    "rotate for wide pages · pinch to zoom", color = Muted.copy(alpha = 0.85f), fontSize = 9.5.sp,
                     modifier = Modifier.padding(top = 2.dp)
                 )
             }
@@ -607,12 +607,12 @@ private fun EmptyPackage(pkg: AlbumArtPackage?) {
         val folders = pkg?.foldersSearched.orEmpty()
         if (folders.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
-            Text("Looked in:", color = Muted.copy(alpha = 0.8f), fontSize = 9.5.sp)
+            Text("Looked in:", color = Muted.copy(alpha = 0.85f), fontSize = 9.5.sp)
             folders.take(3).forEach {
-                Text(it.absolutePath, color = Muted.copy(alpha = 0.7f), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(it.absolutePath, color = Muted.copy(alpha = 0.85f), fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         Spacer(Modifier.height(12.dp))
-        Text("Online auto-sourcing: not enabled yet", color = Muted.copy(alpha = 0.6f), fontSize = 9.5.sp, fontFamily = OrbitronFont)
+        Text("Online auto-sourcing: not enabled yet", color = Muted.copy(alpha = 0.85f), fontSize = 9.5.sp, fontFamily = OrbitronFont)
     }
 }

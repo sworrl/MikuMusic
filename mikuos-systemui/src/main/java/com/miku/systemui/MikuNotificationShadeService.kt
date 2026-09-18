@@ -63,9 +63,12 @@ class MikuNotificationShadeService : AccessibilityService() {
         // Gesture geometry (dp)
         const val POWER_HOLD_MS = 450L
         const val EDGE_STRIP_DP = 24
-        const val EDGE_CLAIM_DP = 16f
-        const val EDGE_COMMIT_DP = 32f
-        const val EDGE_UNCOMMIT_DP = 22f
+        // AOSP EdgeBackGestureHandler claims the gesture at the view touch slop and
+        // BackPanelController commits at R.dimen.navigation_edge_action_drag_threshold (16dp).
+        // Ours were 16/32/22, which is roughly double the Pixel's and is why back felt stiff.
+        const val EDGE_CLAIM_DP = 8f
+        const val EDGE_COMMIT_DP = 16f
+        const val EDGE_UNCOMMIT_DP = 10f
         const val EDGE_MAX_DP = 36f
         const val EDGE_VERTICAL_INTENT_PX = 20f
         const val EDGE_MAX_ANGLE_TAN = 1.428f      // tan(55°)
@@ -80,11 +83,26 @@ class MikuNotificationShadeService : AccessibilityService() {
         const val PILL_W_DP = 104f
         const val PILL_H_DP = 4f
         const val HOME_DP = 24f
+        /** Fallback only. The pill uses ViewConfiguration.scaledMinimumFlingVelocity, same as AOSP. */
         const val HOME_FLING_PX_S = 900f
-        const val RECENTS_DP = 48f
-        const val RECENTS_HOLD_MS = 150L
-        const val RECENTS_HOLD_MAX_PX_S = 150f
-        const val QUICK_SWITCH_DP = 32f
+        /**
+         * AOSP `motion_pause_detector_min_displacement`. Overview opens once the swipe has come
+         * this far AND the motion pauses. Was 48dp plus a 150ms stillness timer, which is a much
+         * higher bar than a Pixel and is what made the app switcher feel cumbersome.
+         */
+        const val RECENTS_DP = 24f
+        // AOSP MotionPauseDetector speeds, in dp per MILLISECOND (Launcher3 res/values/dimens.xml:
+        // motion_pause_detector_speed_{very_fast,fast,somewhat_fast,slow}).
+        const val PAUSE_SPEED_VERY_FAST_DP_MS = 3.0f
+        const val PAUSE_SPEED_FAST_DP_MS = 1.0f
+        const val PAUSE_SPEED_SOMEWHAT_FAST_DP_MS = 0.9f
+        const val PAUSE_SPEED_SLOW_DP_MS = 0.15f
+        /** MotionPauseDetector.RAPID_DECELERATION_FACTOR. */
+        const val PAUSE_RAPID_DECELERATION_FACTOR = 0.6f
+        /** MotionPauseDetector.FORCE_PAUSE_TIMEOUT: no motion at all for this long counts as a pause. */
+        const val PAUSE_FORCE_TIMEOUT_MS = 300L
+        /** AOSP quick switch commits just past the touch slop, not at 32dp. */
+        const val QUICK_SWITCH_DP = 16f
         const val QUICK_SWITCH_MAX_DY_DP = 16f
         const val QUICK_SWITCH_SESSION_MS = 2500L
         const val REPLAY_MAX_MS = 600L
@@ -870,6 +888,16 @@ class MikuNotificationShadeService : AccessibilityService() {
         private var stretch = 0f       // 0..1 upward drag progress
         private var shiftX = 0f        // horizontal follow
         private var armed = false      // recents hold armed (pill turns teal)
+        // ---- AOSP MotionPauseDetector port. A Pixel opens Overview the moment the swipe-up
+        // DECELERATES past 24dp, not when the finger has been held perfectly still for a fixed
+        // time. The old 48dp + 150ms-still rule is what "cumbersome" meant.
+        private var pausePrevSpeed = 0f       // px/ms
+        private var pauseIsPaused = false
+        private var pauseEverPaused = false
+        private var pauseDisabled = false     // a very fast flick is a fling home, never Overview
+        private var pauseLastTime = 0L
+        private var pauseLastY = 0f
+        private var pauseSlowCount = 0
         private var pop = 1f
         private var flash = 0f         // 90ms glow flash when leaving an app for home
         private var flashAnim: ValueAnimator? = null
@@ -882,23 +910,50 @@ class MikuNotificationShadeService : AccessibilityService() {
         private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0x3800F5D4 }
         private val rect = RectF()
 
-        private val holdCheck = object : Runnable {
-            override fun run() {
-                if (!down || fired) return
-                velocity?.computeCurrentVelocity(1000)
-                val vx = velocity?.xVelocity ?: 0f; val vy = velocity?.yVelocity ?: 0f
-                val speed = abs(vx) + abs(vy)
-                val dyUp = startY - curY
-                if (dyUp >= dp(RECENTS_DP) && speed < RECENTS_HOLD_MAX_PX_S) {
-                    Log.i(TAG, "pill hold -> recents (dyUp=${dyUp.toInt()} speed=${speed.toInt()})")
-                    fired = true; armed = true
-                    MikuHaptics.pop(this@HomePillView)                      // strong: hold → recents
-                    animatePop()
-                    openRecents()
-                } else {
-                    mainHandler.postDelayed(this, 60L)
-                }
+        /**
+         * FORCE_PAUSE_TIMEOUT arm: a finger held truly still can stop producing MOVE events, so
+         * AOSP treats "no motion for 300ms" as a pause outright. Re-posted on every MOVE, which is
+         * correct here (unlike the old stillness poll) because the timeout means "no events at
+         * all", and a jittering still finger is already caught by the slow-speed path below.
+         */
+        private val forcePause = Runnable {
+            if (down && !fired && !pauseDisabled) onMotionPaused()
+        }
+
+        /** MotionPauseDetector.checkMotionPaused, constants and all. Speeds are px/ms. */
+        private fun checkMotionPaused(speed: Float, prevSpeed: Float) {
+            val slow = dp(PAUSE_SPEED_SLOW_DP_MS)
+            val somewhatFast = dp(PAUSE_SPEED_SOMEWHAT_FAST_DP_MS)
+            val fast = dp(PAUSE_SPEED_FAST_DP_MS)
+            val paused: Boolean
+            if (pauseIsPaused) {
+                // Stay paused until the finger clearly moves again.
+                paused = speed < fast
+            } else if (speed < slow) {
+                // AOSP wants two slow samples in a row before the first pause sticks.
+                pauseSlowCount++
+                paused = pauseEverPaused || pauseSlowCount >= 2
+            } else {
+                pauseSlowCount = 0
+                // Be aggressive about the FIRST pause so it feels responsive: a rapid deceleration
+                // counts even if the finger has not actually come to a stop yet.
+                paused = !pauseEverPaused &&
+                    speed < prevSpeed * PAUSE_RAPID_DECELERATION_FACTOR && speed < somewhatFast
             }
+            if (paused && !pauseIsPaused) { pauseIsPaused = true; pauseEverPaused = true; onMotionPaused() }
+            else if (!paused) pauseIsPaused = false
+        }
+
+        /** The pause fired. Open Overview if the swipe has come far enough. */
+        private fun onMotionPaused() {
+            if (fired) return
+            val dyUp = startY - curY
+            if (dyUp < dp(RECENTS_DP)) return
+            Log.i(TAG, "pill motion pause -> recents (dyUp=${dyUp.toInt()})")
+            fired = true; armed = true
+            MikuHaptics.pop(this@HomePillView)                      // strong: pause → recents
+            animatePop()
+            openRecents()
         }
 
         override fun onDraw(canvas: Canvas) {
@@ -969,6 +1024,10 @@ class MikuNotificationShadeService : AccessibilityService() {
                     relaxAnim?.cancel()
                     down = true; fired = false; armed = false; claimed = false; holdScheduled = false
                     startX = event.rawX; startY = event.rawY; curX = startX; curY = startY
+                    pausePrevSpeed = 0f; pauseIsPaused = false; pauseEverPaused = false
+                    pauseDisabled = false; pauseSlowCount = 0
+                    pauseLastTime = event.eventTime; pauseLastY = event.rawY
+                    mainHandler.removeCallbacks(forcePause)
                     velocity?.recycle(); velocity = VelocityTracker.obtain().also { it.addMovement(event) }
                     invalidate()
                     return true
@@ -983,23 +1042,20 @@ class MikuNotificationShadeService : AccessibilityService() {
                     stretch = if (dyUp <= max) dyUp / max else 1f + (dyUp - max) / max * 0.12f
                     shiftX = (dx * 0.5f).coerceIn(-dp(24f), dp(24f))
                     if (!claimed && (dyUp >= dp(8f) || abs(dx) >= dp(8f))) { claimed = true; MikuHaptics.tick(this) }   // light: claimed
-                    // APP SWITCHER FIX (2026-09-17). This used to removeCallbacks(holdCheck) and
-                    // re-post it on EVERY ACTION_MOVE. holdCheck is a self-re-posting 60 ms poll
-                    // that fires recents once the finger is held high and still — but a finger
-                    // held still STILL emits MOVE events (sub-pixel jitter), so the chain was
-                    // killed and restarted from its 150 ms delay over and over and effectively
-                    // never ran. That is why swipe-up-and-hold never opened the app switcher.
-                    // Now: arm ONCE on crossing the threshold, cancel only on dropping back below.
+                    // Overview is decided by the AOSP motion-pause rule, not by a stillness timer.
                     if (!fired) {
-                        if (dyUp >= max) {
-                            if (!holdScheduled) {
-                                holdScheduled = true
-                                mainHandler.postDelayed(holdCheck, RECENTS_HOLD_MS)
-                            }
-                        } else if (holdScheduled) {
-                            holdScheduled = false
-                            mainHandler.removeCallbacks(holdCheck)
+                        val dt = (event.eventTime - pauseLastTime).coerceAtLeast(1L)
+                        val speed = abs(event.rawY - pauseLastY) / dt      // px/ms
+                        pauseLastTime = event.eventTime; pauseLastY = event.rawY
+                        // A genuinely fast flick is a fling home. AOSP stops looking for a pause
+                        // at all once the gesture has been that fast.
+                        if (speed > dp(PAUSE_SPEED_VERY_FAST_DP_MS)) pauseDisabled = true
+                        if (!pauseDisabled) {
+                            checkMotionPaused(speed, pausePrevSpeed)
+                            mainHandler.removeCallbacks(forcePause)
+                            mainHandler.postDelayed(forcePause, PAUSE_FORCE_TIMEOUT_MS)
                         }
+                        pausePrevSpeed = speed
                     }
                     invalidate()
                     return true
@@ -1008,7 +1064,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                     if (!down) return false
                     down = false
                     holdScheduled = false
-                    mainHandler.removeCallbacks(holdCheck)
+                    mainHandler.removeCallbacks(forcePause)
                     velocity?.addMovement(event)
                     velocity?.computeCurrentVelocity(1000)
                     val vy = velocity?.yVelocity ?: 0f
@@ -1018,7 +1074,12 @@ class MikuNotificationShadeService : AccessibilityService() {
                     val dy = abs(curY - startY)
                     Log.i(TAG, "pill up: dyUp=${dyUp.toInt()} dx=${dx.toInt()} vy=${vy.toInt()} fired=$fired")
                     if (event.actionMasked == MotionEvent.ACTION_UP && !fired) {
-                        if (dyUp >= dp(HOME_DP) || (vy < -HOME_FLING_PX_S && dyUp >= dp(12f))) {
+                        // AOSP uses the platform's own minimum fling velocity here rather than a
+                        // magic number, so a flick that registers as a fling anywhere else in the
+                        // system registers as one on the pill too.
+                        val flingPxS = android.view.ViewConfiguration.get(context)
+                            .scaledMinimumFlingVelocity.toFloat().coerceAtLeast(1f)
+                        if (dyUp >= dp(HOME_DP) || (vy < -flingPxS && dyUp >= dp(12f))) {
                             fired = true
                             MikuHaptics.confirm(this)
                             animatePop()

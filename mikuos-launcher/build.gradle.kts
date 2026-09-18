@@ -35,8 +35,8 @@ android {
         applicationId = "com.miku.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 58
-        versionName = "0.1.64"
+        versionCode = 60
+        versionName = "0.1.66"
 
         buildConfigField("String", "ARCO_HMAC_KEY_ID", "\"${arcoProp("ARCO_HMAC_KEY_ID")}\"")
         buildConfigField("String", "ARCO_HMAC_SECRET", "\"${arcoProp("ARCO_HMAC_SECRET")}\"")

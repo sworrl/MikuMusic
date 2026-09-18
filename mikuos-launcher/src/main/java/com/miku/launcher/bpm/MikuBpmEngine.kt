@@ -58,16 +58,35 @@ object MikuBpmEngine {
         else if (bpm <= 0f) 500L
         else (60_000f / bpm).toLong().coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
 
+    // Which path last set the tempo. A tempo published by com.miku.player comes from offline
+    // file analysis of a known track and is authoritative; the live detector's is inferred from
+    // the output mix. clearLiveTempo() must only ever drop the latter.
+    @Volatile private var lastTempoFromLiveDetector = false
+
     /** Live output-mix detector reports a beat at [bpm] — authoritative "audio is playing". */
     fun pushLivePulse(bpm: Float) {
         val prev = _state.value
         val b = sanitizeBpm(bpm, prev.bpm)
+        lastTempoFromLiveDetector = true
         _state.value = prev.copy(
             bpm = b,
             beatIntervalMs = sanitizeInterval((60_000f / b).toLong(), b),
             isPlaying = true,
             lastPulseEpochMs = System.currentTimeMillis()
         )
+    }
+
+    /**
+     * The live detector lost its tempo lock (track change, or output stopped). Drop the tempo
+     * rather than leaving the PREVIOUS track's BPM on screen looking like the current one —
+     * a stale number presented as live is the same lie as an invented one. A tempo that came
+     * from the player's own file analysis is left alone.
+     */
+    fun clearLiveTempo() {
+        if (!lastTempoFromLiveDetector) return
+        val prev = _state.value
+        if (prev.bpm == 0f && prev.lastPulseEpochMs == 0L) return
+        _state.value = prev.copy(bpm = 0f, beatIntervalMs = 500L, lastPulseEpochMs = 0L)
     }
 
     /** Live detector reports whether the DAC is actually outputting audio (gates "ALSA Standby"). */
@@ -109,6 +128,7 @@ object MikuBpmEngine {
                     when (intent.action) {
                         ACTION_BPM_UPDATE -> {
                             val prev = _state.value
+                            lastTempoFromLiveDetector = false
                             val bpm = sanitizeBpm(intent.getFloatExtra(EXTRA_BPM, prev.bpm), prev.bpm)
                             val interval = sanitizeInterval(
                                 intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, prev.beatIntervalMs), bpm
@@ -124,6 +144,7 @@ object MikuBpmEngine {
                         }
                         ACTION_BPM_PULSE -> {
                             val prev = _state.value
+                            lastTempoFromLiveDetector = false
                             val bpm = sanitizeBpm(intent.getFloatExtra(EXTRA_BPM, prev.bpm), prev.bpm)
                             val interval = sanitizeInterval(
                                 intent.getLongExtra(EXTRA_BEAT_INTERVAL_MS, prev.beatIntervalMs), bpm

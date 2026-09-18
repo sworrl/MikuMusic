@@ -35,6 +35,42 @@ object ScrobblePreferences {
     private const val KEY_ACCEPTED_TOTAL = "accepted_total"
     private const val KEY_IGNORED_TOTAL = "ignored_total"
     private const val KEY_HARD_ERROR = "hard_error"
+    private const val KEY_PROMPT_SHOWN_AT = "setup_prompt_shown_at"
+    private const val KEY_PROMPT_SNOOZED_UNTIL = "setup_prompt_snoozed_until"
+
+    /**
+     * The one-time "do you want to scrobble?" offer.
+     *
+     * Asked ONCE, and only after the user has actually listened to something, so it is an offer
+     * rather than a cold-start nag. "Remind me" snoozes seven days; anything else and it never
+     * appears again on its own. The settings card is always there either way, so declining costs
+     * the user nothing.
+     */
+    fun shouldOfferSetup(ctx: Context): Boolean {
+        if (LastFmCredentials.isConfigured && isConnected(ctx)) return false
+        val p = plain(ctx)
+        val snoozed = p.getLong(KEY_PROMPT_SNOOZED_UNTIL, 0L)
+        if (snoozed > System.currentTimeMillis()) return false
+        if (p.getLong(KEY_PROMPT_SHOWN_AT, 0L) > 0L && snoozed == 0L) return false
+        return true
+    }
+
+    fun markSetupOffered(ctx: Context) {
+        plain(ctx).edit()
+            .putLong(KEY_PROMPT_SHOWN_AT, System.currentTimeMillis())
+            .putLong(KEY_PROMPT_SNOOZED_UNTIL, 0L)
+            .apply()
+    }
+
+    fun snoozeSetupOffer(ctx: Context, days: Int = 7) {
+        plain(ctx).edit()
+            .putLong(KEY_PROMPT_SHOWN_AT, System.currentTimeMillis())
+            .putLong(KEY_PROMPT_SNOOZED_UNTIL, System.currentTimeMillis() + days * 86_400_000L)
+            .apply()
+    }
+
+    private fun isConnected(ctx: Context): Boolean =
+        runCatching { com.miku.player.LastFmPreferences.loadSessionKey(ctx) != null }.getOrDefault(false)
 
     @Volatile private var appCtx: Context? = null
     @Volatile private var secure: SharedPreferences? = null

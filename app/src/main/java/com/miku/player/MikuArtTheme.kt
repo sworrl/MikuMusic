@@ -26,6 +26,13 @@ import kotlinx.coroutines.withContext
  * Fallback is always the Miku teal identity palette (no art → nothing changes visibly).
  */
 object MikuArtTheme {
+    /** Page backdrop ceiling. Ground #04161A sits at ~0.009, so this still leaves room to tint. */
+    private const val GROUND_MAX_LUM = 0.030f
+    /** Raised card/glass surfaces sit above the ground but still under light body text. */
+    private const val SURFACE_MAX_LUM = 0.075f
+    /** Accents are read as text, so they get the body-text floor, not the large-text one. */
+    private const val ACCENT_MIN_CONTRAST = 4.5f
+
     var palette by mutableStateOf(ArtPalette())
         private set
     var trackId by mutableStateOf(-1L)
@@ -84,17 +91,46 @@ object MikuArtTheme {
         val onAccent: Color,
     )
 
-    private fun lift(c: Color, minLum: Float): Color {
-        val l = c.luminance()
-        if (l >= minLum) return c
-        // Blend toward white until it clears the floor — keeps the hue, fixes legibility on dark ground.
-        val t = ((minLum - l) / (1f - l)).coerceIn(0f, 0.85f)
-        return Color(
-            red = c.red + (1f - c.red) * t,
-            green = c.green + (1f - c.green) * t,
-            blue = c.blue + (1f - c.blue) * t,
-            alpha = 1f
-        )
+    /** WCAG relative contrast between two opaque colors. 4.5 is the readable floor for body text. */
+    private fun contrast(a: Color, b: Color): Float {
+        val la = a.luminance(); val lb = b.luminance()
+        return (maxOf(la, lb) + 0.05f) / (minOf(la, lb) + 0.05f)
+    }
+
+    private fun towardWhite(c: Color, t: Float): Color = Color(
+        red = c.red + (1f - c.red) * t,
+        green = c.green + (1f - c.green) * t,
+        blue = c.blue + (1f - c.blue) * t,
+        alpha = 1f
+    )
+
+    /** Darken a color until its luminance is at or under [maxLum], keeping the hue. */
+    private fun capLuminance(c: Color, maxLum: Float): Color {
+        var lo = 0f; var hi = 1f
+        if (c.luminance() <= maxLum) return c
+        repeat(12) {
+            val mid = (lo + hi) / 2f
+            if (Color(c.red * mid, c.green * mid, c.blue * mid).luminance() > maxLum) hi = mid else lo = mid
+        }
+        return Color(c.red * lo, c.green * lo, c.blue * lo, 1f)
+    }
+
+    /**
+     * Blend [c] toward white until it actually CLEARS [minContrast] against [over].
+     *
+     * The old version lifted to an absolute luminance floor (0.22), which says nothing about
+     * readability: the ground is art-tinted too, so a bright album pushed the ground up under an
+     * accent that had already "passed" and the text went unreadable. Contrast is measured against
+     * the ground we are really drawing on.
+     */
+    private fun liftFor(c: Color, over: Color, minContrast: Float): Color {
+        if (contrast(c, over) >= minContrast) return c
+        var lo = 0f; var hi = 1f
+        repeat(12) {
+            val mid = (lo + hi) / 2f
+            if (contrast(towardWhite(c, mid), over) >= minContrast) hi = mid else lo = mid
+        }
+        return towardWhite(c, hi)
     }
 
     private fun mix(a: Color, b: Color, t: Float): Color = Color(
@@ -105,13 +141,21 @@ object MikuArtTheme {
     )
 
     fun derive(p: ArtPalette): Colors {
-        val accent = lift(p.color1, 0.22f)
-        val accent2 = lift(p.color3, 0.20f)
-        // Ground: Miku's deep teal-black pulled ~35% toward the art's deep tone (kept dark).
+        // Ground first: every static text color in the app (Muted, MikuTextSecondary, the accent
+        // pills) is drawn over it, so it is the thing that has to stay dark. A bright album used to
+        // drag it up and take the whole UI's contrast down with it. Hard luminance ceilings keep the
+        // art tint visible without ever eating legibility.
         val deep = p.color2
         val deepDark = Color(deep.red * 0.28f, deep.green * 0.28f, deep.blue * 0.28f)
-        val ground = mix(Ground, deepDark, 0.55f)
-        val surface = mix(Surface1, Color(deep.red * 0.42f, deep.green * 0.42f, deep.blue * 0.42f), 0.5f)
+        val ground = capLuminance(mix(Ground, deepDark, 0.55f), GROUND_MAX_LUM)
+        val surface = capLuminance(
+            mix(Surface1, Color(deep.red * 0.42f, deep.green * 0.42f, deep.blue * 0.42f), 0.5f),
+            SURFACE_MAX_LUM
+        )
+        // Accents carry text (tabs, pills, values), so they are lifted against the ground they land
+        // on until they actually clear the body-text floor, not to a fixed luminance.
+        val accent = liftFor(p.color1, ground, ACCENT_MIN_CONTRAST)
+        val accent2 = liftFor(p.color3, ground, ACCENT_MIN_CONTRAST)
         val onAccent = if (accent.luminance() > 0.45f) Color(0xFF07201F) else Color.White
         return Colors(accent, accent2, ground, surface, onAccent)
     }

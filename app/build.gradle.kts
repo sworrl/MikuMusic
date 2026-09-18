@@ -14,8 +14,8 @@ android {
         applicationId = "com.miku.player"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2281
-        versionName = "2.0.281"
+        versionCode = 2287
+        versionName = "2.0.287"
 
         // Last.fm API credentials — read from local.properties (gitignored, never committed) so
         // the key/secret never live in source. Register a free app at
@@ -24,6 +24,17 @@ android {
         //   lastfm.api.secret=...
         // Blank until set — LastFm.isConfigured gates every call so absence fails soft, not with
         // a crash, and Settings shows "not configured" instead of a broken login button.
+        //
+        // THREAT MODEL, stated plainly so nobody assumes more than is true. These become string
+        // constants in the DEX. R8 renames classes and methods; it does NOT obfuscate string
+        // literals, so anyone with the APK can read the shared secret in a couple of minutes. That
+        // is the accepted trade for a shipped app key: users sign in as themselves and never handle
+        // an API account. The exposure is that someone can impersonate MikuOS to Last.fm, and the
+        // consequence is Last.fm revoking the key, which breaks scrobbling for every install at
+        // once. It is NOT a path to any user's account: user sessions come from the browser flow
+        // (LastFm.completeAuth) and each session key stays in that device's encrypted prefs.
+        // The only real fix is signing requests server-side (see tools/entitlement-worker for the
+        // Cloudflare Worker pattern), at the cost of every scrobble passing through our server.
         val localProps = Properties().apply {
             val f = rootProject.file("local.properties")
             if (f.exists()) f.inputStream().use { load(it) }

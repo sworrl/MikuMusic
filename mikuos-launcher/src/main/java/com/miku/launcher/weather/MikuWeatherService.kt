@@ -199,6 +199,24 @@ object MikuWeatherService {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var locationJob: Job? = null
     private var weatherJob: Job? = null
+    private var locationRefreshJob: Job? = null
+
+    /**
+     * How often to go get a FRESH fix. Default one hour. Overridable live with
+     * `settings put global miku_weather_gps_interval_min <n>`; clamped to 5 min .. 12 h.
+     */
+    private const val LOCATION_REFRESH_DEFAULT_MIN = 60L
+    /** One-shot fix budgets. Network first because it costs almost nothing, GPS only if needed. */
+    private const val NETWORK_FIX_TIMEOUT_MS = 20_000L
+    private const val GPS_FIX_TIMEOUT_MS = 60_000L
+    /** A network fix coarser than this is not good enough to skip the GPS attempt. */
+    private const val NETWORK_FIX_GOOD_ACCURACY_M = 5_000f
+    /** One shared callback thread. A per-call executor would leak a thread on every tick. */
+    private val fixExecutor: java.util.concurrent.Executor by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "miku-weather-fix").apply { isDaemon = true }
+        }
+    }
 
     // Cache NWS endpoint routes
     private var cachedStationId: String? = null
@@ -211,6 +229,7 @@ object MikuWeatherService {
         // Seed last-good forecast immediately so the widget/UI aren't blank before the first fetch.
         restoreLastWeather(ctx)
         startLocationTracking(ctx)
+        startLocationRefreshLoop(ctx)
 
         if (weatherJob == null) {
             weatherJob = scope.launch {
@@ -221,6 +240,125 @@ object MikuWeatherService {
             }
         }
     }
+
+    private fun locationRefreshIntervalMs(ctx: Context): Long {
+        val min = try {
+            android.provider.Settings.Global.getInt(
+                ctx.contentResolver, "miku_weather_gps_interval_min", LOCATION_REFRESH_DEFAULT_MIN.toInt()
+            ).toLong()
+        } catch (_: Throwable) { LOCATION_REFRESH_DEFAULT_MIN }
+        return min.coerceIn(5L, 12L * 60L) * 60_000L
+    }
+
+    /**
+     * Hourly re-fix.
+     *
+     * The only location work left after the 2026-09-09 battery fix was ONE read of
+     * getLastKnownLocation at launcher start, so a fix from the last place the device happened to
+     * get one could sit there forever and the weather stayed in the old town. The 24/7 GPS listener
+     * that used to be here is NOT coming back: this takes a single one-shot fix per interval and
+     * releases the receiver as soon as it lands or the budget expires, so the radio is on for under
+     * a minute an hour instead of always.
+     *
+     * Network provider first (nearly free); GPS only when network gives nothing or something too
+     * coarse to tell one town from another.
+     */
+    fun startLocationRefreshLoop(ctx: Context) {
+        if (locationRefreshJob != null) return
+        val app = ctx.applicationContext
+        locationRefreshJob = scope.launch {
+            while (isActive) {
+                delay(locationRefreshIntervalMs(app))
+                try {
+                    if (isManualLocationEnabled(app)) continue
+                    // The tactical map already holds a live listener; don't stack a second request.
+                    if (liveGpsListener != null) continue
+                    refreshLocationNow(app)
+                } catch (t: Throwable) {
+                    Log.w(TAG, "hourly location refresh failed: " + t.message)
+                }
+            }
+        }
+    }
+
+    /** Take one fix now and re-fetch the forecast if we actually moved. Safe to call from UI. */
+    fun refreshLocationNow(ctx: Context) {
+        val app = ctx.applicationContext
+        scope.launch {
+            val loc = oneShotFix(app) ?: run { Log.i(TAG, "one-shot fix: no location available"); return@launch }
+            val before = _state.value.gps
+            val movedKm = if (before.isLocked) haversineKm(before.latitude, before.longitude, loc.latitude, loc.longitude) else Double.MAX_VALUE
+            updateLocation(app, loc)
+            if (movedKm > 2.0) {
+                // The NWS station/grid URLs are resolved FOR A POSITION. Keeping them after a move
+                // means a new fix still returns the old town's forecast, which looks exactly like
+                // the location never updated.
+                cachedStationId = null; cachedForecastUrl = null; cachedHourlyForecastUrl = null
+                Log.i(TAG, "moved ${"%.1f".format(movedKm)} km -> dropped cached NWS routes, refetching")
+                refreshWeather(app)
+            }
+        }
+    }
+
+    private fun haversineKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+            Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        return 2 * r * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    }
+
+    /** Network fix, then GPS if that was missing or too coarse. Returns null if both fail. */
+    @SuppressLint("MissingPermission")
+    private suspend fun oneShotFix(ctx: Context): Location? {
+        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return null
+        var best: Location? = null
+        if (runCatching { lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER) }.getOrDefault(false)) {
+            best = currentLocation(lm, LocationManager.NETWORK_PROVIDER, NETWORK_FIX_TIMEOUT_MS)
+        }
+        if ((best == null || best.accuracy > NETWORK_FIX_GOOD_ACCURACY_M) &&
+            runCatching { lm.isProviderEnabled(LocationManager.GPS_PROVIDER) }.getOrDefault(false)) {
+            val gps = currentLocation(lm, LocationManager.GPS_PROVIDER, GPS_FIX_TIMEOUT_MS)
+            if (gps != null && (best == null || gps.accuracy < best.accuracy)) best = gps
+        }
+        // Last resort: whatever the system already had. Better than dropping the tick entirely.
+        if (best == null) {
+            listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER).forEach { p ->
+                runCatching { lm.getLastKnownLocation(p) }.getOrNull()?.let { l ->
+                    if (best == null || l.accuracy < best!!.accuracy) best = l
+                }
+            }
+        }
+        return best
+    }
+
+    /**
+     * getCurrentLocation wrapped as a suspend call. This is the API that exists specifically so an
+     * app can ask for ONE fix and have the platform tear the receiver down afterwards, instead of
+     * registering a listener and having to remember to remove it (which is how the old code burned
+     * the battery). The cancellation signal fires on coroutine cancel and on the timeout.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun currentLocation(lm: LocationManager, provider: String, timeoutMs: Long): Location? =
+        try {
+            kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+                kotlinx.coroutines.suspendCancellableCoroutine<Location?> { cont ->
+                    val signal = android.os.CancellationSignal()
+                    cont.invokeOnCancellation { runCatching { signal.cancel() } }
+                    try {
+                        lm.getCurrentLocation(provider, signal, fixExecutor) { loc ->
+                            if (cont.isActive) cont.resumeWith(Result.success(loc))
+                        }
+                    } catch (t: Throwable) {
+                        if (cont.isActive) cont.resumeWith(Result.success(null))
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "one-shot $provider fix failed: " + t.message); null
+        }
 
     @SuppressLint("MissingPermission")
     fun startLocationTracking(ctx: Context, force: Boolean = false) {

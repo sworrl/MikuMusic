@@ -635,7 +635,7 @@ fun LanguageSelectionScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search languages...", color = Color.White.copy(alpha = 0.45f), fontSize = 13.sp) },
+            placeholder = { Text("Search languages...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = MikuOnboardingTeal, modifier = Modifier.size(18.dp)) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
@@ -1061,7 +1061,7 @@ fun DateTimeSelectionScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search cities or timezones...", color = Color.White.copy(alpha = 0.45f), fontSize = 13.sp) },
+            placeholder = { Text("Search cities or timezones...", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp) },
             leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = MikuOnboardingTeal, modifier = Modifier.size(18.dp)) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {

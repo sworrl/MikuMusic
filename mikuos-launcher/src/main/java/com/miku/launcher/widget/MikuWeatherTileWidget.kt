@@ -270,7 +270,7 @@ fun MikuWeatherTile(modifier: Modifier = Modifier, onOpenObservatory: (() -> Uni
         if (snap != null && st.lastError != null) {
             Text(
                 "⚠ ${st.lastError}",
-                color = Pink.copy(alpha = 0.85f),
+                color = Pink.copy(alpha = 0.95f),
                 fontSize = 9.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,

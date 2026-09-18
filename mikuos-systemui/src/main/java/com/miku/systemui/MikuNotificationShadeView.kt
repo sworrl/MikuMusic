@@ -81,6 +81,9 @@ import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -173,11 +176,16 @@ fun MikuNotificationShadeView(
     val osAccent by animateColorAsState(Color(MikuAccent.tealTinted(accentRaw, 0.30f)), tween(400), label = "osAccent")
     val osAccentBright by animateColorAsState(Color(MikuAccent.tealBrightTinted(accentRaw, 0.30f)), tween(400), label = "osAccentBright")
 
-    fun refreshTiles() {
-        tiles = QuickSettingsModel.getTiles(ctx, scope) { tick++ } + extraTiles(ctx) { tick++ }
+    LaunchedEffect(tick) {
+        // Off the main thread: getTiles reads WifiManager/BluetoothAdapter/etc, which is binder IPC,
+        // and a LaunchedEffect body runs on Dispatchers.Main. Doing it inline put several round
+        // trips on the UI thread during the shade's very first frame.
+        val built = withContext(Dispatchers.IO) {
+            runCatching { QuickSettingsModel.getTiles(ctx, scope) { tick++ } + extraTiles(ctx) { tick++ } }
+                .getOrDefault(emptyList())
+        }
+        if (built.isNotEmpty() || tiles.isEmpty()) tiles = built
     }
-
-    LaunchedEffect(tick) { refreshTiles() }
     LaunchedEffect(Unit) {
         MikuNotificationStore.ensureEnabled(ctx)
         while (true) {
@@ -207,7 +215,9 @@ fun MikuNotificationShadeView(
     // ---------------------------------------------------------------- expansion
     // 0 = quick-quick settings (compact row), 1 = full QS grid; <0 = being pulled up to dismiss.
     val expand = remember { Animatable(if (startExpanded) 1f else 0f) }
-    val expanded = expand.value > 0.5f
+    // derivedStateOf, NOT `expand.value > 0.5f`. A raw read here invalidates this whole composable
+    // on every animation frame, which is the same jank the qsH/pullUp reads caused.
+    val expanded by remember { derivedStateOf { expand.value > 0.5f } }
     val expandRangePx = with(density) { 220.dp.toPx() }
     var dragStartValue by remember { mutableStateOf(0f) }
     val panelIn = remember { Animatable(0f) }
@@ -298,8 +308,18 @@ fun MikuNotificationShadeView(
     val compactH = 56.dp
     val gridRows = (tiles.size + 1) / 2
     val expandedH = (gridRows * 64 + (gridRows - 1).coerceAtLeast(0) * 8).dp
-    val qsH = compactH + (expandedH - compactH) * expand.value.coerceIn(0f, 1f)
-    val pullUp = (-expand.value).coerceAtLeast(0f)   // 0..0.4 while dragging up to dismiss
+    // PERF (2026-09-17): these used to be `val qsH = ... expand.value ...` read right here in the
+    // composition body. `expand` is an Animatable, so every single frame of the pull invalidated
+    // and re-ran this whole 847-line composable — 39.7% janky frames, 450ms at the 90th percentile,
+    // "Slow UI thread: 21" in gfxinfo. Animated state has to be read in the layout/draw lambda that
+    // uses it, never in composition. Nothing here reads expand.value any more; the readers below do.
+    val qsHeightPx = { density: Density, e: Float ->
+        with(density) { (compactH + (expandedH - compactH) * e.coerceIn(0f, 1f)).roundToPx() }
+    }
+    // Structural only: which branch of the QS box exists. A boolean flips twice per gesture instead
+    // of a float changing every frame, so composition runs twice instead of sixty times a second.
+    val showCompact by remember { derivedStateOf { expand.value.coerceIn(0f, 1f) < 0.999f } }
+    val showGrid by remember { derivedStateOf { expand.value.coerceIn(0f, 1f) > 0.001f } }
 
     Box(
         Modifier
@@ -315,6 +335,7 @@ fun MikuNotificationShadeView(
                     .heightIn(max = maxPanelH)
                     .onSizeChanged { panelHpx = it.height; onPanelHeight(it.height) }
                     .graphicsLayer {
+                        val pullUp = (-expand.value).coerceAtLeast(0f)   // 0..0.4 while dragging up to dismiss
                         translationY = panelOffsetPx() - (1f - panelIn.value) * size.height * 0.35f - pullUp * size.height * 0.5f
                         alpha = (0.6f + 0.4f * panelIn.value) * (1f - pullUp * 0.8f)
                     }
@@ -384,25 +405,34 @@ fun MikuNotificationShadeView(
                         .fillMaxWidth()
                         .then(dragModifier)
                         .padding(horizontal = 16.dp)
-                        .height(qsH)
+                        // Height in the LAYOUT phase. Modifier.height(qsH) would need a new
+                        // composition for every pixel of the pull; this re-measures without one.
+                        .layout { measurable, constraints ->
+                            val h = qsHeightPx(this, expand.value)
+                            val p = measurable.measure(constraints.copy(minHeight = h, maxHeight = h))
+                            layout(p.width, h) { p.place(0, 0) }
+                        }
                         .clip(RoundedCornerShape(4.dp))
                 ) {
-                    val e = expand.value.coerceIn(0f, 1f)
                     // compact row
-                    if (e < 0.999f) {
+                    if (showCompact) {
                         val compactIds = listOf("wifi", "bluetooth", "ingest", "wireless_adb")
                         val compact = compactIds.mapNotNull { id -> tiles.firstOrNull { it.id == id } }
                         Row(
-                            Modifier.fillMaxWidth().height(compactH).graphicsLayer { alpha = 1f - e },
+                            Modifier.fillMaxWidth().height(compactH)
+                                .graphicsLayer { alpha = 1f - expand.value.coerceIn(0f, 1f) },
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             compact.forEach { t -> CompactTile(t, Modifier.weight(1f), osAccent, osAccentBright) }
                         }
                     }
                     // expanded grid
-                    if (e > 0.001f) {
+                    if (showGrid) {
                         Column(
-                            Modifier.fillMaxWidth().graphicsLayer { alpha = e; translationY = (1f - e) * 24f },
+                            Modifier.fillMaxWidth().graphicsLayer {
+                                val e = expand.value.coerceIn(0f, 1f)
+                                alpha = e; translationY = (1f - e) * 24f
+                            },
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             tiles.chunked(2).forEach { pair ->

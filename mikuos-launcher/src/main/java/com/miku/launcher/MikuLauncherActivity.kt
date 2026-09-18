@@ -183,6 +183,9 @@ class MikuLauncherActivity : ComponentActivity() {
         var requestedRecentsOpen by mutableStateOf(false)
         /** Set by an `open_ingest` launch extra (Miku Music's Ingress button) → opens the ingest observatory. */
         var requestedIngestOpen by mutableStateOf(false)
+
+        /** Set by an `open_bpm` launch extra (Miku Music's BPM game button) → opens the BPM observatory. */
+        var requestedBpmOpen by mutableStateOf(false)
         /** Set when the HOME intent re-arrives while we're already on top (gesture-pill swipe up): dismiss overlays. */
         var requestedHome by mutableStateOf(false)
         /** Set by an `open_battery` launch extra (Miku Music Settings → Battery & Power Core). */
@@ -223,6 +226,9 @@ class MikuLauncherActivity : ComponentActivity() {
         }
         if (intent?.getBooleanExtra("open_ingest", false) == true) {
             requestedIngestOpen = true
+        }
+        if (intent?.getBooleanExtra("open_bpm", false) == true) {
+            requestedBpmOpen = true
         }
         if (intent?.getBooleanExtra("open_battery", false) == true) {
             requestedBatteryOpen = true
@@ -423,6 +429,9 @@ class MikuLauncherActivity : ComponentActivity() {
         if (intent.getBooleanExtra("open_ingest", false)) {
             requestedIngestOpen = true
         }
+        if (intent.getBooleanExtra("open_bpm", false)) {
+            requestedBpmOpen = true
+        }
         if (intent.getBooleanExtra("open_battery", false)) {
             requestedBatteryOpen = true
         }
@@ -559,6 +568,13 @@ fun MikuLauncherScreen() {
     }
 
     var isBpmObservatoryOpen by remember { mutableStateOf(false) }
+
+    LaunchedEffect(MikuLauncherActivity.requestedBpmOpen) {
+        if (MikuLauncherActivity.requestedBpmOpen) {
+            isBpmObservatoryOpen = true
+            MikuLauncherActivity.requestedBpmOpen = false
+        }
+    }
     var isThermalObservatoryOpen by remember { mutableStateOf(false) }
 
     var customWallpaperUri by remember {
@@ -1162,7 +1178,7 @@ fun MikuLauncherScreen() {
             onQuiltConfigChange = { quiltConfig = it; MikuQuiltPrefs.saveConfig(ctx, it) },
             topBarTheme = topBarTheme,
             onCycleQuiltBackground = {
-                val next = topBarTheme.next()
+                val next = topBarTheme.next(ctx)
                 topBarTheme = next
                 MikuTopBarTheme.save(ctx, next)
             },
@@ -5925,6 +5941,17 @@ private fun MikuLauncherShadeAndWallpaperModals(
     currentWallpaperRes: Int
 ) {
     val ctx = LocalContext.current
+    // Cosmetics earned in the BPM game. A locked card stays VISIBLE (hiding it means nobody
+    // learns the reward exists) but is labelled and refuses selection. Ids are MikuUnlocks'.
+    val lockedCosmetics = remember {
+        val u = com.miku.launcher.bpm.MikuUnlocks.unlockedIds(ctx)
+        mapOf(
+            "w6" to com.miku.launcher.bpm.MikuUnlocks.OS_WALLPAPER_NEON_WAVE,
+            "w7" to com.miku.launcher.bpm.MikuUnlocks.OS_WALLPAPER_CYBER_HOLOGRAM,
+            "theme_cozy_cafe" to com.miku.launcher.bpm.MikuUnlocks.OS_THEME_COZY_CAFE,
+            "theme_cyber_stage" to com.miku.launcher.bpm.MikuUnlocks.OS_THEME_CYBER_STAGE
+        ).filterValues { it !in u }.keys
+    }
     // ============================================================
     // CYBER NOTIFICATION SHADE & QUICK SETTINGS MODAL
     // ============================================================
@@ -6034,10 +6061,11 @@ private fun MikuLauncherShadeAndWallpaperModals(
                     ) {
                         items(wallpapers) { wp ->
                             val isSelected = (customWallpaperUri == null && currentWallpaperRes == wp.resId)
+                            val isLocked = wp.id in lockedCosmetics
                             Column(
                                 Modifier
                                     .width(90.dp)
-                                    .clickable {
+                                    .clickable(enabled = !isLocked) {
                                         onCustomWallpaperUriChange(null)
                                         prefs.edit().remove("custom_wallpaper_uri").apply()
                                         onWallpaperIdChange(wp.id)
@@ -6060,13 +6088,19 @@ private fun MikuLauncherShadeAndWallpaperModals(
                                         painter = painterResource(id = wp.resId),
                                         contentDescription = wp.name,
                                         modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
+                                        contentScale = ContentScale.Crop,
+                                        alpha = if (isLocked) 0.3f else 1f
                                     )
+                                    if (isLocked) {
+                                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Text("\uD83D\uDD12", fontSize = 26.sp)
+                                        }
+                                    }
                                 }
                                 Spacer(Modifier.height(4.dp))
                                 Text(
-                                    text = wp.name,
-                                    color = if (isSelected) MikuCyan else Color.White,
+                                    text = if (isLocked) "Locked \u00B7 BPM game" else wp.name,
+                                    color = if (isLocked) Color.White.copy(alpha = 0.55f) else if (isSelected) MikuCyan else Color.White,
                                     fontSize = 11.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,

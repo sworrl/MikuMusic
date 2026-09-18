@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.miku.player.LastFm
 import com.miku.player.LastFmPreferences
+import com.miku.player.MikuTealBright
 import com.miku.player.Muted
 import com.miku.player.Surface1
 import kotlinx.coroutines.launch
@@ -71,6 +72,8 @@ fun ScrobbleSettingsCard(ctx: Context) {
     val state by ScrobbleManager.state.collectAsState()
     val scope = rememberCoroutineScope()
 
+    /** The request token waiting for the user to approve it on last.fm. Not secret on its own. */
+    var pendingToken by remember { mutableStateOf("") }
     var apiKey by remember { mutableStateOf(ScrobblePreferences.userApiKey(ctx)) }
     var apiSecret by remember { mutableStateOf(ScrobblePreferences.userApiSecret(ctx)) }
     var showKeys by remember { mutableStateOf(!ScrobblePreferences.hasUserCredentials(ctx) && !ScrobblePreferences.hasBuildCredentials()) }
@@ -98,7 +101,10 @@ fun ScrobbleSettingsCard(ctx: Context) {
         Text(
             when {
                 !state.enabled -> "Scrobbling is off. Listens are still logged locally; nothing is sent to Last.fm."
-                !state.configured -> "Paste your Last.fm API key and shared secret below to get started."
+                // With a shipped app key (the normal release), there is nothing to paste: the user
+                // just signs in as themselves. The key fields below stay, collapsed, for anyone who
+                // would rather run MikuOS against their OWN Last.fm API account.
+                !state.configured -> "Last.fm isn't set up on this build. Open API credentials below, or use your own Last.fm API account."
                 state.connected -> "Connected as ${state.username ?: username}. Tracks scrobble after 50% or 4 minutes, and queue offline."
                 else -> "Sign in to scrobble every track you play to your Last.fm profile."
             },
@@ -111,9 +117,13 @@ fun ScrobbleSettingsCard(ctx: Context) {
             Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { showKeys = !showKeys }.padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("API credentials", color = Color(0xFFE8F4F2), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(
-                when (state.credentialSource) { "user" -> "your key"; "build" -> "build key"; else -> "missing" },
+                if (ScrobblePreferences.hasBuildCredentials() && !ScrobblePreferences.hasUserCredentials(ctx))
+                    "API credentials (optional)" else "API credentials",
+                color = Color(0xFFE8F4F2), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)
+            )
+            Text(
+                when (state.credentialSource) { "user" -> "your key"; "build" -> "MikuOS key"; else -> "missing" },
                 color = if (state.credentialSource == "none") Color(0xFFFF6B6B) else Muted, fontSize = 11.sp
             )
             Spacer(Modifier.width(6.dp))
@@ -137,8 +147,13 @@ fun ScrobbleSettingsCard(ctx: Context) {
                 }
             }
             Text(
-                "Free at last.fm/api/account/create. Stored encrypted on this device only.",
-                color = Muted.copy(alpha = 0.8f), fontSize = 10.5.sp, modifier = Modifier.padding(top = 6.dp)
+                if (ScrobblePreferences.hasBuildCredentials())
+                    "MikuOS ships its own Last.fm API key, so you do not need these. Fill them in only " +
+                        "if you would rather scrobble through your OWN API account. Free at " +
+                        "last.fm/api/account/create. Stored encrypted on this device only."
+                else
+                    "Free at last.fm/api/account/create. Stored encrypted on this device only.",
+                color = Muted.copy(alpha = 0.85f), fontSize = 10.5.sp, modifier = Modifier.padding(top = 6.dp)
             )
         }
 
@@ -163,10 +178,13 @@ fun ScrobbleSettingsCard(ctx: Context) {
                     Text("Disconnect", color = Color(0xFFFF6B6B), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             } else {
-                Field(username, { username = it; error = null }, "Username")
-                Spacer(Modifier.height(8.dp))
-                Field(password, { password = it; error = null }, "Password", isPassword = true)
-                Spacer(Modifier.height(10.dp))
+                // BROWSER SIGN-IN, not a password box. auth.getMobileSession works and is still
+                // there, but it takes the account password into this process; the browser flow
+                // never shows it to us at all. Two taps: approve on last.fm, then Finish.
+                Text(
+                    "Sign in on last.fm in your browser. MikuOS never sees your password.",
+                    color = Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 8.dp)
+                )
                 Row(
                     Modifier
                         .clip(RoundedCornerShape(12.dp))
@@ -174,13 +192,19 @@ fun ScrobbleSettingsCard(ctx: Context) {
                         .clickable(enabled = !loading) {
                             loading = true; error = null
                             scope.launch {
-                                when (val r = LastFm.login(username, password)) {
-                                    is LastFm.LoginResult.Success -> {
-                                        LastFmPreferences.saveSession(ctx, r.username, r.sessionKey)
-                                        password = ""
-                                        ScrobbleManager.onSettingsChanged()
+                                when (val r = LastFm.requestAuthToken()) {
+                                    is LastFm.TokenResult.Success -> {
+                                        pendingToken = r.token
+                                        runCatching {
+                                            ctx.startActivity(
+                                                android.content.Intent(
+                                                    android.content.Intent.ACTION_VIEW,
+                                                    android.net.Uri.parse(LastFm.authUrl(r.token))
+                                                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            )
+                                        }.onFailure { error = "No browser on this device to approve it in" }
                                     }
-                                    is LastFm.LoginResult.Failure -> error = r.message
+                                    is LastFm.TokenResult.Failure -> error = r.message
                                 }
                                 loading = false
                             }
@@ -189,7 +213,40 @@ fun ScrobbleSettingsCard(ctx: Context) {
                         .fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    Text(if (loading) "Connecting…" else "Connect", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (loading) "Opening Last.fm…" else if (pendingToken.isBlank()) "Connect with Last.fm" else "Open Last.fm again",
+                        color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold
+                    )
+                }
+                if (pendingToken.isNotBlank()) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MikuTealBright.copy(alpha = if (loading) 0.3f else 0.9f))
+                            .clickable(enabled = !loading) {
+                                loading = true; error = null
+                                scope.launch {
+                                    when (val r = LastFm.completeAuth(pendingToken)) {
+                                        is LastFm.LoginResult.Success -> {
+                                            LastFmPreferences.saveSession(ctx, r.username, r.sessionKey)
+                                            pendingToken = ""
+                                            ScrobbleManager.onSettingsChanged()
+                                        }
+                                        is LastFm.LoginResult.Failure -> error = r.message
+                                    }
+                                    loading = false
+                                }
+                            }
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Text(
+                            if (loading) "Finishing…" else "I approved it — finish",
+                            color = Color(0xFF04161A), fontSize = 13.sp, fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }
@@ -293,7 +350,7 @@ private fun Field(value: String, onValueChange: (String) -> Unit, placeholder: S
             visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = if (isPassword) KeyboardType.Password else KeyboardType.Text, autoCorrect = false),
             decorationBox = { inner ->
-                if (value.isEmpty()) Text(placeholder, color = Muted.copy(alpha = 0.7f), fontSize = 13.sp)
+                if (value.isEmpty()) Text(placeholder, color = Muted.copy(alpha = 0.85f), fontSize = 13.sp)
                 inner()
             }
         )

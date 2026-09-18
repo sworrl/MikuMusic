@@ -273,7 +273,16 @@ class MikuIdleDimController(
      * While one of those is up, this ladder stands down and hands the user's brightness back.
      */
     fun setForeground(pkg: String?, cls: String?) {
-        val owns = pkg == "com.miku.player" ||
+        // Miku Music used to be on this list, which meant the OS ladder stood down for the app the
+        // device is actually used in, and the only dimming left was the player's per-window
+        // brightness override. Justin asked for the ladder to run on the SYSTEM brightness, so this
+        // service owns it everywhere now. The player still says when NOT to dim by publishing
+        // Settings.Global miku_idle_hold_awake (tape mode, fullscreen visualiser) - things you sit
+        // and watch without touching. The lockscreen/AOD keeps its own window lifecycle.
+        val playerHolding = pkg == "com.miku.player" && runCatching {
+            Settings.Global.getInt(cr, "miku_idle_hold_awake", 0) == 1
+        }.getOrDefault(false)
+        val owns = playerHolding ||
             (cls != null && (cls.contains("Lockscreen", true) || cls.contains("Aod", true)))
         if (owns != suppressed) {
             suppressed = owns

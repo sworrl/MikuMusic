@@ -319,7 +319,7 @@ fun ListeningStatsScreen(onBack: () -> Unit) {
             item {
                 Text(
                     "Full play = at least 94% heard without scrubbing forward. Minutes count time actually heard, not track length.",
-                    color = Muted.copy(alpha = 0.8f), fontSize = 10.5.sp, lineHeight = 14.sp, modifier = Modifier.padding(bottom = 24.dp)
+                    color = Muted.copy(alpha = 0.85f), fontSize = 10.5.sp, lineHeight = 14.sp, modifier = Modifier.padding(bottom = 24.dp)
                 )
             }
         }

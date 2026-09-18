@@ -257,12 +257,16 @@ fun MikuBpmObservatoryModal(
             // Floating Kawaii Heart & Star Particles Canvas
             KawaiiDreamyHeartCanvas(
                 modifier = Modifier.fillMaxSize(),
-                isFever = feverSeconds > 0
+                isFever = feverSeconds > 0,
+                ambient = currentSkin.ambient,
+                skinPrimary = activeSkinPrimary,
+                skinAccent = activeSkinAccent
             )
 
             // Dynamic Hit Particles System
             KawaiiJuicyParticleOverlay(
                 particles = activeParticles,
+                burst = currentSkin.burst,
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -323,6 +327,7 @@ fun MikuBpmObservatoryModal(
                     beatIntervalMs = beatIntervalMs,
                     lastBeatEpochMs = lastBeatEpochMs,
                     goldenLeekVisible = goldenLeekVisible,
+                    skin = currentSkin,
                     feverSeconds = feverSeconds,
                     clickerCombo = clickerCombo,
                     floatingTexts = floatingTexts,
@@ -1298,6 +1303,183 @@ private fun BpmTempoMatchLine(hasLiveTempo: Boolean, liveBpm: Float, tappedBpm: 
     )
 }
 
+/**
+ * A live thumbnail of what a skin actually looks like: its node silhouette, its ambient
+ * treatment and its burst glyphs, drawn with its own palette. A colour swatch cannot show that
+ * Cyber Mirai is a hexagon in data rain and Snow Crystal is a snowflake in drifting snow — and
+ * "you can't tell the skins apart" is exactly the complaint this answers.
+ */
+@Composable
+private fun BpmSkinPreview(skin: MikuBeatClickerEngine.BpmSkin, dimmed: Boolean) {
+    val alpha = if (dimmed) 0.35f else 1f
+    Box(
+        Modifier
+            .size(52.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0x66000000))
+            .border(1.dp, Color(skin.primaryColor).copy(alpha = 0.5f * alpha), RoundedCornerShape(10.dp))
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val c = center
+            val r = size.minDimension * 0.26f
+            val primary = Color(skin.primaryColor).copy(alpha = alpha)
+            val accent = Color(skin.accentColor).copy(alpha = alpha)
+
+            // Ambient signature, three marks in the skin's own idiom.
+            when (skin.ambient) {
+                MikuBeatClickerEngine.AmbientStyle.PETALS ->
+                    for (i in 0 until 3) drawKawaiiHeart(
+                        Offset(size.width * (0.2f + i * 0.3f), size.height * (0.16f + (i % 2) * 0.62f)),
+                        5f, accent.copy(alpha = 0.55f * alpha)
+                    )
+                MikuBeatClickerEngine.AmbientStyle.HEX_RAIN ->
+                    for (i in 0 until 4) drawLine(
+                        accent.copy(alpha = 0.5f * alpha),
+                        Offset(size.width * (0.12f + i * 0.25f), 2f),
+                        Offset(size.width * (0.12f + i * 0.25f), size.height * (0.22f + (i % 3) * 0.16f)),
+                        strokeWidth = 2f, cap = StrokeCap.Round
+                    )
+                MikuBeatClickerEngine.AmbientStyle.HONEY_BUBBLES ->
+                    for (i in 0 until 3) drawCircle(
+                        accent.copy(alpha = 0.45f * alpha),
+                        4f + i * 2f,
+                        Offset(size.width * (0.18f + i * 0.32f), size.height * (0.8f - i * 0.12f)),
+                        style = Stroke(width = 1.2f)
+                    )
+                MikuBeatClickerEngine.AmbientStyle.DAMASK_VEIL ->
+                    for (i in 0 until 3) drawPath(
+                        polygonPath(size.width * (0.2f + i * 0.3f), size.height * (0.2f + (i % 2) * 0.6f), 6f, 4, -90f),
+                        accent.copy(alpha = 0.35f * alpha)
+                    )
+                MikuBeatClickerEngine.AmbientStyle.SNOW_DRIFT ->
+                    for (i in 0 until 3) drawPath(
+                        starPath(size.width * (0.18f + i * 0.32f), size.height * (0.18f + (i % 2) * 0.64f), 5f, 2f, 6, -90f),
+                        accent.copy(alpha = 0.6f * alpha), style = Stroke(width = 1f)
+                    )
+            }
+
+            // The node silhouette itself — the headline difference.
+            drawPath(skinOutline(skin.nodeShape, c.x, c.y, r), primary.copy(alpha = 0.55f * alpha))
+            drawPath(
+                skinOutline(skin.nodeShape, c.x, c.y, r * 1.5f),
+                Color.White.copy(alpha = 0.5f * alpha), style = Stroke(width = 1.4f)
+            )
+        }
+        Text(
+            skin.burstGlyphs.take(2).joinToString(""),
+            fontSize = 9.sp,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(2.dp)
+                .graphicsLayer { this.alpha = alpha }
+        )
+    }
+}
+
+/**
+ * "NEXT: <reward> · <progress> → <where>" — the single most important progression line in the
+ * game, because it is the only one that says why the next hundred taps are worth doing.
+ */
+@Composable
+private fun BpmNextUnlockLine() {
+    val ctx = LocalContext.current
+    // Recomputed whenever the lifetime stats move, i.e. on every judged tap.
+    val lifetime by MikuBpmSeasonsEngine.lifetime.collectAsState()
+    val next = remember(lifetime) { MikuUnlocks.nextLocked(ctx) }
+    if (next == null) {
+        Text(
+            "🏆 Every reward earned — all ${MikuUnlocks.ALL.size} unlocked",
+            color = KawaiiGoldenHoney,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1
+        )
+        return
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Text(
+            "NEXT: ${next.icon} ${next.title} → ${next.where}",
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(2.dp))
+        val frac = MikuUnlocks.progressFraction(next)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(5.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(Color(0x33FFFFFF))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(frac)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(Brush.horizontalGradient(listOf(KawaiiMikuMint, KawaiiGoldenHoney)))
+            )
+        }
+        Text(
+            MikuUnlocks.progressLabel(next),
+            color = KawaiiGoldenHoney,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Black,
+            maxLines = 1
+        )
+    }
+}
+
+/**
+ * One cross-app reward, locked or earned, with its destination spelled out.
+ */
+@Composable
+private fun BpmRewardCard(reward: MikuUnlocks.Reward, earned: Boolean) {
+    Box(
+        Modifier
+            .width(168.dp)
+            .fillMaxHeight()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0x33000000))
+            .border(1.dp, if (earned) KawaiiGoldenHoney else Color(0x33FFFFFF), RoundedCornerShape(14.dp))
+            .padding(6.dp)
+    ) {
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    "${reward.icon} ${reward.title}",
+                    color = if (earned) Color.White else KawaiiTextMuted,
+                    fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                Text(if (earned) "✅" else "🔒", fontSize = 11.sp)
+            }
+            // Where it lands, verbatim — a reward you cannot find is not a reward.
+            Text(
+                reward.where,
+                color = KawaiiSoftTeal,
+                fontSize = 9.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (earned) {
+                Text("EARNED", color = KawaiiGoldenHoney, fontSize = 9.5.sp, fontWeight = FontWeight.Black)
+            } else {
+                Text(
+                    MikuUnlocks.progressLabel(reward),
+                    color = KawaiiGoldenHoney,
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun BpmSetlistChip(label: String, value: String, done: Boolean) {
     Box(
@@ -1603,6 +1785,9 @@ private fun BpmHeroQuestsCard(
             }
             Text("${achievements.count { it.isUnlocked }} of ${achievements.size} Done", color = KawaiiMikuMint, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
+        // What the player is working toward RIGHT NOW, with the exact requirement. Progression
+        // that cannot be seen coming does not motivate anyone.
+        BpmNextUnlockLine()
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             val totalCal = dbStats["totalTracks"] ?: 0
             val userCal = dbStats["userCalibrated"] ?: 0
@@ -1708,6 +1893,7 @@ private fun ColumnScope.BpmBeatNodeStage(
     beatIntervalMs: Long,
     lastBeatEpochMs: Long,
     goldenLeekVisible: Boolean,
+    skin: MikuBeatClickerEngine.BpmSkin,
     feverSeconds: Int,
     clickerCombo: Int,
     floatingTexts: List<MikuBeatClickerEngine.FloatingText>,
@@ -1776,6 +1962,7 @@ private fun ColumnScope.BpmBeatNodeStage(
             isPlaying = isPlaying,
             feverActive = feverSeconds > 0,
             perfectShockwaveTrigger = perfectShockwaveTrigger,
+            skin = skin,
             onTap = {
                 val now = SystemClock.elapsedRealtime()
                 lastTapTimeMs = now
@@ -1951,11 +2138,14 @@ private fun ColumnScope.BpmBeatNodeStage(
         // Floating Judgment Title
         if (judgmentTitle.isNotEmpty()) {
             Text(
-                text = judgmentTitle,
+                // Typography is part of the skin: arcade skins shout in wide-tracked Audiowide,
+                // the soft skins speak in the normal face. Same information, different voice.
+                text = if (skin.judgmentArcade) judgmentTitle else judgmentTitle.lowercase(Locale.US),
                 color = judgmentColor,
-                fontSize = 15.sp,
+                fontSize = if (skin.judgmentArcade) 15.sp else 16.sp,
                 fontWeight = FontWeight.Black,
-                fontFamily = AudiowideFont,
+                fontFamily = if (skin.judgmentArcade) AudiowideFont else null,
+                letterSpacing = skin.judgmentSpacing.sp,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .offset(y = (-14).dp)
@@ -1981,6 +2171,9 @@ private fun BpmGameDockCards(
     achievements: List<MikuBeatClickerEngine.Achievement>
 ) {
     val ctx = LocalContext.current
+    // Re-read when the tab changes (and on every recomposition of this dock) so a reward earned
+    // mid-session shows as EARNED without reopening the modal.
+    val earnedUnlocks = remember(selectedMode, achievements) { MikuUnlocks.unlockedIds(ctx) }
 
     if (selectedMode == 1) {
         // MODE 1: BUILDINGS SHOP CARDS
@@ -2067,26 +2260,72 @@ private fun BpmGameDockCards(
         ) {
             items(MikuBeatClickerEngine.BpmSkin.values()) { skin ->
                 val isCurrent = currentSkin == skin
+                // Availability is a real gate, and a locked card says exactly what earns it
+                // instead of just being greyed out.
+                val available = remember(skin, currentSkin) { skin.isAvailable(ctx) }
+                val lockReq = remember(skin) {
+                    skin.unlockId?.let { id -> MikuUnlocks.rewardFor(id) }
+                }
                 Box(
                     Modifier
-                        .width(140.dp)
+                        .width(176.dp)
                         .fillMaxHeight()
                         .clip(RoundedCornerShape(14.dp))
                         .background(Color(0x33000000))
-                        .border(1.5.dp, if (isCurrent) Color(skin.primaryColor) else Color(0x22FFFFFF), RoundedCornerShape(14.dp))
+                        .border(
+                            1.5.dp,
+                            if (isCurrent) Color(skin.primaryColor)
+                            else if (!available) Color(0x22FFFFFF) else Color(0x44FFFFFF),
+                            RoundedCornerShape(14.dp)
+                        )
                         .clickable {
-                            MikuBeatClickerEngine.setSkin(skin)
-                            com.miku.launcher.haptics.MikuHaptics.tick(ctx)
+                            if (MikuBeatClickerEngine.setSkin(ctx, skin)) {
+                                com.miku.launcher.haptics.MikuHaptics.tick(ctx)
+                            } else {
+                                com.miku.launcher.haptics.MikuHaptics.reject(ctx)
+                                android.widget.Toast.makeText(
+                                    ctx,
+                                    lockReq?.let { "🔒 ${it.title}: ${MikuUnlocks.progressLabel(it)}" }
+                                        ?: "🔒 Locked",
+                                    android.widget.Toast.LENGTH_SHORT
+                                ).show()
+                            }
                         }
-                        .padding(8.dp)
+                        .padding(6.dp)
                 ) {
-                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(skin.icon, fontSize = 18.sp)
-                            Spacer(Modifier.width(6.dp))
-                            Text(skin.displayName, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        // A REAL preview of the difference — the actual node silhouette, ambient
+                        // treatment and burst glyphs — not a colour chip.
+                        BpmSkinPreview(skin = skin, dimmed = !available)
+                        Spacer(Modifier.width(7.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                            Text(
+                                "${skin.icon} ${skin.displayName}",
+                                color = if (available) Color.White else KawaiiTextMuted,
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                skin.blurb,
+                                color = KawaiiTextMuted,
+                                fontSize = 8.5.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                when {
+                                    !available && lockReq != null -> "🔒 ${MikuUnlocks.progressLabel(lockReq)}"
+                                    isCurrent -> "✨ ACTIVE"
+                                    else -> "TAP TO APPLY"
+                                },
+                                color = if (isCurrent) Color(skin.primaryColor) else if (available) KawaiiSoftTeal else KawaiiGoldenHoney,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Black,
+                                maxLines = 1
+                            )
                         }
-                        Text(if (isCurrent) "✨ ACTIVE" else "TAP TO APPLY", color = if (isCurrent) Color(skin.primaryColor) else KawaiiTextMuted, fontSize = 10.sp, fontWeight = FontWeight.Black)
                     }
                 }
             }
@@ -2122,6 +2361,11 @@ private fun BpmGameDockCards(
                         }
                     }
                 }
+            }
+            // Cross-app rewards live in the same row as the quests: earned ones first so the
+            // player sees what they already own, then the ladder ahead of them in order.
+            items(MikuUnlocks.ALL) { r ->
+                BpmRewardCard(reward = r, earned = r.id in earnedUnlocks)
             }
         }
     }

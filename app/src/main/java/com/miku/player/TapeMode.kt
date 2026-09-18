@@ -489,6 +489,9 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
     // Theme is STICKY (persisted until deliberately changed) and swapping takes a LONG-PRESS —
     // a single tap can no longer flip your cassette by accident.
     var themeIdx by remember { mutableStateOf(PlayerPreferences.loadTapeTheme(ctx)) }
+    // A saved ordinal can point at a shell that is still locked behind the BPM game (earned once,
+    // then /data wiped, or the value predates the gate). Fall back to the default shell.
+    if (MikuUnlocksReader.locked(ctx, MikuUnlocksReader.TAPE_THEME_GATES, themeIdx)) themeIdx = 0
     val theme = TAPE_THEMES[((themeIdx % TAPE_THEMES.size) + TAPE_THEMES.size) % TAPE_THEMES.size]
     var showQueue by remember { mutableStateOf(false) }
     var showThemeModal by remember { mutableStateOf(false) }
@@ -624,7 +627,8 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                         if (distCapstan <= capstanRadius) {
                             showThemeModal = true
                         } else {
-                            themeIdx = (themeIdx + 1) % TAPE_THEMES.size
+                            themeIdx = MikuUnlocksReader.nextUnlocked(
+                                ctx, MikuUnlocksReader.TAPE_THEME_GATES, themeIdx, TAPE_THEMES.size)
                             PlayerPreferences.saveTapeTheme(ctx, themeIdx)
                         }
                         Haptics.tick(ctx)
@@ -725,6 +729,22 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                 .rotate(90f)
         )
 
+        // The deck's own VOLUME fader. Persistent by design: this is the ONE place in the OS with
+        // its own volume control, and the app-wide modal stands down while tape mode is up.
+        // The app-wide volume modal stands down for as long as the cassette is up.
+        DisposableEffect(Unit) {
+            com.miku.player.volume.MikuVolumeManager.setHudSuppressed(true)
+            onDispose { com.miku.player.volume.MikuVolumeManager.setHudSuppressed(false) }
+        }
+
+        TapeDeckVolumeFader(
+            theme = theme,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(x = mmDp * 17.0f)
+                .rotate(90f)
+        )
+
         // Unified Tape Deck Controls Bar: Exit, Playlist, RW, Play/Pause, FF, Rainbow Heart
         // Positioned down on the mouth / head block (x = -mmDp * 22.5f), completely clear of the magnetic tape!
         Row(
@@ -821,7 +841,7 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
 
             // Molded Rainbow Heart (Like / Favorite Button)
             MoldedRainbowHeart(
-                liked = LikeStore.isLiked(track.id),
+                liked = LikeStore.isLikedEffective(ctx, track),
                 theme = theme,
                 onToggle = { LikeStore.toggle(ctx, track) }
             )
@@ -995,6 +1015,8 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                 pair.forEachIndexed { colIdx, t ->
                                     val idx = rowIdx * 2 + colIdx
                                     val isSelected = idx == themeIdx
+                                    val isLocked = MikuUnlocksReader.locked(
+                                        ctx, MikuUnlocksReader.TAPE_THEME_GATES, idx)
                                     Box(
                                         Modifier.weight(1f)
                                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
@@ -1004,12 +1026,13 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                                 color = if (isSelected) MikuTealBright else Color(0x2239C5BB),
                                                 shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp)
                                             )
-                                            .clickable {
+                                            .clickable(enabled = !isLocked) {
                                                 themeIdx = idx
                                                 PlayerPreferences.saveTapeTheme(ctx, idx)
                                                 Haptics.tick(ctx)
                                                 showThemeModal = false
                                             }
+                                            .alpha(if (isLocked) 0.35f else 1f)
                                             .padding(8.dp)
                                     ) {
                                         Column {
@@ -1028,7 +1051,7 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Text(
-                                                    t.name,
+                                                    if (isLocked) t.name + "  \uD83D\uDD12" else t.name,
                                                     color = if (isSelected) MikuTealBright else Color(0xFFE8F4F2),
                                                     fontSize = 12.sp,
                                                     fontWeight = FontWeight.Bold,
@@ -1037,7 +1060,7 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                                                     overflow = TextOverflow.Ellipsis,
                                                     modifier = Modifier.weight(1f)
                                                 )
-                                                if (isSelected) {
+                                                if (isSelected && !isLocked) {
                                                     Icon(Icons.Default.Check, null, tint = MikuTealBright, modifier = Modifier.size(14.dp))
                                                 }
                                             }
@@ -2286,6 +2309,175 @@ private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float,
  * those turn to mud and cost a frame each, and the point here is to answer "what does this tape
  * look like" at a glance.
  */
+
+/**
+ * The deck's VOLUME fader, mounted on the cassette itself.
+ *
+ * Justin wants exactly one place in the OS with a different volume control, and this is it: the
+ * app-wide Miku volume modal is suppressed for as long as tape mode is up (see TapeScreen), and the
+ * level lives here instead, permanently on screen the way it would be on the front panel of a 1985
+ * deck. Nothing pops, nothing times out.
+ *
+ * What it is, physically: a recessed linear slot with a knurled cap, a printed scale, and the
+ * twelve-segment LED ladder every deck of that era had next to its level control, the last two
+ * segments red because that is where the print said you were pushing it.
+ *
+ * Volume goes through setStreamVolume, NOT adjustStreamVolume: HiBy's AudioService carries an
+ * adjust-only, raise-only, per-jack lock that silently swallows the step (see
+ * MikuVolumeManager.triggerHud for the full trace).
+ */
+@Composable
+private fun TapeDeckVolumeFader(theme: TapeTheme, modifier: Modifier = Modifier) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val am = remember { ctx.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager }
+    val maxVol = remember { (am?.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1) }
+    var vol by remember { mutableIntStateOf(am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: 0) }
+    // Follow the hardware knob and anything else that moves the stream. 250ms is well under the
+    // rate a human turns a knob and costs nothing next to the cassette's own animation.
+    LaunchedEffect(Unit) {
+        while (true) {
+            val v = am?.getStreamVolume(android.media.AudioManager.STREAM_MUSIC) ?: 0
+            if (v != vol) vol = v
+            kotlinx.coroutines.delay(250)
+        }
+    }
+    val frac = (vol.toFloat() / maxVol).coerceIn(0f, 1f)
+
+    // Panel colours come from the shell so the fader belongs to whichever cassette is loaded.
+    val dark = lum(theme.shellLo) < 0.5f
+    val slotColor = if (dark) Color(0xFF0B0B0E) else Color(0xFF2A2A2E)
+    val capHi = if (dark) Color(0xFFBDBDC4) else Color(0xFF4A4A52)
+    val capLo = if (dark) Color(0xFF6E6E76) else Color(0xFF1C1C22)
+    val printInk = ensureContrastOn(if (dark) Color(0xFFD8D8D0) else Color(0xFF15151A), theme.shellHi, 0.35f)
+
+    Row(
+        modifier.height(30.dp).width(210.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "VOLUME",
+            color = printInk,
+            fontSize = 7.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 1.6.sp,
+            maxLines = 1
+        )
+        Spacer(Modifier.width(6.dp))
+        Canvas(
+            Modifier
+                .weight(1f)
+                .height(26.dp)
+                .pointerInput(maxVol) {
+                    fun apply(xPx: Float, widthPx: Float) {
+                        val f = (xPx / widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
+                        val target = Math.round(f * maxVol).coerceIn(0, maxVol)
+                        if (target != vol) {
+                            vol = target
+                            runCatching {
+                                am?.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, 0)
+                            }
+                            Haptics.tick(ctx)
+                        }
+                    }
+                    // awaitEachGesture rather than detectHorizontalDragGestures: touch down sets
+                    // the level immediately (a fader cap jumps to where you press it), and every
+                    // move is consumed so the drag never leaks out to the cassette behind it.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        apply(down.position.x, size.width.toFloat())
+                        down.consume()
+                        while (true) {
+                            val ev = awaitPointerEvent()
+                            val c = ev.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!c.pressed) { c.consume(); break }
+                            apply(c.position.x, size.width.toFloat())
+                            c.consume()
+                        }
+                    }
+                }
+        ) {
+            val h = size.height
+            val w = size.width
+            val ladderH = h * 0.38f
+            val slotY = h * 0.72f
+            val slotH = h * 0.16f
+
+            // ---- 12-segment LED ladder, the last two red ----
+            val segs = 12
+            val gap = w * 0.012f
+            val segW = (w - gap * (segs - 1)) / segs
+            val litUpTo = (frac * segs)
+            for (i in 0 until segs) {
+                val on = i < litUpTo
+                val red = i >= segs - 2
+                val base = if (red) Color(0xFFFF3B30) else Color(0xFF39C5BB)
+                val c = if (on) base else base.copy(alpha = 0.13f)
+                val x = i * (segW + gap)
+                drawRoundRect(
+                    color = c,
+                    topLeft = Offset(x, 0f),
+                    size = Size(segW, ladderH),
+                    cornerRadius = CornerRadius(segW * 0.18f)
+                )
+                if (on) drawRoundRect(   // the glow a real LED throws onto the panel around it
+                    color = base.copy(alpha = 0.25f),
+                    topLeft = Offset(x - gap, -gap),
+                    size = Size(segW + gap * 2, ladderH + gap * 2),
+                    cornerRadius = CornerRadius(segW * 0.3f)
+                )
+            }
+
+            // ---- printed scale ticks, 0 .. 10 ----
+            for (i in 0..10) {
+                val x = w * (i / 10f)
+                val tall = i % 5 == 0
+                drawLine(
+                    color = printInk.copy(alpha = if (tall) 0.75f else 0.4f),
+                    start = Offset(x, slotY - h * (if (tall) 0.15f else 0.09f)),
+                    end = Offset(x, slotY - h * 0.03f),
+                    strokeWidth = if (tall) 1.6f else 1f
+                )
+            }
+
+            // ---- the recessed slot ----
+            drawRoundRect(
+                color = slotColor,
+                topLeft = Offset(0f, slotY),
+                size = Size(w, slotH),
+                cornerRadius = CornerRadius(slotH / 2f)
+            )
+            drawRoundRect(   // moulded highlight along the slot's lower lip
+                color = Color.White.copy(alpha = 0.10f),
+                topLeft = Offset(0f, slotY + slotH * 0.55f),
+                size = Size(w, slotH * 0.45f),
+                cornerRadius = CornerRadius(slotH / 2f)
+            )
+
+            // ---- the knurled cap ----
+            val capW = w * 0.075f
+            val capH = h * 0.42f
+            val capX = (frac * (w - capW)).coerceIn(0f, w - capW)
+            val capY = slotY + slotH / 2f - capH / 2f
+            drawRoundRect(
+                brush = Brush.verticalGradient(listOf(capHi, capLo)),
+                topLeft = Offset(capX, capY),
+                size = Size(capW, capH),
+                cornerRadius = CornerRadius(capW * 0.22f)
+            )
+            val knurls = 4
+            for (i in 1..knurls) {
+                val kx = capX + capW * (i / (knurls + 1f))
+                drawLine(
+                    color = Color.Black.copy(alpha = 0.35f),
+                    start = Offset(kx, capY + capH * 0.18f),
+                    end = Offset(kx, capY + capH * 0.82f),
+                    strokeWidth = 1f
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun MiniCassette(t: TapeTheme, modifier: Modifier = Modifier) {
     Canvas(modifier) {

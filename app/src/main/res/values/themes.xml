@@ -24,6 +24,24 @@
     <!-- KDE-style window transitions: apps FLY AWAY when sent to home (swipe up / task
          to back), FALL APART (crumble + tumble + drop) when actually closed, and FLY IN
          when opened. Replaces the stock slide-off-to-the-right. -->
+    <!--
+        The main Miku Music window, edge to edge.
+
+        The parent theme sets FLAG_FULLSCREEN, which contradicts MainActivity showing the status bar
+        again: while the flag is set the framework lays the app out BELOW the bar, so Miku Music got
+        720x1239 of a 720x1280 panel and the top 41px was dead space it was already painting nothing
+        into. Dropping the flag lets the window cover the whole panel and the stock clock/battery bar
+        bleed over the app's own background. Headers keep statusBarsPadding(), so no text collides
+        with the glyphs. Only MainActivity: the alarm ring and the other full-bleed activities still
+        want the fullscreen parent.
+    -->
+    <style name="Theme.MikuMusic.EdgeToEdge" parent="Theme.MikuLauncher">
+        <item name="android:windowFullscreen">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
     <style name="MikuKdeWindowAnim">
         <!-- open an app -->
         <item name="android:activityOpenEnterAnimation">@anim/kde_flyin_in</item>

@@ -76,7 +76,7 @@ fun MikuWeatherObservatoryModal(
         androidx.compose.material3.AlertDialog(
             onDismissRequest = onDismissRequest,
             confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { MikuWeatherService.refreshWeather(ctx) }) {
+                androidx.compose.material3.TextButton(onClick = { MikuWeatherService.refreshLocationNow(ctx); MikuWeatherService.refreshWeather(ctx) }) {
                     androidx.compose.material3.Text(if (weatherState.isLoading) "Fetching…" else "Fetch now")
                 }
             },
@@ -219,7 +219,7 @@ fun MikuWeatherObservatoryModal(
 
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             com.miku.launcher.network.Cyber3dIconButton(
-                                onClick = { MikuWeatherService.refreshWeather(ctx) },
+                                onClick = { MikuWeatherService.refreshLocationNow(ctx); MikuWeatherService.refreshWeather(ctx) },
                                 icon = Icons.Default.Refresh,
                                 contentDescription = "Refresh Weather",
                                 accentColor = MikuCyan,

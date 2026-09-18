@@ -208,12 +208,24 @@ fun NowPlayingScreen(
     var showViz by remember { mutableStateOf(true) }
     var currentPresetIndex by remember { mutableStateOf(PlayerPreferences.loadProjectMPreset(ctx)) }
     val presets = ProjectMPreset.entries
+    // A saved ordinal can point at a locked preset (earned once, then /data wiped, or the value
+    // predates the gate). Fall back rather than handing the reward over for free.
+    if (MikuUnlocksReader.locked(ctx, MikuUnlocksReader.PROJECTM_PRESET_GATES, currentPresetIndex)) {
+        currentPresetIndex = 0
+    }
     val currentPreset = presets[currentPresetIndex.coerceIn(0, presets.size - 1)]
 
-    // ---- Visualizer engine: native projectM or the GLES2 "Miku Shaders" (visualizer/) ----
-    var engine by remember { mutableStateOf(VizEngine.fromKey(PlayerPreferences.loadVizEngine(ctx))) }
+    // ---- Visualiser engine ----
+    // ONE engine: projectM. The second GLES2 renderer ("Miku Shaders") and its toggle are gone; the
+    // Miku look ships as our own .milk presets inside projectM instead. The GLES2 path survives ONLY
+    // as an automatic fallback for a build where libprojectM did not load, so the visualiser is
+    // never simply blank; it is not selectable and has no settings.
+    val engine = VizEngine.PROJECTM
     var shaderPresetIdx by remember { mutableStateOf(PlayerPreferences.loadShaderPreset(ctx)) }
     val shaderPresets = ShaderPreset.entries
+    if (MikuUnlocksReader.locked(ctx, MikuUnlocksReader.SHADER_PRESET_GATES, shaderPresetIdx)) {
+        shaderPresetIdx = 0
+    }
     val shaderPreset = shaderPresets[shaderPresetIdx.coerceIn(0, shaderPresets.size - 1)]
     // projectM only when the user chose it AND the native lib actually loaded; else the shader engine.
     val effectiveEngine = if (engine == VizEngine.PROJECTM && ProjectMNative.available) VizEngine.PROJECTM else VizEngine.SHADER
@@ -289,23 +301,20 @@ fun NowPlayingScreen(
     // shader engine just rotates the GLSL preset list (and remembers it).
     fun nextPreset() {
         if (effectiveEngine == VizEngine.SHADER) {
-            shaderPresetIdx = (shaderPresetIdx + 1) % shaderPresets.size
+            shaderPresetIdx = MikuUnlocksReader.nextUnlocked(
+                ctx, MikuUnlocksReader.SHADER_PRESET_GATES, shaderPresetIdx, shaderPresets.size)
             PlayerPreferences.saveShaderPreset(ctx, shaderPresetIdx)
             presetToast = shaderPresets[shaderPresetIdx].title
         } else { ProjectMNative.requestNext(); showPresetName("Next ▸") }
     }
     fun prevPreset() {
         if (effectiveEngine == VizEngine.SHADER) {
-            shaderPresetIdx = (shaderPresetIdx - 1 + shaderPresets.size) % shaderPresets.size
+            shaderPresetIdx = MikuUnlocksReader.nextUnlocked(
+                ctx, MikuUnlocksReader.SHADER_PRESET_GATES,
+                shaderPresetIdx - 2 + shaderPresets.size * 2, shaderPresets.size)
             PlayerPreferences.saveShaderPreset(ctx, shaderPresetIdx)
             presetToast = shaderPresets[shaderPresetIdx].title
         } else { ProjectMNative.requestPrev(); showPresetName("◂ Prev") }
-    }
-    fun toggleEngine() {
-        val next = if (engine == VizEngine.PROJECTM) VizEngine.SHADER else VizEngine.PROJECTM
-        engine = next
-        PlayerPreferences.saveVizEngine(ctx, next.key)
-        presetToast = if (next == VizEngine.PROJECTM && !ProjectMNative.available) "projectM unavailable · Miku Shaders" else next.title
     }
     LaunchedEffect(presetToast) { if (presetToast.isNotEmpty()) { delay(2000); presetToast = "" } }
     LaunchedEffect(showOverlayControls, pinControls) { if (showOverlayControls && !pinControls) { delay(4500); showOverlayControls = false } }
@@ -447,6 +456,25 @@ fun NowPlayingScreen(
                 }
             }
 
+            // Attribution. The fullscreen visualiser is projectM's work, so it says projectM and the
+            // REAL version read out of the loaded library (ProjectMNative.projectMCredit), not our
+            // app version and not a hardcoded string. Always on while the projectM engine is
+            // driving, tiny and low-contrast so it never competes with the visual.
+            if (effectiveEngine == VizEngine.PROJECTM && ProjectMNative.projectMCredit.isNotEmpty()) {
+                Text(
+                    text = ProjectMNative.projectMCredit,
+                    color = Color.White.copy(alpha = 0.5f),
+                    fontSize = 9.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.8.sp,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .navigationBarsPadding()
+                        .padding(start = 12.dp, bottom = 6.dp)
+                )
+            }
+
             // Top-right floating chips: pin + engine + exit (always available, tiny, glassy — minimal vis blocking).
             androidx.compose.animation.AnimatedVisibility(
                 visible = showOverlayControls || pinControls,
@@ -457,9 +485,6 @@ fun NowPlayingScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     GlassIcon(if (pinControls) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                         "Pin controls", if (pinControls) MikuGold else Color.White) { pinControls = !pinControls }
-                    Spacer(Modifier.width(8.dp))
-                    GlassIcon(Icons.Default.AutoAwesome, "Visualizer engine: ${effectiveEngine.title}",
-                        if (effectiveEngine == VizEngine.SHADER) accent2 else MikuGold) { toggleEngine() }
                     Spacer(Modifier.width(8.dp))
                     GlassIcon(Icons.Default.FullscreenExit, "Exit fullscreen", MikuTealBright) { isFullscreenVisualizer = false }
                 }
@@ -1014,7 +1039,7 @@ fun NowPlayingScreen(
                             Icon(Icons.Default.MusicNote, null, tint = Muted.copy(alpha = 0.5f), modifier = Modifier.size(48.dp))
                             Spacer(Modifier.height(8.dp))
                             Text("End of Queue", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Text("Add more songs from Songs or Albums tab", color = Muted.copy(alpha = 0.7f), fontSize = 12.sp)
+                            Text("Add more songs from Songs or Albums tab", color = Muted.copy(alpha = 0.85f), fontSize = 12.sp)
                         }
                     }
                 } else {
@@ -1289,7 +1314,7 @@ fun MikuConnectModal(context: android.content.Context, onClose: () -> Unit) {
             ) {
                 Text(
                     if (serverUp) "Port $port · server running" else "Port $port · server not running",
-                    color = MikuTeal.copy(alpha = 0.7f),
+                    color = MikuTeal.copy(alpha = 0.75f),
                     fontSize = 10.5.sp,
                     fontFamily = AudiowideFont
                 )
@@ -1700,6 +1725,9 @@ fun NowPlayingHeart(track: Track, size: androidx.compose.ui.unit.Dp = 42.dp) {
     val ctx = LocalContext.current
     var count by remember(track.id) { mutableStateOf(LikeStore.heartCount(ctx, track.id)) }
     var earnable by remember(track.id) { mutableStateOf(MikuPlayQualifier.isHeartable(track.id)) }
+    // Reading the state lists here is what makes the heart follow an album like without a poll.
+    val origin = LikeStore.likeOrigin(ctx, track)
+    val likedNow = origin == LikeStore.LikeOrigin.TRACK || origin == LikeStore.LikeOrigin.ALBUM
     // Cheap 1s poll (same cadence as the progress bar) keeps earnable/count fresh across the play.
     LaunchedEffect(track.id) {
         while (true) {
@@ -1709,18 +1737,25 @@ fun NowPlayingHeart(track: Track, size: androidx.compose.ui.unit.Dp = 42.dp) {
         }
     }
     TieredRainbowHeart(
-        tier = LikeTier.TRACK,
-        liked = count > 0,
+        // Inherited from the album shows the ALBUM ring, so "liked because the album is" is
+        // distinguishable at a glance from "liked on its own" without a second control.
+        tier = if (origin == LikeStore.LikeOrigin.ALBUM) LikeTier.ALBUM else LikeTier.TRACK,
+        liked = likedNow,
         size = size,
         earnable = earnable,
         badgeCount = count,
         onToggle = {
-            // Always allowed — like anytime. The play fraction is recorded as a WEIGHT, not a gate.
-            count = LikeStore.heart(ctx, track); earnable = MikuPlayQualifier.isHeartable(track.id)
+            // Toggles the EFFECTIVE state. Un-hearting a track the album covers records a refusal
+            // rather than doing nothing; hearting one promotes it to a like of its own.
+            LikeStore.toggleEffective(ctx, track)
+            count = LikeStore.heartCount(ctx, track.id); earnable = MikuPlayQualifier.isHeartable(track.id)
         },
         onLongPress = {
-            LikeStore.clearHearts(ctx, track); count = 0; earnable = MikuPlayQualifier.isHeartable(track.id)
-            android.widget.Toast.makeText(ctx, "Hearts cleared", android.widget.Toast.LENGTH_SHORT).show()
+            LikeStore.clearOverride(ctx, track)
+            count = LikeStore.heartCount(ctx, track.id); earnable = MikuPlayQualifier.isHeartable(track.id)
+            val msg = if (LikeStore.isAlbumLiked(track.artist.ifBlank { track.albumArtist }, track.album, ctx))
+                "Following the album again" else "Hearts cleared"
+            android.widget.Toast.makeText(ctx, msg, android.widget.Toast.LENGTH_SHORT).show()
         }
     )
 }

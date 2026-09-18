@@ -348,6 +348,22 @@ object PlayerPreferences {
         }.toMap()
     }.getOrDefault(emptyMap())
 
+    /**
+     * Tracks the user has EXPLICITLY refused, which beat an album-level like.
+     *
+     * Separate from "not in liked_tracks": absence means "no opinion, follow the album", presence
+     * means "I actively do not want this one". Collapsing the two would make a refusal vanish the
+     * next time the album is liked.
+     */
+    fun saveRefusedTrack(context: Context, id: Long, refused: Boolean) {
+        val cur = loadRefusedTracks(context).mapTo(HashSet()) { it.toString() }
+        if (refused) cur.add(id.toString()) else cur.remove(id.toString())
+        prefs(context).edit().putStringSet("refused_tracks", cur).apply()
+    }
+    fun loadRefusedTracks(context: Context): Set<Long> =
+        (prefs(context).getStringSet("refused_tracks", emptySet()) ?: emptySet())
+            .mapNotNull { it.toLongOrNull() }.toSet()
+
     fun saveLikedAlbum(context: Context, name: String, isLiked: Boolean) {
         val cur = loadLikedAlbums(context).toMutableSet()
         if (isLiked) cur.add(name) else cur.remove(name)

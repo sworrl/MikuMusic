@@ -198,7 +198,7 @@ private fun LockedRow(row: TasteShelves.Row) {
         Spacer(Modifier.width(8.dp))
         Column {
             Text(row.title, color = Muted, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(row.unlockHint ?: "", color = Muted.copy(alpha = 0.75f), fontSize = 10.5.sp, lineHeight = 13.sp)
+            Text(row.unlockHint ?: "", color = Muted.copy(alpha = 0.85f), fontSize = 10.5.sp, lineHeight = 13.sp)
         }
     }
 }
@@ -477,7 +477,7 @@ fun TasteProfileSheet(tracks: List<Track>, onDismiss: () -> Unit) {
                 for (a in artists) ShareBar(a, MikuPink)
                 Spacer(Modifier.height(12.dp))
                 Text("LISTENING HOURS", color = Muted, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                Text("Sun → Sat rows, midnight → 11pm columns · brighter = more time heard", color = Muted.copy(alpha = 0.8f), fontSize = 10.sp)
+                Text("Sun → Sat rows, midnight → 11pm columns · brighter = more time heard", color = Muted.copy(alpha = 0.85f), fontSize = 10.sp)
                 Spacer(Modifier.height(6.dp))
                 Heatmap(s.heatmap, Modifier.fillMaxWidth().height(96.dp))
                 val slot = TasteDb.currentSlot()

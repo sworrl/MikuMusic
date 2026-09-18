@@ -233,7 +233,7 @@ fun MikuRemoteSettingsCard(ctx: Context) {
                         cursorBrush = SolidColor(MikuTeal),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrect = false),
                         decorationBox = { inner ->
-                            if (pwaUrl.isEmpty()) Text(MikuRemotePreferences.DEFAULT_PWA_URL, color = Muted.copy(alpha = 0.6f), fontSize = 12.sp)
+                            if (pwaUrl.isEmpty()) Text(MikuRemotePreferences.DEFAULT_PWA_URL, color = Muted.copy(alpha = 0.85f), fontSize = 12.sp)
                             inner()
                         }
                     )

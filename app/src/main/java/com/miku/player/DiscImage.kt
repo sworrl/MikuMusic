@@ -33,8 +33,17 @@ object DiscImage {
     private const val TAG = "DiscImage"
     const val MIN_IMAGE_MS = 18 * 60_000L
 
+    /**
+     * No single SONG runs this long. Past it, "one file, one disc" is safe on duration alone.
+     * Below it we need a second, structural signal, because 18-40 minute single files are ordinary:
+     * DJ mixes, live sets, podcasts, prog epics, single-movement classical.
+     */
+    const val VERY_LONG_IMAGE_MS = 42 * 60_000L
+
     /** "00 Something.flac", "00.flac", "00_x", "00-x", "00 CDImage.2.flac" */
     private val IMAGE_NAME_RE = Regex("(?i)^00(?:[ ._-]|$)")
+    /** Explicit whole-disc naming conventions, which are worth more than a leading "00". */
+    private val CDIMAGE_NAME_RE = Regex("(?i)(cdimage|\\bimage\\b|full[ ._-]?album|whole[ ._-]?(disc|cd)|\\(disc ?\\d\\))")
     /** ".1.flac" / ".2.ape" multi-disc image suffix → disc number. */
     private val MULTI_DISC_RE = Regex("(?i)\\.(\\d)\\.(flac|ape|wav|wv|dsf|dff|m4a|mp3)$")
     private val NON_ALNUM_RE = Regex("[^\\p{L}\\p{Nd}]+")
@@ -81,18 +90,50 @@ object DiscImage {
             val name = if (t.path.isNotBlank()) t.path.substringAfterLast('/') else ""
             val base = name.substringBeforeLast('.')
             val folderN = folderCounts[folderKey(t.path)] ?: 1
+            val longEnough = t.durationMs >= MIN_IMAGE_MS
+            val veryLong = t.durationMs >= VERY_LONG_IMAGE_MS
+
+            // A sibling .cue is the one DEFINITIVE signal, so resolve it before deciding rather
+            // than after. Gated on longEnough so this stays one cached dir listing per candidate
+            // folder, not per track in the library.
+            var cue = t.cuePath
+            if (cue.isBlank() && canReadFiles && longEnough) cue = findCue(t.path, cueDirCache) ?: ""
+
+            /*
+             * WHY THIS IS STRICTER THAN IT WAS (2026-09-17, Justin: "some of the whole disk one
+             * file markers are not correct").
+             *
+             * Every old rule could fire on a single weak signal:
+             *  · `^00` matched with NO duration check at all, so a 40-second "00 Intro.mp3" and any
+             *    album that numbers its tracks from 00 were marked whole-disc rips.
+             *  · `>=18min && folderN <= 2` marked every long single file sitting on its own: DJ
+             *    mixes, live sets, podcasts, prog tracks, one-movement classical.
+             *  · `>=18min && title == album` marked long single-track releases, where the track
+             *    being named after the release is completely normal.
+             *
+             * Now: a cue sheet decides it outright, a naming convention counts only alongside a
+             * plausible duration, and duration alone only counts past 42 minutes, which no single
+             * song reaches. A track that carries a real track number in a folder full of other
+             * audio is never an image no matter what it is called.
+             */
+            val imageName = name.isNotBlank() &&
+                (IMAGE_NAME_RE.containsMatchIn(name) || CDIMAGE_NAME_RE.containsMatchIn(name))
+            val artistAlbumName = t.album.isNotBlank() &&
+                (norm(base) == norm("${t.artist} - ${t.album}") || norm(base) == norm("${t.albumArtist} - ${t.album}"))
+            // Sits among siblings AND is numbered like one of them: that is a track, not a disc.
+            val numberedAmongSiblings = folderN > 2 && t.trackNumber > 0
             val looksImage = when {
-                name.isNotBlank() && IMAGE_NAME_RE.containsMatchIn(name) -> true
-                t.durationMs >= MIN_IMAGE_MS && folderN <= 2 -> true
-                t.durationMs >= MIN_IMAGE_MS && t.album.isNotBlank() && norm(t.title) == norm(t.album) -> true
-                t.durationMs >= MIN_IMAGE_MS && t.album.isNotBlank() &&
-                    (norm(base) == norm("${t.artist} - ${t.album}") || norm(base) == norm("${t.albumArtist} - ${t.album}")) -> true
+                cue.isNotBlank() && longEnough -> true
+                numberedAmongSiblings -> false
+                imageName && longEnough -> true
+                artistAlbumName && longEnough -> true
+                veryLong && folderN <= 2 -> true
+                veryLong && t.album.isNotBlank() && norm(t.title) == norm(t.album) -> true
                 else -> false
             }
             if (!looksImage && !t.isDiscImage) { out.add(t); continue }
             report.images++
             val disc = MULTI_DISC_RE.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: t.discNumber
-            var cue = t.cuePath
             if (cue.isBlank() && canReadFiles) cue = findCue(t.path, cueDirCache) ?: ""
             if (cue.isNotBlank()) report.withCue++
             val image = t.copy(isDiscImage = true, discNumber = disc, cuePath = cue,

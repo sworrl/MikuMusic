@@ -59,8 +59,25 @@ object IdleController {
     /** Ref count of on-screen surfaces demanding the display stay lit (see [KeepScreenAwake]). */
     var holdAwake by mutableStateOf(0)
         private set
-    fun acquireAwake() { holdAwake++ }
-    fun releaseAwake() { if (holdAwake > 0) holdAwake-- }
+    fun acquireAwake() { holdAwake++; publishHold() }
+    fun releaseAwake() { if (holdAwake > 0) holdAwake--; publishHold() }
+
+    /** App context, kept only so the hold flag can be published from acquire/release. */
+    @Volatile private var appCtx: Context? = null
+
+    /**
+     * Tell the OS idle ladder (MikuIdleDim in com.miku.systemui) that something on screen is meant
+     * to be WATCHED, not touched: tape mode and the fullscreen visualiser. That service owns the
+     * real Settings.System brightness now, and this is how it knows to stand down.
+     */
+    private fun publishHold() {
+        val c = appCtx ?: return
+        runCatching {
+            android.provider.Settings.Global.putInt(c.contentResolver, "miku_idle_hold_awake", if (holdAwake > 0) 1 else 0)
+        }
+    }
+
+    fun attachContext(ctx: Context) { appCtx = ctx.applicationContext; publishHold() }
 
     @Volatile private var lastInteraction = android.os.SystemClock.elapsedRealtime()
     @Volatile private var offRequested = false
@@ -93,6 +110,7 @@ object IdleController {
     }
 
     fun loadPrefs(ctx: Context) {
+        attachContext(ctx)      // so acquire/releaseAwake can publish the hold to the OS ladder
         enabled = PlayerPreferences.loadIdleDimEnabled(ctx)
         ambientEnabled = PlayerPreferences.loadAmbientEnabled(ctx)
         activeSec = PlayerPreferences.loadIdleActiveSec(ctx)
@@ -219,14 +237,18 @@ fun IdleWatcher() {
  *  handled here — by the time tier reaches OFF the display is on its way down via ScreenOffHelper
  *  regardless of any brightness value this Window sets. */
 fun applyIdleBrightness(window: android.view.Window, tier: IdleTier) {
-    val level = when (tier) {
-        IdleTier.ACTIVE -> android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
-        IdleTier.DIMMED -> IdleController.BRIGHTNESS_DIMMED
-        IdleTier.AMBIENT, IdleTier.OFF -> IdleController.BRIGHTNESS_AMBIENT
-    }
+    // NO-OP on purpose, kept so every call site does not have to change.
+    //
+    // This used to set window.attributes.screenBrightness, a per-WINDOW override. Justin asked for
+    // idle dim on the SYSTEM brightness, and having two owners is worse than having one: the OS
+    // ladder (MikuIdleDim, com.miku.systemui) stood down whenever Miku Music was in front, so
+    // inside the app the only dimming was this window override, and outside it the OS ladder never
+    // saw the app's holds. One owner now. MikuIdleDim writes Settings.System.SCREEN_BRIGHTNESS
+    // everywhere and reads IdleController's hold flag (Settings.Global miku_idle_hold_awake) to
+    // know when to leave the panel alone. The AMBIENT overlay UI below is unaffected.
     val attrs = window.attributes
-    if (attrs.screenBrightness != level) {
-        attrs.screenBrightness = level
+    if (attrs.screenBrightness != android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE) {
+        attrs.screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         window.attributes = attrs
     }
 }

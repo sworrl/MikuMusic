@@ -134,10 +134,23 @@ object MikuVolumeManager {
         if (isRegistered) return
         isRegistered = true
 
+        /*
+         * RANDOM POP-UPS (2026-09-17). This observer is registered on the WHOLE of
+         * Settings.System with notifyForDescendants=true, so it fires for every setting in there,
+         * not just volume — and stream volumes have not lived in Settings.System for many Android
+         * versions anyway. Anything writing Settings.System raised the volume HUD: the shade's
+         * brightness slider, screen_off_timeout, and now the OS idle-dim ladder, which writes
+         * SCREEN_BRIGHTNESS on every step of every ramp.
+         *
+         * The HUD now only appears when the MUSIC volume genuinely changed value. The observer
+         * still refreshes state, because a settings change can legitimately move it.
+         */
         val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
+                val before = _state.value.currentVolume
+                val beforeMute = _state.value.isMuted
                 updateFromSystem(ctx)
-                triggerHud(ctx)
+                if (_state.value.currentVolume != before || _state.value.isMuted != beforeMute) triggerHud(ctx)
             }
         }
         try {
@@ -150,8 +163,14 @@ object MikuVolumeManager {
 
         val volumeReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: android.content.Intent?) {
+                // VOLUME_CHANGED_ACTION fires for EVERY stream — ring, alarm, notification, the
+                // vendor's own. Only the music stream belongs in a music player's volume HUD.
+                val stream = intent?.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1) ?: -1
+                if (stream != -1 && stream != AudioManager.STREAM_MUSIC) { updateFromSystem(ctx); return }
+                val before = _state.value.currentVolume
+                val beforeMute = _state.value.isMuted
                 updateFromSystem(ctx)
-                triggerHud(ctx)
+                if (_state.value.currentVolume != before || _state.value.isMuted != beforeMute) triggerHud(ctx)
             }
         }
         val filter = android.content.IntentFilter().apply {
@@ -179,6 +198,21 @@ object MikuVolumeManager {
         )
     }
 
+    /**
+     * Set while a screen with its own, better volume control is up. Exactly one screen sets it:
+     * fullscreen tape mode, whose deck fader is always on screen.
+     */
+    @Volatile var suppressHud: Boolean = false
+        private set
+
+    fun setHudSuppressed(suppressed: Boolean) {
+        suppressHud = suppressed
+        if (suppressed) {
+            hudDismissJob?.cancel()
+            _state.value = _state.value.copy(isHudVisible = false)
+        }
+    }
+
     fun triggerHud(ctx: Context, delta: Int = 0) {
         if (delta != 0) {
             val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -198,6 +232,11 @@ object MikuVolumeManager {
         } else {
             updateFromSystem(ctx)
         }
+
+        // Tape mode owns its own volume control (TapeMode.TapeDeckVolumeFader) and it is permanent,
+        // so the app-wide modal has nothing to add there and would just cover the cassette. The
+        // volume change above still happens; only the HUD stands down.
+        if (suppressHud) return
 
         _state.value = _state.value.copy(isHudVisible = true)
 

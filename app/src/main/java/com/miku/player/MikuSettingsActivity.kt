@@ -66,7 +66,9 @@ class MikuSettingsActivity : ComponentActivity() {
         try {
             androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            // Never the stock nav bar: our accessibility home pill IS the navigation on this
+            // device, and showing both puts a dead white pill next to the live one.
+            insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
             insetsController.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
             insetsController.isAppearanceLightStatusBars = false
             insetsController.isAppearanceLightNavigationBars = false

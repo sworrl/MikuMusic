@@ -47,7 +47,7 @@ object ProjectMNative {
      * re-syncs. (A plain file-count comparison is not usable any more: the pack holds ~9.8k entries,
      * so listing and diffing them on every launch would cost more than the sync it guards.)
      */
-    private const val PRESET_LIBRARY_ID = "v2-cotc9795+curated"
+    private const val PRESET_LIBRARY_ID = "v4-cotc9795+curated+miku80"
     private const val PRESET_PACK_ASSET = "presets_pack.zip"
 
     /**
@@ -83,14 +83,20 @@ object ProjectMNative {
                     }
                 }.onFailure { android.util.Log.w("projectM", "preset pack unpack failed: $it") }
 
-                // 2. The curated/Miku presets land LAST so they win any name clash with the pack.
-                val names = ctx.assets.list("presets")?.toList() ?: emptyList()
-                names.forEach { n ->
-                    runCatching {
-                        ctx.assets.open("presets/$n").use { input ->
-                            java.io.File(out, n).outputStream().use { input.copyTo(it) }
+                // 2. The curated presets, then OUR OWN Miku presets, land LAST so they win any name
+                //    clash with the pack. The miku_presets/ set is what replaced the second GLES2
+                //    renderer: same look, delivered as real .milk files inside projectM instead of a
+                //    parallel visualiser with its own engine, preset list, settings and toggle.
+                listOf("presets", "miku_presets").forEach { dirName ->
+                    val names = ctx.assets.list(dirName)?.toList() ?: emptyList()
+                    names.forEach { n ->
+                        runCatching {
+                            ctx.assets.open("$dirName/$n").use { input ->
+                                java.io.File(out, n).outputStream().use { input.copyTo(it) }
+                            }
                         }
                     }
+                    android.util.Log.i("projectM", "$dirName: ${names.size} presets copied")
                 }
                 runCatching { marker.writeText(PRESET_LIBRARY_ID) }
                 android.util.Log.i("projectM", "preset library synced: ${out.list()?.size ?: 0} files")
@@ -116,6 +122,24 @@ object ProjectMNative {
     fun requestToggleLock() { /* disabled: lock toggling could stall the GL thread */ }
     // Read the live preset name (playlist query only, no GL — mutex-guarded on the native side),
     // so the name is correct even before the first gesture switch.
+    /**
+     * "projectM 4.2.0" — read from the loaded library, cached once.
+     *
+     * The fullscreen visualiser is projectM's work and says so. Blank when the native library did
+     * not load, so a caller can leave the credit off rather than claim a version we do not have.
+     */
+    val projectMCredit: String by lazy {
+        if (!isLoaded) "" else runCatching {
+            val v = nativeVersion()
+            if (v.isBlank()) "projectM" else "projectM $v"
+        }.getOrDefault("projectM")
+    }
+
+    /** The git revision the vendored library was built from, or "" if unavailable. */
+    val projectMVcs: String by lazy {
+        if (!isLoaded) "" else runCatching { nativeVcsVersion() }.getOrDefault("")
+    }
+
     fun presetName(): String =
         if (isLoaded) try { nativePresetName().ifBlank { currentPresetName } } catch (_: Throwable) { currentPresetName } else currentPresetName
 
@@ -147,6 +171,8 @@ object ProjectMNative {
     private external fun nativeToggleLock(): Boolean
     private external fun nativeIsLocked(): Boolean
     private external fun nativePresetName(): String
+    private external fun nativeVersion(): String
+    private external fun nativeVcsVersion(): String
     private external fun nativeSetBeatSensitivity(s: Float)
 }
 

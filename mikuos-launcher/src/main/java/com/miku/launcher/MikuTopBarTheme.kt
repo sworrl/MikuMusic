@@ -47,9 +47,25 @@ enum class MikuTopBarTheme(val displayName: String) {
     }
 }
 
-/** Next theme in the ring — used by the top-bar long-press cycle. */
-fun MikuTopBarTheme.next(): MikuTopBarTheme =
-    MikuTopBarTheme.entries[(ordinal + 1) % MikuTopBarTheme.entries.size]
+/**
+ * Next theme in the ring, SKIPPING anything still locked behind the BPM game.
+ *
+ * AURORA and MIDNIGHT are earned cosmetics (see MikuUnlocks). The cycle is a blind long-press with
+ * no picker, so a locked theme in the ring would just hand it over. Falls back to the plain ring if
+ * every remaining theme is locked, which cannot happen while MIKU is unconditional.
+ */
+fun MikuTopBarTheme.next(ctx: Context): MikuTopBarTheme {
+    val locked = mapOf(
+        MikuTopBarTheme.AURORA to com.miku.launcher.bpm.MikuUnlocks.OS_TOPBAR_AURORA,
+        MikuTopBarTheme.MIDNIGHT to com.miku.launcher.bpm.MikuUnlocks.OS_TOPBAR_MIDNIGHT
+    ).filterValues { !com.miku.launcher.bpm.MikuUnlocks.isUnlocked(ctx, it) }.keys
+    val n = MikuTopBarTheme.entries.size
+    for (step in 1..n) {
+        val cand = MikuTopBarTheme.entries[(ordinal + step) % n]
+        if (cand !in locked) return cand
+    }
+    return MikuTopBarTheme.entries[(ordinal + 1) % n]
+}
 
 /** The gradient stops for the gradient-based themes (PHOTO/MINIMAL handled separately). */
 private fun MikuTopBarTheme.gradientColors(): List<Color> = when (this) {

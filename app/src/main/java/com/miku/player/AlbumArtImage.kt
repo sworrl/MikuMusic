@@ -19,6 +19,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -94,7 +98,7 @@ object AlbumArtCache {
     }
     internal fun markMiss(key: String) { misses[key] = android.os.SystemClock.elapsedRealtime() }
     /** Forget every recorded miss — after a rescan, after storage access is granted, etc. */
-    fun clearMisses() { misses.clear(); clearFolderArtIndex() }
+    fun clearMisses() { misses.clear(); clearFolderArtIndex(); clearAlbumScope() }
 
     fun prewarm(ctx: Context, tracks: List<Track>, memWarm: Int = 30) {
         if (prewarmed || tracks.isEmpty()) return
@@ -134,26 +138,56 @@ fun AlbumArtImage(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize()
         )
-    }
+    },
+    /**
+     * Release year, drawn as a small badge on the bottom-left of the art. 0 = no badge.
+     * NEVER guessed: pass the track's real `year` and nothing else. A wrong year on the sleeve is
+     * worse than no year at all.
+     */
+    year: Int = 0
 ) {
-    val cached = AlbumArtCache.get(trackId)
-    if (cached != null) {
-        Image(bitmap = cached, contentDescription = "Album art", modifier = modifier, contentScale = contentScale)
-    } else {
-        val ctx = LocalContext.current
-        var art by remember(trackId) { mutableStateOf<ImageBitmap?>(null) }
+    Box(modifier) {
+        val artMod = Modifier.fillMaxSize()
+        val cached = AlbumArtCache.get(trackId)
+        if (cached != null) {
+            Image(bitmap = cached, contentDescription = "Album art", modifier = artMod, contentScale = contentScale)
+        } else {
+            val ctx = LocalContext.current
+            var art by remember(trackId) { mutableStateOf<ImageBitmap?>(null) }
 
-        if (trackId > 0 && !AlbumArtCache.isMiss("$trackId")) {
-            LaunchedEffect(trackId, trackPath) {
-                art = loadArtThumb(ctx, trackId, trackPath)
+            if (trackId > 0 && !AlbumArtCache.isMiss("$trackId")) {
+                LaunchedEffect(trackId, trackPath) {
+                    art = loadArtThumb(ctx, trackId, trackPath)
+                }
+            }
+
+            if (art != null) {
+                Image(bitmap = art!!, contentDescription = "Album art", modifier = artMod, contentScale = contentScale)
+            } else {
+                Box(modifier = artMod.background(Color(0xFF0A2022)), contentAlignment = Alignment.Center) { fallbackIcon() }
             }
         }
+        if (year in 1000..2999) AlbumArtYearBadge(year, Modifier.align(Alignment.BottomStart))
+    }
+}
 
-        if (art != null) {
-            Image(bitmap = art!!, contentDescription = "Album art", modifier = modifier, contentScale = contentScale)
-        } else {
-            Box(modifier = modifier.background(Color(0xFF0A2022)), contentAlignment = Alignment.Center) { fallbackIcon() }
-        }
+/** The year badge itself: a small dark chip so it reads over any sleeve, light or dark. */
+@Composable
+private fun AlbumArtYearBadge(year: Int, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .padding(4.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+            .background(Color(0xCC04161A))
+            .padding(horizontal = 4.dp, vertical = 1.dp)
+    ) {
+        androidx.compose.material3.Text(
+            text = year.toString(),
+            color = MikuTealBright,
+            fontSize = 9.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+            maxLines = 1
+        )
     }
 }
 
@@ -196,6 +230,108 @@ private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {
  * identical answer. Memoised per directory ("" = looked, found nothing). Cleared alongside the
  * art misses (AlbumArtCache.clearMisses) so a rescan or newly-granted storage access re-looks.
  */
+
+// ============================================================ album scoping for art correctness
+//
+// Three failures Justin called out: art MISSING, art WRONG, and two different albums showing the
+// SAME art. All three come from the two "whole folder / whole albumId" fallbacks being applied
+// without checking that the folder or the albumId actually holds ONE album.
+//
+//  · WRONG/DUPED: a directory holding several albums (an artist folder, a compilation dump) has one
+//    cover.jpg, and every track in it got that cover. Likewise MediaStore collapses albums that
+//    share a title+artist into one albumId, so both of them get the first one's art.
+//  · MISSING: when the embedded picture is absent and the folder/MediaStore fallbacks legitimately
+//    have nothing, the track was marked a permanent-ish miss even though a SIBLING TRACK on the
+//    same album usually has the picture embedded.
+//
+// The index below answers "is this directory one album?" and "is this albumId one album?" from the
+// library the app already has in memory, and is dropped whenever a scan lands (clearMisses).
+private object AlbumScope {
+    @Volatile private var builtFor = 0
+    private val dirSingleAlbum = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    private val albumIdSingle = java.util.concurrent.ConcurrentHashMap<Long, Boolean>()
+    /** album key -> track ids on that album, so a sibling's embedded picture can be borrowed. */
+    private val albumTracks = java.util.concurrent.ConcurrentHashMap<String, List<Pair<Long, String>>>()
+    private val trackAlbumKey = java.util.concurrent.ConcurrentHashMap<Long, String>()
+
+    fun clear() { builtFor = 0; dirSingleAlbum.clear(); albumIdSingle.clear(); albumTracks.clear(); trackAlbumKey.clear() }
+
+    private fun key(t: Track): String {
+        val who = t.albumArtist.ifBlank { t.artist }.trim().lowercase()
+        return t.album.trim().lowercase() + "\u0000" + who
+    }
+
+    @Synchronized
+    private fun build(ctx: Context) {
+        val lib = runCatching { FastLibraryStore.loadSync(ctx) }.getOrNull() ?: return
+        if (lib.isEmpty() || lib.size == builtFor) return
+        val perDir = HashMap<String, MutableSet<String>>()
+        val perAlbumId = HashMap<Long, MutableSet<String>>()
+        val perAlbum = HashMap<String, MutableList<Pair<Long, String>>>()
+        for (t in lib) {
+            if (t.parentId != 0L) continue          // virtual cue cuts share their parent's art
+            val k = key(t)
+            trackAlbumKey[t.id] = k
+            perAlbum.getOrPut(k) { mutableListOf() }.add(t.id to t.path)
+            if (t.path.isNotBlank()) {
+                val dir = t.path.substringBeforeLast('/', "")
+                if (dir.isNotEmpty()) perDir.getOrPut(dir) { mutableSetOf() }.add(k)
+            }
+            if (t.albumId != 0L) perAlbumId.getOrPut(t.albumId) { mutableSetOf() }.add(k)
+        }
+        perDir.forEach { (d, ks) -> dirSingleAlbum[d] = ks.size <= 1 }
+        perAlbumId.forEach { (id, ks) -> albumIdSingle[id] = ks.size <= 1 }
+        perAlbum.forEach { (k, v) -> albumTracks[k] = v }
+        builtFor = lib.size
+    }
+
+    /**
+     * Is the folder holding [trackPath] a single-album folder?
+     *
+     * UNKNOWN (library not loaded, or a path the library has never seen) returns TRUE: that is the
+     * old behavior, and refusing folder art whenever the index is cold would turn a wrongness
+     * problem into a missing-art problem on every cold start.
+     */
+    fun dirIsOneAlbum(ctx: Context, trackPath: String): Boolean {
+        build(ctx)
+        val dir = trackPath.substringBeforeLast('/', "")
+        if (dir.isEmpty()) return true
+        return dirSingleAlbum[dir] ?: true
+    }
+
+    /** Does this MediaStore albumId map to exactly one real album? Unknown = true, as above. */
+    fun albumIdIsOneAlbum(ctx: Context, trackId: Long): Boolean {
+        build(ctx)
+        val lib = runCatching { FastLibraryStore.loadSync(ctx) }.getOrNull() ?: return true
+        val t = lib.firstOrNull { it.id == trackId } ?: return true
+        if (t.albumId == 0L) return true
+        return albumIdSingle[t.albumId] ?: true
+    }
+
+    /** Other tracks on the same album, nearest first, for borrowing an embedded picture. */
+    fun siblings(ctx: Context, trackId: Long, limit: Int = 4): List<Pair<Long, String>> {
+        build(ctx)
+        val k = trackAlbumKey[trackId] ?: return emptyList()
+        return (albumTracks[k] ?: emptyList()).filter { it.first != trackId }.take(limit)
+    }
+}
+
+internal fun clearAlbumScope() = AlbumScope.clear()
+
+/** Borrow the embedded picture from another track on the same album. */
+private fun siblingEmbeddedArt(ctx: Context, trackId: Long, target: Int): Bitmap? {
+    for ((id, path) in AlbumScope.siblings(ctx, trackId)) {
+        val mmr = MediaMetadataRetriever()
+        try {
+            if (path.isNotBlank() && File(path).exists()) mmr.setDataSource(path)
+            else mmr.setDataSource(ctx, ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id))
+            mmr.embeddedPicture?.let { return decodeSampled(it, target) }
+        } catch (_: Throwable) {
+        } finally { try { mmr.release() } catch (_: Throwable) {} }
+    }
+    return null
+}
+
 private val folderArtIndex = java.util.concurrent.ConcurrentHashMap<String, String>()
 
 internal fun clearFolderArtIndex() = folderArtIndex.clear()
@@ -370,8 +506,12 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
             } catch (_: Throwable) {
             } finally { try { mmr.release() } catch (_: Throwable) {} }
 
-            // 2. Secondary Source: Local Folder Cover Art
-            if (bmp == null && trackPath.isNotBlank()) {
+            // 2. Secondary Source: Local Folder Cover Art.
+            // ONLY when the folder holds one album. An artist folder or a compilation dump has one
+            // cover.jpg and handing it to every track in it is exactly the "wrong / duplicated art"
+            // case. See AlbumScope.
+            val folderArtAllowed = trackPath.isNotBlank() && AlbumScope.dirIsOneAlbum(ctx, trackPath)
+            if (bmp == null && folderArtAllowed) {
                 bmp = findFolderArt(trackPath)?.let { full ->
                     val s = maxOf(1, maxOf(full.width, full.height) / THUMB_PX)
                     if (s > 1) Bitmap.createScaledBitmap(full, full.width / s, full.height / s, true) else full
@@ -379,7 +519,7 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
             }
 
             // 2b. Folder art through MediaStore.Images (works without raw SD-card file access)
-            if (bmp == null && trackPath.isNotBlank()) {
+            if (bmp == null && folderArtAllowed) {
                 bmp = findFolderArtViaMediaStore(ctx, trackPath)?.let { full ->
                     val s = maxOf(1, maxOf(full.width, full.height) / THUMB_PX)
                     if (s > 1) Bitmap.createScaledBitmap(full, full.width / s, full.height / s, true) else full
@@ -390,13 +530,21 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
             if (bmp == null && Build.VERSION.SDK_INT >= 29) {
                 try { bmp = ctx.contentResolver.loadThumbnail(uri, Size(THUMB_PX, THUMB_PX), null) } catch (_: Throwable) {}
             }
-            // 4. Platform album art for the whole album (another track's embedded picture may carry it)
-            if (bmp == null) {
+            // 4. Platform album art for the whole album. MediaStore collapses albums that share a
+            // title+artist into ONE albumId, so this is only safe when the library agrees that the
+            // id really is one album; otherwise it is the other half of the duplicated-art problem.
+            if (bmp == null && AlbumScope.albumIdIsOneAlbum(ctx, trackId)) {
                 bmp = loadMediaStoreAlbumArt(ctx, trackId)?.let { full ->
                     val s = maxOf(1, maxOf(full.width, full.height) / THUMB_PX)
                     if (s > 1) Bitmap.createScaledBitmap(full, full.width / s, full.height / s, true) else full
                 }
             }
+
+            // 5. LAST RESORT before giving up: borrow the embedded picture from another track on
+            // the SAME album. A rip where only track 01 carries the artwork is common, and showing
+            // a placeholder for the other eleven tracks of an album we demonstrably have art for is
+            // not acceptable. This is album-scoped, so it cannot leak art between albums.
+            if (bmp == null) bmp = siblingEmbeddedArt(ctx, trackId, THUMB_PX)
 
             val b = bmp
             if (b != null) {

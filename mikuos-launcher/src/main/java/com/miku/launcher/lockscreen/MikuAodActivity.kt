@@ -134,7 +134,7 @@ class MikuAodActivity : ComponentActivity() {
                         Spacer(Modifier.height(16.dp))
                         Text(
                             text = "♪ $npTitle",
-                            color = MikuNeonPink.copy(alpha = 0.9f),
+                            color = MikuNeonPink,
                             fontSize = 17.5.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1

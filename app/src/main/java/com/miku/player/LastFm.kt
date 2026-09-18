@@ -65,6 +65,87 @@ object LastFm {
         }
     }
 
+    // ======================================================= browser (desktop) auth flow
+    //
+    // WHY THIS EXISTS ALONGSIDE login(). auth.getMobileSession above takes the user's Last.fm
+    // ACCOUNT PASSWORD and puts it in the request body. It is over TLS and it is never persisted,
+    // but the app still handles the password, and the only thing standing between that password
+    // and anything else the user owns is our own code being correct. Last.fm's browser flow never
+    // shows us the password at all: we ask for a request token, the user approves that token while
+    // logged in to last.fm in their own browser, and we exchange the approved token for a session
+    // key. Strictly less to get wrong, so this is the path the UI offers first.
+    //
+    // The session key that comes back never expires and is a bearer credential for the account's
+    // scrobbling, so it is stored in the hardware-key-backed encrypted prefs (LastFmPreferences),
+    // the same as the API shared secret.
+
+    sealed class TokenResult {
+        data class Success(val token: String) : TokenResult()
+        data class Failure(val message: String) : TokenResult()
+    }
+
+    /** Step 1: ask Last.fm for a request token. Signed, but no session and no user involved yet. */
+    suspend fun requestAuthToken(): TokenResult = withContext(Dispatchers.IO) {
+        if (!isConfigured) return@withContext TokenResult.Failure("Last.fm isn't configured (missing API key)")
+        val params = sortedMapOf(
+            "method" to "auth.getToken",
+            "api_key" to com.miku.player.scrobble.LastFmCredentials.apiKey()
+        )
+        try {
+            val json = post(params + mapOf("api_sig" to sign(params), "format" to "json"))
+            val t = json.optString("token")
+            if (t.isNotBlank()) TokenResult.Success(t)
+            else TokenResult.Failure(json.optString("message").ifBlank { "Last.fm did not return a token" })
+        } catch (e: Exception) {
+            Log.w(TAG, "auth.getToken failed", e)
+            TokenResult.Failure(e.message ?: "Network error")
+        }
+    }
+
+    /**
+     * Step 2: the page the user approves, in THEIR browser, signed in as themselves.
+     * Nothing secret is in this URL: the api_key is public by design and the token is useless
+     * until they approve it and useless to anyone without the shared secret afterwards.
+     */
+    fun authUrl(token: String): String =
+        "https://www.last.fm/api/auth/?api_key=" +
+            com.miku.player.scrobble.LastFmCredentials.apiKey() + "&token=" + token
+
+    /**
+     * Step 3: exchange the approved token for the session key.
+     *
+     * Fails with a clear message while the token is still unapproved (Last.fm error 14), which is
+     * the normal case if the user comes back before finishing, so the UI can say "approve it first"
+     * instead of "something went wrong".
+     */
+    suspend fun completeAuth(token: String): LoginResult = withContext(Dispatchers.IO) {
+        if (!isConfigured) return@withContext LoginResult.Failure("Last.fm isn't configured (missing API key)")
+        if (token.isBlank()) return@withContext LoginResult.Failure("No pending Last.fm request")
+        val params = sortedMapOf(
+            "method" to "auth.getSession",
+            "token" to token,
+            "api_key" to com.miku.player.scrobble.LastFmCredentials.apiKey()
+        )
+        try {
+            val json = post(params + mapOf("api_sig" to sign(params), "format" to "json"))
+            val session = json.optJSONObject("session")
+            if (session != null) {
+                LoginResult.Success(session.getString("key"), session.getString("name"))
+            } else {
+                val code = json.optInt("error", -1)
+                val msg = when (code) {
+                    14 -> "Approve MikuOS on the Last.fm page first, then tap Finish"
+                    15 -> "That request expired. Start again."
+                    else -> json.optString("message").ifBlank { "Could not finish sign-in" }
+                }
+                LoginResult.Failure(msg)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "auth.getSession failed", e)
+            LoginResult.Failure(e.message ?: "Network error")
+        }
+    }
+
     /** Fire-and-forget "currently playing" ping — shown on the user's Last.fm profile immediately,
      *  does not itself count as a scrobble. */
     fun updateNowPlaying(sk: String, artist: String, track: String, album: String?, durationSec: Int?) {

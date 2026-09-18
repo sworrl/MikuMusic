@@ -1876,6 +1876,11 @@ private fun LockscreenNowPlayingWidget(
                                                 )
                                             )
                                         }
+                                        // Cross-app unlocks are earned from judged taps only —
+                                        // same gate as the scoring above.
+                                        if (accuracy != null) {
+                                            com.miku.launcher.bpm.MikuUnlocks.evaluate(context)
+                                        }
                                         if (miniTapCount >= 6 && miniTappedBpm != null) {
                                             bpmDb.saveTrackBpm(
                                                 com.miku.launcher.bpm.MikuBpmDatabase.TrackBpmRecord(

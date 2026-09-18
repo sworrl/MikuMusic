@@ -605,13 +605,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Misnamed for history: this SHOWS the system bars and makes the app draw underneath them.
+     *
+     * The status bar owns the top 41px of a 720x1280 panel. Miku Music was laid out below it, so
+     * that strip was dead space the app paid for and never used. Edge-to-edge gives the window the
+     * whole panel and lets the stock clock/battery bar bleed over the app's own background, which
+     * is what it is for on a screen this small. FLAG_FULLSCREEN has to be cleared explicitly: an
+     * old theme set it, and while it is set the framework insets the app below the bar no matter
+     * what the insets controller says.
+     */
     private fun hideSystemBars() {
         try {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+            androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
             val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.show(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            // STATUS bar visible (clock/battery bleeding over the app is the point of edge-to-edge
+            // here). NAVIGATION bar HIDDEN: this device's navigation IS the accessibility service's
+            // own home pill, which follows the finger and shifts colour with the art. Showing the
+            // stock one too put a second, dead, all-white pill on screen next to ours. Clearing
+            // FLAG_FULLSCREEN for the status bar is what let it back in.
+            insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+            insetsController.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
             insetsController.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             window.statusBarColor = android.graphics.Color.TRANSPARENT
+            // Android 10+ re-tints a transparent bar with a scrim of its own when it thinks the
+            // content behind it is too busy. We draw our own scrim, so refuse it.
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                window.isStatusBarContrastEnforced = false
+                window.isNavigationBarContrastEnforced = false
+            }
+            // Light art behind the bar would leave black glyphs on black. Force the light glyph set.
+            insetsController.isAppearanceLightStatusBars = false
+            insetsController.isAppearanceLightNavigationBars = false
         } catch (_: Throwable) {}
     }
 
@@ -1348,6 +1376,9 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 canGoBack = canGoBack,
                 onBack = performBack
             )
+            // The one-time Last.fm offer. Arms itself only after 90 seconds of actual playback, so
+            // a fresh install plays music first and asks second. See ScrobbleSetupOffer.
+            com.miku.player.scrobble.ScrobbleSetupOffer(player) { showSettings = true }
             if (artistSel == null && albumSel == null) TabBar(tab) {
                 tab = it
                 PlayerPreferences.saveTab(ctx, it.name)
@@ -2173,7 +2204,7 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                     } else {
                         Text(
                             "m500d daemon listening on port 8787",
-                            color = Muted.copy(alpha = 0.7f),
+                            color = Muted.copy(alpha = 0.85f),
                             fontSize = 10.5.sp
                         )
                     }
@@ -2526,7 +2557,7 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                         Spacer(Modifier.height(8.dp))
                         Text(
                             "Background ingestion running · Zero audio playback stutter.",
-                            color = Color.White.copy(alpha = 0.45f),
+                            color = Color.White.copy(alpha = 0.5f),
                             fontSize = 10.sp
                         )
                     }
@@ -3385,7 +3416,7 @@ private fun MikuSearchBar(
             cursorBrush = androidx.compose.ui.graphics.SolidColor(MikuTealBright),
             decorationBox = { innerTextField ->
                 if (query.isEmpty()) {
-                    Text(placeholder, color = Muted.copy(alpha = 0.7f), fontSize = 13.sp)
+                    Text(placeholder, color = Muted.copy(alpha = 0.85f), fontSize = 13.sp)
                 }
                 innerTextField()
             }
@@ -3663,7 +3694,7 @@ fun MikuEmptyState(
                                     // and the placeholder's "No audio" must never flash here.
                                     if (aQuality.totalTracks > 0) {
                                         Spacer(Modifier.width(6.dp))
-                                        Text("·", color = Muted.copy(alpha = 0.5f), fontSize = 12.sp)
+                                        Text("·", color = Muted.copy(alpha = 0.85f), fontSize = 12.sp)
                                         Spacer(Modifier.width(6.dp))
                                         Text(
                                             aQuality.specTag,
@@ -4051,7 +4082,7 @@ private fun ArtistSortSettingsModal(
                         ) {
                             Box(Modifier.size(108.dp).clip(RoundedCornerShape(14.dp))) {
                                 if (albumRepr != null) {
-                                    AlbumArtImage(trackId = albumRepr.id, modifier = Modifier.fillMaxSize(), trackPath = albumRepr.path)
+                                    AlbumArtImage(trackId = albumRepr.id, modifier = Modifier.fillMaxSize(), trackPath = albumRepr.path, year = albumRepr.year)
                                 } else {
                                     Box(Modifier.fillMaxSize().background(Color(0xFF123438)), contentAlignment = Alignment.Center) {
                                         Icon(Icons.Default.Album, null, tint = MikuTeal.copy(alpha = .6f), modifier = Modifier.size(42.dp))
@@ -4174,7 +4205,7 @@ private fun ArtistSortSettingsModal(
                                     .background(Color(0xFF0F2B2E))
                             ) {
                                 if (reprTrack != null) {
-                                    AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize(), trackPath = reprTrack.path)
+                                    AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize(), trackPath = reprTrack.path, year = reprTrack.year)
                                 } else {
                                     Box(Modifier.fillMaxSize().background(Color(0xFF123438)), contentAlignment = Alignment.Center) {
                                         Icon(Icons.Default.Album, null, tint = MikuTeal.copy(alpha = .6f), modifier = Modifier.size(46.dp))
@@ -4313,7 +4344,7 @@ private fun ArtistSortSettingsModal(
                         // Large Cover Artwork (120x120dp) with Glanceable Quality Crest Overlay
                         Box(Modifier.size(120.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFF0C2B2E))) {
                             if (reprTrack != null) {
-                                AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize(), trackPath = reprTrack.path)
+                                AlbumArtImage(trackId = reprTrack.id, modifier = Modifier.fillMaxSize(), trackPath = reprTrack.path, year = reprTrack.year)
                             } else {
                                 Icon(Icons.Default.Album, null, tint = MikuTeal, modifier = Modifier.size(50.dp).align(Alignment.Center))
                             }
@@ -5048,7 +5079,7 @@ fun AudioQualitySpecLine(
             }
         }
         Spacer(Modifier.width(8.dp))
-        RainbowHeart(LikeStore.isLiked(t.id)) { LikeStore.toggle(ctx, t) }
+        RainbowHeart(LikeStore.isLikedEffective(ctx, t)) { LikeStore.toggleEffective(ctx, t) }
     }
     if (showSheet) TrackActionModalSheet(t) { showSheet = false }
 }
@@ -5070,7 +5101,7 @@ fun AudioQualitySpecLine(
                         t.album + if (t.year > 0) "  ·  ${t.year}" else "",
                         color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                RainbowHeart(LikeStore.isLiked(t.id)) { LikeStore.toggle(ctx, t) }
+                RainbowHeart(LikeStore.isLikedEffective(ctx, t)) { LikeStore.toggleEffective(ctx, t) }
             }
 
             Spacer(Modifier.height(14.dp))
@@ -5364,7 +5395,7 @@ private fun MikuVibePromptCard(
                             if (promptText.isEmpty()) {
                                 Text(
                                     "e.g. Heavy metal riffs, late night drive, 80s anime...",
-                                    color = Color.White.copy(alpha = 0.4f),
+                                    color = Color.White.copy(alpha = 0.5f),
                                     fontSize = 11.5.sp,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
@@ -5685,13 +5716,9 @@ enum class SettingsCategory(val title: String, val icon: String) {
                             ) { com.miku.player.ui.NowPlayingLook.setWavyBar(ctx, it) }
                         }
                         item {
-                            var shaderEngine by remember { mutableStateOf(PlayerPreferences.loadVizEngine(ctx) == "shader") }
-                            SettingsToggleRow(
-                                title = "Miku Shaders visualizer engine",
-                                subtitle = if (ProjectMNative.available) "GLES2 GLSL presets (light, ~5 MB) instead of projectM (native, ~185 MB). Swipe the stage to change presets."
-                                    else "projectM native engine is unavailable on this build — Miku Shaders is always used",
-                                checked = shaderEngine || !ProjectMNative.available
-                            ) { shaderEngine = it; PlayerPreferences.saveVizEngine(ctx, if (it) "shader" else "projectm") }
+                            // The "Miku Shaders" engine toggle is GONE (2026-09-17). There is one visualiser engine now,
+                            // projectM, and the Miku look is delivered as our own .milk presets inside it rather than a
+                            // second GLES2 renderer with its own preset list, its own settings and its own toggle.
                         }
                         item { SettingsSection("Phone Remote") }
                         item { com.miku.player.remote.MikuRemoteSettingsCard(ctx) }
@@ -6886,7 +6913,7 @@ private fun alarmSummary(a: Alarm): String {
                 autoCorrect = false
             ),
             decorationBox = { innerTextField ->
-                if (value.isEmpty()) Text(placeholder, color = Muted.copy(alpha = 0.7f), fontSize = 13.sp)
+                if (value.isEmpty()) Text(placeholder, color = Muted.copy(alpha = 0.85f), fontSize = 13.sp)
                 innerTextField()
             }
         )
@@ -7254,7 +7281,7 @@ object TransportShapes {
                         Modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, top = 3.dp, bottom = 5.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        RainbowHeart(LikeStore.isLiked(track.id), size = 30.dp) { LikeStore.toggle(ctx, track) }
+                        RainbowHeart(LikeStore.isLikedEffective(ctx, track), size = 30.dp) { LikeStore.toggleEffective(ctx, track) }
                         Spacer(Modifier.width(4.dp))
                         Row(
                             Modifier.weight(1f).height(20.dp).clipToBounds(),
