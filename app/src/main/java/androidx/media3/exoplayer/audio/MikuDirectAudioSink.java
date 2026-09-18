@@ -765,11 +765,30 @@ public final class MikuDirectAudioSink implements AudioSink {
     if (outputMode == OUTPUT_MODE_PCM) {
       long deepBufferPromotionBytes = (long) outputPcmFrameSize * outputSampleRate / 10;
       if (bufferSize >= deepBufferPromotionBytes) {
-        bufferSize =
-            max(
-                getAudioTrackMinBufferSize(outputSampleRate, outputChannelConfig, outputEncoding),
-                (int) deepBufferPromotionBytes - outputPcmFrameSize);
+        // Ask for JUST under the promotion threshold. The old code clamped this with
+        // max(getAudioTrackMinBufferSize(), ...) — and on this device the platform minimum
+        // (52056 B @ 48 kHz/24-bit-packed ≈ 181 ms) is nearly DOUBLE the 100 ms threshold
+        // (28800 B), so the clamp always won and deep buffer was promoted every single time.
+        // Measured: flags=0xA00 (deep buffer) and the track landed on a 192 kHz MIXER while the
+        // file was 48 kHz — i.e. resampled, never bit-perfect. We now request the small buffer
+        // even though it is below the reported minimum; buildAudioTrackWithRetry() falls back to
+        // the platform minimum if AudioTrack refuses it, so the worst case is today's behaviour.
+        int bitPerfectBufferSize = (int) deepBufferPromotionBytes - outputPcmFrameSize;
+        if (bitPerfectBufferSize > 0) {
+          bufferSize = bitPerfectBufferSize;
+        }
       }
+      android.util.Log.i(
+          TAG,
+          "BITPERFECT cfg: mode=PCM rate=" + outputSampleRate
+              + " enc=" + outputEncoding
+              + " frameSize=" + outputPcmFrameSize
+              + " bufferSize=" + bufferSize
+              + " deepBufferThreshold=" + deepBufferPromotionBytes
+              + " minBuf=" + getAudioTrackMinBufferSize(outputSampleRate, outputChannelConfig, outputEncoding)
+              + " underThreshold=" + (bufferSize < deepBufferPromotionBytes));
+    } else {
+      android.util.Log.i(TAG, "BITPERFECT cfg: mode=" + outputMode + " (NOT PCM - buffer trick skipped)");
     }
     offloadDisabledUntilNextConfiguration = false;
     Configuration pendingConfiguration =
@@ -1031,6 +1050,29 @@ public final class MikuDirectAudioSink implements AudioSink {
     try {
       return buildAudioTrack(checkNotNull(configuration));
     } catch (InitializationException initialFailure) {
+      // BIT-PERFECT FALLBACK: we deliberately request a buffer below the platform minimum so the
+      // framework does not promote the track to deep buffer (which forces the mixer path and
+      // kills bit-perfect output). If AudioTrack refuses that size, fall back to the reported
+      // minimum — playback then works exactly as it did before this change.
+      if (configuration.outputMode == OUTPUT_MODE_PCM) {
+        int platformMin =
+            getAudioTrackMinBufferSize(
+                configuration.outputSampleRate,
+                configuration.outputChannelConfig,
+                configuration.outputEncoding);
+        if (platformMin > configuration.bufferSize) {
+          Configuration minConfiguration = configuration.copyWithBufferSize(platformMin);
+          try {
+            AudioTrack audioTrack = buildAudioTrack(minConfiguration);
+            configuration = minConfiguration;
+            android.util.Log.w(
+                TAG, "BITPERFECT: small buffer refused, fell back to platform min " + platformMin);
+            return audioTrack;
+          } catch (InitializationException minFailure) {
+            initialFailure.addSuppressed(minFailure);
+          }
+        }
+      }
       // Retry with a smaller buffer size.
       if (configuration.bufferSize > AUDIO_TRACK_SMALLER_BUFFER_RETRY_SIZE) {
         Configuration retryConfiguration =

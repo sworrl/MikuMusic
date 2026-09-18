@@ -85,7 +85,22 @@ object CirrusLogicManager {
         // Intentionally empty - see KDoc.
     }
 
+    /**
+     * Nodes SELinux refuses us, remembered for the life of the process.
+     *
+     * These sysfs files are denied to our domain (avc: denied { read } ... scontext=platform_app
+     * tcontext=sysfs). The policy cannot change while we run, so a failure is permanent — but this
+     * retried on EVERY call, and each attempt costs a kernel audit record. Measured on-device:
+     * ~120 denials/second streaming into logcat and the player burning ~44% of a core while idle
+     * with the screen off, which is what made lists scroll at a few frames per second.
+     * Probe once per node, then never again.
+     */
+    private val unreadableNodes = java.util.Collections.newSetFromMap(
+        java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+    )
+
     private fun readSysfs(node: String): String? {
+        if (node in unreadableNodes) return null
         try {
             val file = File("$SYSFS_BASE/$node")
             if (file.exists()) {
@@ -95,6 +110,7 @@ object CirrusLogicManager {
         } catch (_: Throwable) {}
         // No su fallback: the node is either world-readable (handled above) or it is not readable
         // by this app at all, and null is the honest answer - the audit UI renders it as "-".
+        unreadableNodes.add(node)
         return null
     }
 
