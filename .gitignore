@@ -95,3 +95,7 @@ optional_apks/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Qualcomm's FM JNI library, pulled off the device. Theirs, not ours, and the FM
+# path does not work anyway (SELinux denies /dev/radio0 to a platform_app).
+fmradio/src/main/jniLibs/
