@@ -170,15 +170,21 @@ object MikuIngestEngine {
         if (!mediaReceiverRegistered) {
             mediaReceiverRegistered = true
             try {
+                // ONLY a real new-storage event. ACTION_MEDIA_SCANNER_FINISHED was in this filter
+                // and it is a FEEDBACK EDGE: our force scan runs MediaScanner, MediaScanner finishing
+                // broadcasts SCANNER_FINISHED, we scheduled another force scan, and so on forever —
+                // a self-sustaining rescan every ~8 s that pinned com.android.providers.media.module
+                // and hammered the SD card with I/O. The isScanning guard could never catch it: the
+                // scan has already COMPLETED (that is what sent the broadcast) by the time the
+                // debounce elapses. Introduced 2026-09-13, removed 2026-09-17.
                 val filter = android.content.IntentFilter().apply {
                     addAction(Intent.ACTION_MEDIA_MOUNTED)
-                    addAction(Intent.ACTION_MEDIA_SCANNER_FINISHED)
                     addDataScheme("file")
                 }
                 val receiver = object : android.content.BroadcastReceiver() {
                     override fun onReceive(c: Context?, intent: Intent?) {
                         val action = intent?.action ?: return
-                        log("Storage event ${action.substringAfterLast('.')} · scheduling automatic force scan")
+                        log("Storage mounted · scheduling automatic force scan")
                         scheduleAutoForceScan(appContext, "storage:${action.substringAfterLast('.')}")
                     }
                 }
@@ -200,6 +206,14 @@ object MikuIngestEngine {
         autoScanDebounceJob = scope.launch {
             delay(if (reason.startsWith("storage")) 8_000L else 20_000L)   // let the platform scanner / boot settle
             if (_state.value.isScanning) { log("Auto scan ($reason) skipped · a scan is already running"); return@launch }
+            // The interval gates EVERY path, mounts included. Previously only the "daily" path
+            // consulted it, so a repeating storage event could rescan without limit.
+            val since = System.currentTimeMillis() -
+                appContext.getSharedPreferences(AUTO_PREFS, Context.MODE_PRIVATE).getLong(KEY_LAST_AUTO_SCAN, 0L)
+            if (since < AUTO_SCAN_INTERVAL_MS) {
+                log("Auto scan ($reason) skipped · last was ${since / 60_000} min ago")
+                return@launch
+            }
             appContext.getSharedPreferences(AUTO_PREFS, Context.MODE_PRIVATE).edit()
                 .putLong(KEY_LAST_AUTO_SCAN, System.currentTimeMillis()).apply()
             log("AUTO FORCE SCAN ($reason)")
