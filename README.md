@@ -106,7 +106,7 @@ is also why volume behaves differently there than through the mixer.
 | **Library** | Songs, albums, artists, genres, folders, playlists. Per-track true sample rate and bit depth read from the file |
 | **Now Playing** | Full-bleed art, wavy scrubber, dynamic palette taken from the album, a track-facts strip that only shows facts it has |
 | **Visualizer** | Real libprojectM 4.2.0, 80 Miku presets plus whatever else you drop in, swipe to change, fullscreen |
-| **Tape mode** | A spec-exact Compact Cassette deck. Real IEC 60094-7 millimetre geometry, wound-pack physics, wow and flutter, 18 shell themes |
+| **Tape mode** | A spec-exact Compact Cassette deck. Real IEC 60094-7 millimeter geometry, wound-pack physics, wow and flutter, 18 shell themes |
 | **Likes** | Track, album and artist hearts. An album like covers every track on it unless you explicitly refuse one |
 | **Taste engine** | Affinity model and a co-occurrence graph over your own listening. Miku Radio station mode, optional smart shuffle |
 | **Listening stats** | A local play database and a Miku Rewind recap. Yours, on device |
@@ -144,14 +144,14 @@ point the app at any folder of `.milk` files.
 
 A cassette deck drawn from the actual Philips/IEC spec, not from a photo of one.
 
-Shell 101.6 x 63.5mm, hub centres 42.5mm apart, 8.5mm splined spindle holes, an 11.4 to 24.5mm
+Shell 101.6 x 63.5mm, hub centers 42.5mm apart, 8.5mm splined spindle holes, an 11.4 to 24.5mm
 wound pack radius. The reels turn at the rate the tape is actually moving, so the supply reel
 empties and the take-up reel fills at the correct changing angular velocity. There is wow at about
 0.7Hz from pack eccentricity and flutter at about 12Hz from guide friction, scaled by the grade of
 the stock, because a good metal tape on a good transport barely wanders and a cheap ferric one
 audibly does.
 
-Eighteen shells, each a real design convention rather than a colourway: hub styles, notch layouts,
+Eighteen shells, each a real design convention rather than a color scheme: hub styles, notch layouts,
 window variants, wear cues. Three of them are earned in the BPM game.
 
 Volume in tape mode is the deck's own fader, permanently on the shell with a twelve-segment LED
@@ -283,7 +283,7 @@ is not there, show a dash and say why. Several passes of this codebase have been
 exactly that kind of thing and it is not going back in.
 
 Beyond that: match the surrounding code, comment the WHY rather than the what, and if you fix a
-non-obvious platform behaviour, write down what the platform actually does so the next person does
+non-obvious platform behavior, write down what the platform actually does so the next person does
 not have to rediscover it.
 
 ---
