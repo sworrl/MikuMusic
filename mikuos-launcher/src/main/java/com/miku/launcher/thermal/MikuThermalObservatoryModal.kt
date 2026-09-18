@@ -94,8 +94,11 @@ fun MikuThermalObservatoryModal(
                         if (tempFile.exists() && tempFile.canRead()) {
                             val rawText = tempFile.readText().trim()
                             val rawTemp = rawText.toFloatOrNull() ?: continue
-                            // Valid reading check (filter disconnected sensors like -40000)
-                            if (rawTemp <= 0f && rawTemp < -20000f) continue
+                            // Valid reading check (filter disconnected sensors, which report 0
+                            // or a sentinel like -40000). Was `&&`: since rawTemp < -20000f
+                            // already implies rawTemp <= 0f, the conjunction collapsed to the
+                            // -20000 test and a sensor reporting exactly 0 was never rejected here.
+                            if (rawTemp <= 0f || rawTemp < -20000f) continue
 
                             val degC = if (rawTemp > 1000f) rawTemp / 1000f else rawTemp
                             if (degC !in 10f..115f) continue

@@ -30,15 +30,33 @@ object UsbDacManager {
             .invoke(null, key) as? String)?.trim()?.takeIf { it.isNotEmpty() }
     } catch (_: Throwable) { null }
 
-    fun getSampleRate(ctx: Context): Int {
+    const val DEFAULT_SAMPLE_RATE = 192000
+    const val DEFAULT_BIT_DEPTH = 32
+
+    /**
+     * The rate the user actually picked, or null if they never picked one. UI must use this:
+     * [getSampleRate] hands back [DEFAULT_SAMPLE_RATE] for an unset preference, and the settings
+     * screen was highlighting the 192k chip as a live selection before any choice had been made.
+     */
+    fun getSampleRateOrNull(ctx: Context): Int? {
         val sp = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return sp.getInt(KEY_SAMPLE_RATE, 192000)
+        return if (sp.contains(KEY_SAMPLE_RATE)) sp.getInt(KEY_SAMPLE_RATE, DEFAULT_SAMPLE_RATE) else null
     }
 
-    fun getBitDepth(ctx: Context): Int {
+    /** The bit depth the user actually picked, or null if they never picked one. See [getSampleRateOrNull]. */
+    fun getBitDepthOrNull(ctx: Context): Int? {
         val sp = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return sp.getInt(KEY_BIT_DEPTH, 32)
+        return if (sp.contains(KEY_BIT_DEPTH)) sp.getInt(KEY_BIT_DEPTH, DEFAULT_BIT_DEPTH) else null
     }
+
+    /**
+     * Effective rate used when programming the UAC2 gadget: the user's choice, else the build
+     * default. NOT a statement that the user selected it — display surfaces want [getSampleRateOrNull].
+     */
+    fun getSampleRate(ctx: Context): Int = getSampleRateOrNull(ctx) ?: DEFAULT_SAMPLE_RATE
+
+    /** Effective bit depth used when programming the gadget. See [getSampleRate]. */
+    fun getBitDepth(ctx: Context): Int = getBitDepthOrNull(ctx) ?: DEFAULT_BIT_DEPTH
 
     suspend fun setUsbDacMode(ctx: Context, enable: Boolean) = withContext(Dispatchers.IO) {
         val sp = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

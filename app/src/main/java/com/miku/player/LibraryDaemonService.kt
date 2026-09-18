@@ -66,7 +66,28 @@ class LibraryDaemonService : Service() {
             }
         }
 
-        syncLibrary("Initial background sync")
+        // PERF (cold start): MainActivity.onCreate() starts this service and then immediately runs
+        // its OWN full MediaStore sweep (queryTracks) for the UI. Both walk the same ~11k rows and
+        // File.exists()-stat every one of them, at the same time, on the same shared coroutine
+        // worker pool — duplicated work landing in exactly the window the app is trying to draw its
+        // first frame. Hold the initial sync back briefly, then skip it outright if a full query
+        // already completed in this process meanwhile: that query's result is written to the very
+        // FastLibraryStore this sync exists to refresh, so repeating it changes nothing. When the
+        // daemon runs alone (app closed, boot), no UI query ever arrives and it syncs exactly as
+        // before, just a few seconds later. Real library changes still sync immediately — the
+        // MediaStore ContentObserver registered above is untouched.
+        scope.launch {
+            delay(INITIAL_SYNC_DEFER_MS)
+            val since = FastLibraryStore.msSinceFullQuery()
+            val uiCount = FastLibraryStore.lastFullQueryCount()
+            if (since <= INITIAL_SYNC_SKIP_WINDOW_MS && uiCount > 0) {
+                lastTrackCount = uiCount
+                Log.i(TAG, "Initial sync skipped — a full library query landed ${since}ms ago ($uiCount tracks)")
+                updateNotification("Monitoring $uiCount tracks · Live audio sync")
+            } else {
+                syncLibrary("Initial background sync")
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -106,6 +127,9 @@ class LibraryDaemonService : Service() {
             try {
                 updateNotification("Syncing audio library…")
                 val tracks = queryTracksFast()
+                // Stamp it for the other direction too: a sweep done here means a UI launch a
+                // moment later doesn't need this one repeated on its behalf.
+                FastLibraryStore.noteFullQuery(tracks.size)
                 val countChanged = lastTrackCount != tracks.size
                 lastTrackCount = tracks.size
 
@@ -287,6 +311,12 @@ class LibraryDaemonService : Service() {
         const val CHANNEL_ID = "miku_library_daemon_channel"
         const val NOTIFICATION_ID = 8839
         const val ACTION_FORCE_SYNC = "com.miku.player.action.DAEMON_FORCE_SYNC"
+
+        /** How long the initial background sync waits before deciding whether it is still needed —
+         *  long enough for a co-launching MainActivity's own full query to finish and stamp itself. */
+        private const val INITIAL_SYNC_DEFER_MS = 6_000L
+        /** A full library query newer than this makes the initial sync redundant. */
+        private const val INITIAL_SYNC_SKIP_WINDOW_MS = 60_000L
 
         fun start(ctx: Context) {
             try {

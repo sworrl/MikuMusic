@@ -5015,12 +5015,23 @@ private fun CyberShadeSoundboardSection(
     var gainMode by remember { mutableStateOf(CirrusLogicManager.getGainMode(ctx)) }
     var filterMode by remember { mutableStateOf(CirrusLogicManager.getDigitalFilter(ctx)) }
     var dreEnabled by remember { mutableStateOf(CirrusLogicManager.isDreEnabled(ctx)) }
-    // The getters above fall back to a preset (HIGH / FAST_LINEAR / false) so the tiles have a
-    // selection to toggle. These say whether that selection was ever actually READ from a real
-    // source — if not, the tile subtitle shows "—" instead of asserting "HIGH (+6dB)".
-    var gainKnown by remember { mutableStateOf(CirrusLogicManager.getGainModeOrNull(ctx) != null) }
-    var filterKnown by remember { mutableStateOf(CirrusLogicManager.getDigitalFilterOrNull(ctx) != null) }
-    var dreKnown by remember { mutableStateOf(CirrusLogicManager.isDreEnabledOrNull(ctx) != null) }
+    // Provenance of each tile's value, not a bare "known" boolean. These used to be set to `true`
+    // the instant the user tapped, which claimed the DAC had been verified when all that had
+    // happened was a write attempt (and on MikuOS the sysfs write needs su and normally fails).
+    // null = nothing reports it; USER_REQUEST = only our own saved request; SYSFS/VENDOR_SETTING =
+    // a real read. Tapping sets USER_REQUEST, and the real source is re-read after the apply.
+    var gainSource by remember { mutableStateOf(CirrusLogicManager.readGainMode(ctx)?.source) }
+    var filterSource by remember { mutableStateOf(CirrusLogicManager.readDigitalFilter(ctx)?.source) }
+    var dreSource by remember { mutableStateOf(CirrusLogicManager.readDre(ctx)?.source) }
+    val gainKnown = gainSource != null
+    val filterKnown = filterSource != null
+    val dreKnown = dreSource != null
+    fun sourceNote(src: CirrusLogicManager.Source?): String = when (src) {
+        CirrusLogicManager.Source.SYSFS -> ""
+        CirrusLogicManager.Source.VENDOR_SETTING -> "  (HAL setting)"
+        CirrusLogicManager.Source.USER_REQUEST -> "  (requested, unverified)"
+        null -> ""
+    }
     // Real saved Pulsar mode, not an assumed "on". The M500's RGB indicator is non-functional on
     // this unit (SELinux-locked, no consumer LED service), so this is only the stored preference.
     var pulsarMode by remember { mutableStateOf(runCatching { PulsarLight.getMode(ctx) }.getOrDefault(PulsarLight.Mode.OFF)) }
@@ -5044,16 +5055,23 @@ private fun CyberShadeSoundboardSection(
                 modifier = Modifier.weight(1f),
                 title = "MASTER DYN / GAIN",
                 subtitle = if (!gainKnown) "—  (gain not readable)"
-                    else if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH" else "LOW",
+                    else (if (gainMode == CirrusLogicManager.GainMode.HIGH) "HIGH" else "LOW") + sourceNote(gainSource),
                 icon = Icons.Default.VolumeUp,
                 accentColor = if (gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH) MikuNeonPink else MikuCyan,
                 isActive = gainKnown && gainMode == CirrusLogicManager.GainMode.HIGH,
                 onClick = {
                     val next = if (gainMode == CirrusLogicManager.GainMode.LOW) CirrusLogicManager.GainMode.HIGH else CirrusLogicManager.GainMode.LOW
                     gainMode = next
-                    gainKnown = true
+                    // A tap is a REQUEST, never a verified hardware state.
+                    gainSource = CirrusLogicManager.Source.USER_REQUEST
                     scope.launch(Dispatchers.IO) {
                         CirrusLogicManager.setGainMode(ctx, next)
+                        // Re-read after the apply and report whatever really answers now.
+                        val back = CirrusLogicManager.readGainMode(ctx)
+                        withContext(Dispatchers.Main) {
+                            gainSource = back?.source
+                            if (back != null) gainMode = back.value
+                        }
                     }
                 }
             )
@@ -5061,17 +5079,24 @@ private fun CyberShadeSoundboardSection(
             CyberQuickTile(
                 modifier = Modifier.weight(1f),
                 title = "VOCAL FILTER",
-                subtitle = if (filterKnown) filterMode.label else "—  (filter not readable)",
+                subtitle = if (filterKnown) filterMode.label + sourceNote(filterSource) else "—  (filter not readable)",
                 icon = Icons.Default.Tune,
                 accentColor = MikuCyan,
-                isActive = filterKnown,
+                // Only a real read lights the tile; a value we merely requested must not.
+                isActive = filterSource == CirrusLogicManager.Source.SYSFS ||
+                    filterSource == CirrusLogicManager.Source.VENDOR_SETTING,
                 onClick = {
                     val all = CirrusLogicManager.DigitalFilter.values()
                     val next = all[(filterMode.ordinal + 1) % all.size]
                     filterMode = next
-                    filterKnown = true
+                    filterSource = CirrusLogicManager.Source.USER_REQUEST
                     scope.launch(Dispatchers.IO) {
                         CirrusLogicManager.setDigitalFilter(ctx, next)
+                        val back = CirrusLogicManager.readDigitalFilter(ctx)
+                        withContext(Dispatchers.Main) {
+                            filterSource = back?.source
+                            if (back != null) filterMode = back.value
+                        }
                     }
                 }
             )
@@ -5111,15 +5136,21 @@ private fun CyberShadeSoundboardSection(
                 modifier = Modifier.weight(1f),
                 title = "DRE (DYNAMIC RANGE)",
                 subtitle = if (!dreKnown) "—  (DRE not readable)"
-                    else if (dreEnabled) "ON" else "OFF",
+                    else (if (dreEnabled) "ON" else "OFF") + sourceNote(dreSource),
                 icon = Icons.Default.Headphones,
                 accentColor = com.miku.launcher.ui.MikuIdentity.Leek,
                 isActive = dreKnown && dreEnabled,
                 onClick = {
-                    dreEnabled = !dreEnabled
-                    dreKnown = true
+                    val next = !dreEnabled
+                    dreEnabled = next
+                    dreSource = CirrusLogicManager.Source.USER_REQUEST
                     scope.launch(Dispatchers.IO) {
-                        CirrusLogicManager.setDreEnabled(ctx, dreEnabled)
+                        CirrusLogicManager.setDreEnabled(ctx, next)
+                        val back = CirrusLogicManager.readDre(ctx)
+                        withContext(Dispatchers.Main) {
+                            dreSource = back?.source
+                            if (back != null) dreEnabled = back.value
+                        }
                     }
                 }
             )

@@ -852,7 +852,11 @@ class MainActivity : ComponentActivity() {
         }
         PlayerPreferences.flushTrackNumbers(this) // one batched write for every saveTrackNumber() call made during this pass, not one per track
         // Whole-CD image rips: flag + label, split into virtual tracks where a cue sheet allows.
-        return DiscImage.apply(this, out)
+        val result = DiscImage.apply(this, out)
+        // PERF (cold start): stamp this sweep so LibraryDaemonService can skip its own identical
+        // "initial background sync" query — the two used to run concurrently on every launch.
+        FastLibraryStore.noteFullQuery(result.size)
+        return result
     }
 }
 

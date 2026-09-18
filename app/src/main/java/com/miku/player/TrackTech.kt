@@ -17,12 +17,15 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Per-track technical info (bit depth + sample rate) that MediaStore doesn't provide. FLAC/WAV
@@ -53,10 +56,69 @@ object TrackTech {
     private val cache = mutableStateMapOf<Long, Tech>()
     private val mainH = Handler(Looper.getMainLooper())
     private val inFlight = HashSet<Long>()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // PERF (scroll jank, 2026-09-17): the probe scope used to be plain Dispatchers.IO, i.e. pool
+    // threads at NORMAL priority. Header parsing + MediaExtractor + the JSON cache rewrite then
+    // competed with the UI thread for CPU on a 4-little-core 665 exactly while the user was
+    // flinging a list. Dedicated 2-thread pool pinned to THREAD_PRIORITY_BACKGROUND (the Linux
+    // bg cgroup) instead: identical work, but the scheduler now always prefers the UI thread.
+    private val probeExecutor = Executors.newFixedThreadPool(2) { r ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "miku-tech-probe").apply { isDaemon = true }
+    }
+    private val scope = CoroutineScope(SupervisorJob() + probeExecutor.asCoroutineDispatcher())
     private val ioGate = Semaphore(2)   // never hammer the SD card
     private var cacheFile: File? = null
+    /** Application context captured on first use — lets a deferred probe start later without the
+     *  caller having to hand a Context back in. */
+    @Volatile private var appCtx: Context? = null
     @Volatile private var loaded = false
+
+    // ---------------------------------------------------------------------------------------
+    // Scroll gate (PERF, 2026-09-17)
+    // ---------------------------------------------------------------------------------------
+    // Before: every row scrolled into view called techFor(), which for an unprobed lossless file
+    // launched an IO coroutine ON THE SPOT — from the main thread, inside composition. A single
+    // fling through a few thousand rows therefore queued a few thousand coroutines (plus a
+    // synchronized(inFlight) per row) while the fling was still running, and then spent minutes
+    // grinding the SD card afterwards. Now a probe asked for WHILE A LIST IS SCROLLING is only
+    // recorded, and the recorded set is drained the moment scrolling stops. The set keeps at most
+    // DEFERRED_CAP of the MOST RECENT requests, which is exactly the tail of the fling — i.e.
+    // what actually ended up on screen — so a long fling can no longer leave an unbounded
+    // backlog behind it. Nothing is lost permanently: a dropped id is re-requested the next time
+    // that row composes.
+    private val scrollDepth = AtomicInteger(0)
+    private const val DEFERRED_CAP = 600
+    private val deferred = LinkedHashMap<Long, Track>()
+
+    /** A library list started scrolling. Reference-counted: two lists can be alive at once
+     *  (AnimatedContent keeps the outgoing screen mounted through the transition). */
+    fun beginScroll() { scrollDepth.incrementAndGet() }
+
+    /** A library list stopped scrolling — drain whatever was asked for during the fling. */
+    fun endScroll() {
+        if (scrollDepth.decrementAndGet() > 0) return
+        scrollDepth.set(0)
+        val pending: List<Track>
+        synchronized(deferred) {
+            if (deferred.isEmpty()) return
+            pending = deferred.values.toList()
+            deferred.clear()
+        }
+        for (t in pending) startProbe(t)
+    }
+
+    private fun deferProbe(track: Track) {
+        synchronized(deferred) {
+            deferred.remove(track.id)          // re-insert so it counts as the most recent request
+            deferred[track.id] = track
+            while (deferred.size > DEFERRED_CAP) {
+                val eldest = deferred.keys.iterator()
+                eldest.next(); eldest.remove()
+            }
+        }
+    }
 
     private fun isMain(): Boolean = Looper.myLooper() == Looper.getMainLooper()
 
@@ -65,10 +127,12 @@ object TrackTech {
      *  be the one writing it. */
     private fun publish(id: Long, t: Tech) {
         data[id] = t
+        techVersion.incrementAndGet()   // lets cached group breakdowns know they're worth redoing
         mainH.post { cache[id] = t }
     }
 
     private fun ensureLoaded(ctx: Context) {
+        if (appCtx == null) appCtx = ctx.applicationContext
         if (loaded) return
         synchronized(this) {
             if (loaded) return
@@ -157,7 +221,20 @@ object TrackTech {
         // Lossy: answer immediately and remember it. The answer is returned from the local value,
         // never read back out of the (asynchronously mirrored) Compose map.
         if (!lossless) { val t = Tech(0, 0); publish(track.id, t); return t }
-        synchronized(inFlight) { if (!inFlight.add(track.id)) return null }
+        // PERF: while a list is being flung, record the request instead of launching an IO
+        // coroutine per row from inside composition (see the scroll gate above). endScroll()
+        // drains it, publish() then wakes the row through its `cache[track.id]` snapshot read.
+        if (scrollDepth.get() > 0) { deferProbe(track); return null }
+        startProbe(track)
+        return null
+    }
+
+    /** Queue the real header probe for one track (no-op if one is already in flight). The
+     *  application context is captured once by [ensureLoaded]'s caller, so this needs no Context:
+     *  it reuses [appCtx], which is set the first time anything asks for a track's tech. */
+    private fun startProbe(track: Track) {
+        val ctx = appCtx ?: return
+        synchronized(inFlight) { if (!inFlight.add(track.id)) return }
         scope.launch {
             ioGate.withPermit {
                 val t = runCatching { probe(ctx, track) }.getOrNull() ?: Tech(0, 0)
@@ -166,7 +243,6 @@ object TrackTech {
                 schedulePersist()
             }
         }
-        return null
     }
 
     private fun probe(ctx: Context, track: Track): Tech {
@@ -459,16 +535,89 @@ object TrackTech {
      * Computes exact breakdown fractions for Master (192k+/32-bit/DSD), Studio Hi-Res (24-bit/96k),
      * CD Lossless (16-bit/44.1k), and Lossy (MP3/AAC).
      */
-    fun computeQualityBreakdown(ctx: Context, tracks: List<Track>): QualityBreakdown {
-        if (tracks.isEmpty()) {
-            return QualityBreakdown(
-                maxBits = 0, maxSampleRateHz = 0, maxBitrateKbps = 0, dominantFormat = "FLAC",
-                totalTracks = 0, masterCount = 0, studioHiResCount = 0, cdLosslessCount = 0,
-                lossyCount = 0, masterFraction = 0f, studioHiResFraction = 0f, cdLosslessFraction = 0f,
-                lossyFraction = 0f, highestTier = 1, summaryTag = "Standard", detailSummary = "No tracks",
-                specTag = "No audio", badgeSymbol = "♪", isVinylRip = false
-            )
+    /** The "nothing to say yet" breakdown. Every consumer already early-returns on
+     *  `totalTracks == 0`, so this doubles as the placeholder [qualityForGroup] hands back while a
+     *  real one is still being computed off the main thread. Shared instance: it used to be
+     *  rebuilt on every empty call. */
+    val EMPTY_QUALITY = QualityBreakdown(
+        maxBits = 0, maxSampleRateHz = 0, maxBitrateKbps = 0, dominantFormat = "FLAC",
+        totalTracks = 0, masterCount = 0, studioHiResCount = 0, cdLosslessCount = 0,
+        lossyCount = 0, masterFraction = 0f, studioHiResFraction = 0f, cdLosslessFraction = 0f,
+        lossyFraction = 0f, highestTier = 1, summaryTag = "Standard", detailSummary = "No tracks",
+        specTag = "No audio", badgeSymbol = "♪", isVinylRip = false
+    )
+
+    // ---------------------------------------------------------------------------------------
+    // Group-level quality cache (PERF, 2026-09-17)
+    // ---------------------------------------------------------------------------------------
+    // computeQualityBreakdown() is O(tracks-in-the-group) and allocation-heavy (a format string
+    // per track, a counting map per call). Artist rows and album tiles were calling it straight
+    // from their item bodies inside `remember(group.tracks) { ... }` — which survives a
+    // recomposition but NOT scrolling out of and back into view, so on a fling every row
+    // re-walked its whole track list ON THE MAIN THREAD. For a prolific artist that is hundreds
+    // of tracks per row, per bind. Worse, running on the main thread made techFor() register a
+    // Compose snapshot read for EVERY track in the group, so one probe landing invalidated every
+    // row containing that track, and it launched the probe coroutines from inside composition.
+    //
+    // Now: rows call [qualityForGroup], which is a map lookup. A miss schedules the real pass on
+    // the background probe pool and returns EMPTY_QUALITY (renders as "nothing yet", the same
+    // state the row already showed before its badges resolved); when it lands, the row wakes
+    // through the `qMirror` snapshot read below. Keyed on the IDENTITY of the track list, which
+    // is stable for as long as the group object is (i.e. until a rescan replaces it) and is
+    // verified by reference before a cached value is handed back, so a hash collision can only
+    // cost an extra recompute, never show the wrong badge.
+    private class GroupQuality(
+        val tracks: List<Track>,
+        val breakdown: QualityBreakdown,
+        /** [techVersion] at the time this was computed — a later value means new per-track tech
+         *  has landed since, so the figures are worth recomputing. */
+        val version: Int,
+        val computedAt: Long
+    )
+
+    private val qData = ConcurrentHashMap<Int, GroupQuality>()
+    private val qMirror = mutableStateMapOf<Int, QualityBreakdown>()
+    private val qInFlight = HashSet<Int>()
+    /** Bumped by [publish] whenever a track's bit depth / sample rate resolves. */
+    private val techVersion = AtomicInteger(0)
+    private const val Q_REFRESH_MIN_MS = 1200L
+
+    fun qualityForGroup(ctx: Context, tracks: List<Track>): QualityBreakdown {
+        if (tracks.isEmpty()) return EMPTY_QUALITY
+        val key = System.identityHashCode(tracks)
+        // Snapshot read (main thread only) so the row recomposes when the real value lands.
+        if (isMain()) qMirror[key]
+        val app = ctx.applicationContext
+        val hit = qData[key]
+        if (hit != null && hit.tracks === tracks) {
+            val stale = hit.version != techVersion.get() &&
+                System.currentTimeMillis() - hit.computedAt > Q_REFRESH_MIN_MS
+            // Keep showing the value we have (no flicker back to "unknown") and refresh behind it.
+            if (stale) scheduleGroupQuality(app, key, tracks)
+            return hit.breakdown
         }
+        scheduleGroupQuality(app, key, tracks)
+        return EMPTY_QUALITY
+    }
+
+    private fun scheduleGroupQuality(app: Context, key: Int, tracks: List<Track>) {
+        synchronized(qInFlight) { if (!qInFlight.add(key)) return }
+        scope.launch {
+            val v = techVersion.get()
+            val bd = runCatching { computeQualityBreakdown(app, tracks) }.getOrDefault(EMPTY_QUALITY)
+            if (qData.size > 4000) qData.clear()   // a few rescans' worth of dead group lists
+            qData[key] = GroupQuality(tracks, bd, v, System.currentTimeMillis())
+            mainH.post { qMirror[key] = bd }
+            synchronized(qInFlight) { qInFlight.remove(key) }
+        }
+    }
+
+    /** Formats whose presence alone means "master tier" — hoisted out of the per-track loop in
+     *  [computeQualityBreakdown], where it used to allocate a fresh List on every single track. */
+    private val MASTER_FORMATS = setOf("DSD", "DSF", "DFF")
+
+    fun computeQualityBreakdown(ctx: Context, tracks: List<Track>): QualityBreakdown {
+        if (tracks.isEmpty()) return EMPTY_QUALITY
 
         var maxBits = 0
         var maxSr = 0
@@ -496,7 +645,7 @@ object TrackTech {
 
             val isLossless = formatTier(t.mime) >= 3
             when {
-                sr >= 176400 || bits >= 32 || fmt in listOf("DSD", "DSF", "DFF") -> master++
+                sr >= 176400 || bits >= 32 || fmt in MASTER_FORMATS -> master++
                 sr >= 88200 || bits >= 24 -> studio++
                 isLossless -> cd++
                 else -> lossy++

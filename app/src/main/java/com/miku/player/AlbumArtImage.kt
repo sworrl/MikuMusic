@@ -56,7 +56,15 @@ object AlbumArtCache {
     private const val MISS_TTL_MS = 5 * 60_000L
     private val misses = java.util.concurrent.ConcurrentHashMap<String, Long>()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val gate = Semaphore(4)
+    // PERF: this limiter existed but was only ever applied around [prewarm]'s own loop — the path
+    // every on-screen AlbumArtImage actually takes (loadArtThumb) was completely UNBOUNDED. On a
+    // cold start that meant the prewarm batch plus every art tile the first screen composes all
+    // firing MediaMetadataRetriever + full-size bitmap decodes + WebP encodes at once on the
+    // shared coroutine worker pool: heavy CPU and heavy short-lived allocation exactly while the
+    // app is trying to draw. It is enforced inside loadArtThumb now (see `artGate` usage there),
+    // so it actually bounds the bulk work instead of one caller. There is only ever one prewarm
+    // coroutine, so it can hold at most one of the four permits — visible art is never starved.
+    internal val gate = Semaphore(4)
     @Volatile private var prewarmed = false
 
     fun get(id: Long): ImageBitmap? = mem.get("$id")
@@ -76,16 +84,24 @@ object AlbumArtCache {
         prewarmed = true
         val app = ctx.applicationContext
         scope.launch {
+            // PERF: this speculative batch used to start the instant the library list was known —
+            // i.e. in the middle of cold start, competing with the art the user can actually SEE
+            // and with the library grouping passes. The sample is the first `memWarm` tracks by
+            // title, which is almost never what the first screen shows, so nothing on screen
+            // depends on it. Same work, same tracks, just held until the launch burst is over.
+            // (loadArtThumb now takes the concurrency permit itself — see `gate` above.)
+            kotlinx.coroutines.delay(PREWARM_DELAY_MS)
             val sample = tracks.take(memWarm)
             sample.forEach { tr ->
-                gate.withPermit {
-                    try {
-                        loadArtThumb(app, tr.id, tr.path)
-                    } catch (_: Throwable) {}
-                }
+                try {
+                    loadArtThumb(app, tr.id, tr.path)
+                } catch (_: Throwable) {}
             }
         }
     }
+
+    /** How long the speculative art prewarm waits so it lands after the cold-start burst. */
+    private const val PREWARM_DELAY_MS = 5_000L
 }
 
 @Composable
@@ -259,6 +275,18 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
     withContext(Dispatchers.IO) {
         AlbumArtCache.get(trackId)?.let { return@withContext it }
         if (AlbumArtCache.isMiss("$trackId")) return@withContext null
+        // PERF: everything below is the expensive part (MediaMetadataRetriever on an SD-card FLAC,
+        // full-size bitmap decode, rescale, lossless-WebP encode). It used to run with NO
+        // concurrency limit at all, so a freshly composed screen plus the prewarm batch could have
+        // dozens of these in flight at once. Bounded to AlbumArtCache.gate's four permits — the
+        // limiter that already existed for prewarm, now applied where the work actually is. Not
+        // applied to loadArtHiRes, which calls this function at the end and would self-deadlock.
+        AlbumArtCache.gate.withPermit {
+        // Re-check after waiting for a permit: another coroutine may have loaded the very same
+        // track meanwhile (the same id is commonly requested by a list row and the mini player at
+        // once), in which case this whole probe is redundant. Cheap, exact, no bookkeeping.
+        AlbumArtCache.get(trackId)?.let { return@withContext it }
+        if (AlbumArtCache.isMiss("$trackId")) return@withContext null
         try {
             thumbFile(ctx, trackId).takeIf { it.exists() }?.let { f ->
                 BitmapFactory.decodeFile(f.absolutePath)?.let { b ->
@@ -319,6 +347,7 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
                 img
             } else { AlbumArtCache.markMiss("$trackId"); null }
         } catch (_: Throwable) { null }
+        }
     }
 
 /** Hi-res pipeline for full Now Playing stage — same 100% accurate embedded & folder art priority. */

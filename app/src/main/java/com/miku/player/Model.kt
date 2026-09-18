@@ -220,11 +220,17 @@ private val GENERIC_FOLDER_NAMES = setOf(
     "flac", "mp3", "lossless", "hires", "hi-res", "cd", "cds", "vinyl", "cassette"
 )
 
+// PERF: the cache used to be keyed on "$path::$albumTitle", i.e. one entry (and one full
+// parent-folder walk with regex matching) PER TRACK — on an 11k-track library that is 11k File
+// walks per grouping pass, and .artists()/.albums() each run one. The uncached implementation
+// below reads nothing but `path`'s PARENT FOLDER (albumTitle is accepted for source compatibility
+// but never referenced), so every track in the same album folder must produce the same answer.
+// Keyed on the parent directory now: same results, ~1 walk per album folder instead of per track.
 private val inferPathCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
 fun inferAlbumArtistFromPath(path: String, albumTitle: String): String? {
     if (path.isBlank()) return null
-    val cacheKey = "$path::$albumTitle"
+    val cacheKey = path.substringBeforeLast('/', path)
     inferPathCache[cacheKey]?.let { return if (it.isEmpty()) null else it }
     val res = inferAlbumArtistFromPathUncached(path, albumTitle)
     inferPathCache[cacheKey] = res ?: ""
@@ -464,7 +470,25 @@ fun formatArtistDisplayName(rawName: String, mode: String, englishName: String =
     }
 }
 
+// PERF: formatArtistSortKey is a genuinely expensive key builder (Unicode NFD normalize + three
+// regex passes + a possible ICU transliteration), and every caller reaches it through
+// `sortedBy { formatArtistSortKey(...) }`. Kotlin's sortedBy is `sortedWith(compareBy(selector))`,
+// which evaluates the selector ON EVERY COMPARISON — so sorting N names cost ~2·N·log2(N) full
+// key builds instead of N (≈22x over on ~2000 artists, ≈27x over on an 11k-track song list).
+// Memoized on (ignoreThe, rawName) so the work collapses back to one build per distinct name; the
+// returned key is byte-identical, so sort order is unchanged. Same shape as canonicalArtistKeyCache
+// above (ctx only feeds ArtistTransliterationStore, which is itself a process-wide cache).
+private val artistSortKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 fun formatArtistSortKey(rawName: String, ignoreThe: Boolean, ctx: android.content.Context? = null): String {
+    val cacheKey = if (ignoreThe) "1\u0000$rawName" else "0\u0000$rawName"
+    artistSortKeyCache[cacheKey]?.let { return it }
+    val result = formatArtistSortKeyUncached(rawName, ignoreThe, ctx)
+    artistSortKeyCache[cacheKey] = result
+    return result
+}
+
+private fun formatArtistSortKeyUncached(rawName: String, ignoreThe: Boolean, ctx: android.content.Context? = null): String {
     var key = rawName.trim()
     if (ignoreThe) {
         if (key.startsWith("the ", ignoreCase = true)) key = key.substring(4).trim()
@@ -579,11 +603,9 @@ fun List<Track>.artists(
     }
     .groupBy { (artistName, _) -> canonicalArtistKey(artistName, ctx) }
     .map { (_, pairs) ->
-        val tracks = pairs.map { it.second }.distinctBy { it.id }.sortedWith(
-            compareBy<Track> { it.album.lowercase() }
-                .thenBy { if (it.trackNumber > 0) it.trackNumber else Int.MAX_VALUE }
-                .thenBy { it.title.lowercase() }
-        )
+        // PERF: was a sortedWith whose comparator lowercased album+title on every comparison; the
+        // keys are built once per track now (see sortArtistGroupTracks). Same stable order.
+        val tracks = sortArtistGroupTracks(pairs.map { it.second }.distinctBy { it.id })
         val rawDisplay = pairs.map { it.first }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key ?: tracks.first().artist
         val englishName = ArtistTransliterationStore.getEnglishName(ctx, rawDisplay)
         val formattedDisplay = formatArtistDisplayName(rawDisplay, displayMode, englishName)
@@ -591,18 +613,66 @@ fun List<Track>.artists(
     }
     .sortedBy { formatArtistSortKey(it.name, ignoreThe, ctx) }
 
+// PERF: this comparator used to allocate inside every COMPARISON — two `String.lowercase()` calls
+// plus a `java.io.File(path)` just to read its name, per compare, i.e. O(n log n) throwaway objects
+// (this is a large slice of the allocation churn that showed up as ~30% combined GC-thread CPU at
+// cold start). Decorate-sort-undecorate: each key is built exactly ONCE per track and the sort then
+// only compares precomputed fields. `path.substringAfterLast('/')` is what `File(path).name`
+// returns for these paths, and the sort is stable either way, so the resulting order is identical.
+private class AlbumTrackSortKey(
+    val disc: Int,
+    val no: Int,
+    val fileName: String,
+    val title: String,
+    val track: Track
+)
+
 fun sortAlbumTracks(tracks: List<Track>): List<Track> {
-    return tracks.sortedWith(
-        compareBy<Track> { tr -> if (tr.discNumber > 0) tr.discNumber else 1 }
-        .thenBy { tr ->
-            if (tr.trackNumber > 0) tr.trackNumber else Int.MAX_VALUE
-        }
-        .thenBy { tr ->
-            // Fallback to filename if track numbers are missing or identical
-            if (tr.path.isNotBlank()) java.io.File(tr.path).name.lowercase() else tr.title.lowercase()
-        }
-        .thenBy { it.title.lowercase() }
+    val decorated = ArrayList<AlbumTrackSortKey>(tracks.size)
+    for (tr in tracks) {
+        val title = tr.title.lowercase()
+        decorated.add(
+            AlbumTrackSortKey(
+                if (tr.discNumber > 0) tr.discNumber else 1,
+                if (tr.trackNumber > 0) tr.trackNumber else Int.MAX_VALUE,
+                // Fallback to filename if track numbers are missing or identical
+                if (tr.path.isNotBlank()) tr.path.substringAfterLast('/').lowercase() else title,
+                title,
+                tr
+            )
+        )
+    }
+    decorated.sortWith(
+        compareBy<AlbumTrackSortKey> { it.disc }.thenBy { it.no }.thenBy { it.fileName }.thenBy { it.title }
     )
+    return decorated.map { it.track }
+}
+
+/** Same decorate-sort-undecorate treatment for [artists]' per-group track ordering (album, then
+ *  track number, then title) — the old inline comparator lowercased album + title on every compare. */
+private class ArtistTrackSortKey(
+    val album: String,
+    val no: Int,
+    val title: String,
+    val track: Track
+)
+
+private fun sortArtistGroupTracks(tracks: List<Track>): List<Track> {
+    val decorated = ArrayList<ArtistTrackSortKey>(tracks.size)
+    for (tr in tracks) {
+        decorated.add(
+            ArtistTrackSortKey(
+                tr.album.lowercase(),
+                if (tr.trackNumber > 0) tr.trackNumber else Int.MAX_VALUE,
+                tr.title.lowercase(),
+                tr
+            )
+        )
+    }
+    decorated.sortWith(
+        compareBy<ArtistTrackSortKey> { it.album }.thenBy { it.no }.thenBy { it.title }
+    )
+    return decorated.map { it.track }
 }
 
 // A real album name essentially never starts with a bare leading track number ("01 This And
@@ -627,19 +697,38 @@ private fun albumNameFromFolder(path: String): String? {
     return name.takeIf { it.isNotBlank() && !ALBUM_LOOKS_LIKE_FILENAME_RE.containsMatchIn(it) }
 }
 
+// PERF: was recomputed per TRACK inside .albums()' groupBy — a File allocation, a parent walk with
+// a regex per hop, and an absolutePath/lowercase per call, ~11k times per pass. The answer depends
+// only on the track's parent directory, so memoize on that: ~1 walk per album folder.
+private val albumFolderKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 /** The folder an album's files live in, with any "CD 1"/"Disc 2" subfolder collapsed away — so a
  *  multi-disc set keyed by folder is ONE album, not one per disc. */
 private fun albumFolderKey(path: String): String {
     if (path.isBlank()) return ""
+    val dirKey = path.substringBeforeLast('/', path)
+    albumFolderKeyCache[dirKey]?.let { return it }
+    val computed = albumFolderKeyUncached(path)
+    albumFolderKeyCache[dirKey] = computed
+    return computed
+}
+private fun albumFolderKeyUncached(path: String): String {
     var dir = java.io.File(path).parentFile ?: return path.lowercase()
     var hops = 0
     while (hops < 3 && DISC_FOLDER_RE.matches(dir.name.trim())) { dir = dir.parentFile ?: break; hops++ }
     return dir.absolutePath.lowercase()
 }
 
+// PERF: NFD normalize + three regex passes, previously run once per TRACK in .albums()' groupBy
+// even though a library's ~1.5k distinct album titles repeat across every track on the album.
+// Memoized on the raw album string — same output, one build per distinct title.
+private val albumTitleKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 /** Normalized album-title half of an identity key: copy-suffix stripped ("[2132]", "(1)", "copy"),
  *  accent-folded, punctuation-stripped, lowercase. */
-private fun albumTitleKey(album: String): String {
+private fun albumTitleKey(album: String): String =
+    albumTitleKeyCache.getOrPut(album) { albumTitleKeyUncached(album) }
+private fun albumTitleKeyUncached(album: String): String {
     var clean = ALBUM_COPY_SUFFIX_RE.replace(album.trim(), "").trim().trim('.', '!', '?', '-', ',', '"', '\'', ' ')
     clean = runCatching { COMBINING_MARKS_RE.replace(java.text.Normalizer.normalize(clean, java.text.Normalizer.Form.NFD), "") }.getOrDefault(clean)
     return WHITESPACE_RUN_RE.replace(NON_LETTER_DIGIT_RE.replace(clean, " ").trim(), " ").lowercase()
@@ -795,10 +884,19 @@ private val RELEASE_TAG_PATTERNS = listOf(
     Regex("(?i)\\bbootleg\\b") to "BOOTLEG",
 )
 
+// PERF: a linear scan of every release-tag regex over the string. .albums()' groupBy calls this
+// TWICE per track (folder name + album tag), so ~22k regex sweeps per pass over a handful of
+// distinct strings. Memoized; "" is the stored stand-in for "no tag" (the map can't hold nulls).
+private val releaseTagCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 /** The pressing/edition tag for an album, if its title/folder carries one — null for a plain
  *  single-release album (the common case; most albums don't need this). */
-fun releaseTag(albumName: String): String? =
-    RELEASE_TAG_PATTERNS.firstOrNull { (re, _) -> re.containsMatchIn(albumName) }?.second
+fun releaseTag(albumName: String): String? {
+    val hit = releaseTagCache.getOrPut(albumName) {
+        RELEASE_TAG_PATTERNS.firstOrNull { (re, _) -> re.containsMatchIn(albumName) }?.second ?: ""
+    }
+    return if (hit.isEmpty()) null else hit
+}
 
 /** Color for a release-tag chip — a distinct violet/lavender family, separate from every other
  *  badge dimension's palette (bit-depth teal/gold/pink, sample-rate silver/sky/violet/red, format

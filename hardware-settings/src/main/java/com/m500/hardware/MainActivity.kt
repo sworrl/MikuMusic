@@ -81,8 +81,10 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
 
     // USB DAC
     var usbDacActive by remember { mutableStateOf(UsbDacManager.isActive(ctx)) }
-    var usbDacRate by remember { mutableStateOf(UsbDacManager.getSampleRate(ctx)) }
-    var usbDacBits by remember { mutableStateOf(UsbDacManager.getBitDepth(ctx)) }
+    // Nullable: null = the user has never picked a rate/depth. The non-null getters fall back to
+    // 192000 / 32, and these chips were rendering that build default as a highlighted selection.
+    var usbDacRate by remember { mutableStateOf<Int?>(UsbDacManager.getSampleRateOrNull(ctx)) }
+    var usbDacBits by remember { mutableStateOf<Int?>(UsbDacManager.getBitDepthOrNull(ctx)) }
 
     // CPU Performance
     var cpuGovernorOn by remember { mutableStateOf(CpuPerformance.isEnabled(ctx)) }
@@ -485,7 +487,10 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                     }
 
                     Spacer(Modifier.height(10.dp))
-                    Text("SAMPLE RATE", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (usbDacRate == null) "SAMPLE RATE  ·  NOT SET (gadget would use ${UsbDacManager.DEFAULT_SAMPLE_RATE / 1000}k)" else "SAMPLE RATE",
+                        color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold
+                    )
                     Spacer(Modifier.height(6.dp))
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -498,7 +503,9 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                                     .background(if (usbDacRate == rate) HwMikuTeal else HwSurface2)
                                     .clickable {
                                         usbDacRate = rate
-                                        scope.launch { UsbDacManager.configureParams(ctx, rate, usbDacBits) }
+                                        scope.launch {
+                                            UsbDacManager.configureParams(ctx, rate, usbDacBits ?: UsbDacManager.DEFAULT_BIT_DEPTH)
+                                        }
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -508,7 +515,10 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                     }
 
                     Spacer(Modifier.height(10.dp))
-                    Text("BIT DEPTH", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        if (usbDacBits == null) "BIT DEPTH  ·  NOT SET (gadget would use ${UsbDacManager.DEFAULT_BIT_DEPTH}-bit)" else "BIT DEPTH",
+                        color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold
+                    )
                     Spacer(Modifier.height(6.dp))
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -521,7 +531,9 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                                     .background(if (usbDacBits == bits) HwMikuTeal else HwSurface2)
                                     .clickable {
                                         usbDacBits = bits
-                                        scope.launch { UsbDacManager.configureParams(ctx, usbDacRate, bits) }
+                                        scope.launch {
+                                            UsbDacManager.configureParams(ctx, usbDacRate ?: UsbDacManager.DEFAULT_SAMPLE_RATE, bits)
+                                        }
                                     },
                                 contentAlignment = Alignment.Center
                             ) {

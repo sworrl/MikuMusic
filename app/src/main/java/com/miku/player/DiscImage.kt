@@ -111,8 +111,20 @@ object DiscImage {
     }
 
     private val DISC_DIR_RE = Regex("(?i)^(cd|disc|disk)\\s*\\.?\\s*\\d{1,2}$")
+    // PERF: apply() calls this TWICE per track (folder-count pass, then the main pass) and each
+    // call allocated a File, walked to the parent, regex-matched and lowercased an absolutePath —
+    // ~22k times on an 11k-track library, every time the library is (re)queried. The result depends
+    // only on the parent directory, so it is memoized on that: ~1 computation per album folder.
+    private val folderKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private fun folderKey(path: String): String {
         if (path.isBlank()) return ""
+        val dirKey = path.substringBeforeLast('/', path)
+        folderKeyCache[dirKey]?.let { return it }
+        val computed = folderKeyUncached(path)
+        folderKeyCache[dirKey] = computed
+        return computed
+    }
+    private fun folderKeyUncached(path: String): String {
         var dir = File(path).parentFile ?: return ""
         if (DISC_DIR_RE.matches(dir.name.trim())) dir = dir.parentFile ?: dir
         return dir.absolutePath.lowercase()

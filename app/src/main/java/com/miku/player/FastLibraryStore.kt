@@ -19,6 +19,30 @@ object FastLibraryStore {
 
     @Volatile private var memoryCache: List<Track>? = null
 
+    // ---- Full-query de-duplication -------------------------------------------------------------
+    // At cold start TWO independent full MediaStore sweeps of the whole library used to run at the
+    // same time: MainActivity.queryTracks() (for the UI) and LibraryDaemonService's "initial
+    // background sync" (queryTracksFast()). Same ~11k rows, same File.exists() stat per row, same
+    // shared coroutine worker pool, same few seconds the app is trying to reach its first frame.
+    // Whoever finishes a full sweep stamps it here so the other side can skip a redundant repeat.
+    @Volatile private var lastFullQueryAtMs = 0L
+    @Volatile private var fullQueryCount = 0
+
+    /** Record that a FULL library query just completed in this process. */
+    fun noteFullQuery(count: Int) {
+        fullQueryCount = count
+        lastFullQueryAtMs = android.os.SystemClock.elapsedRealtime()
+    }
+
+    /** Milliseconds since the last full library query in this process ([Long.MAX_VALUE] if none). */
+    fun msSinceFullQuery(): Long {
+        val at = lastFullQueryAtMs
+        return if (at == 0L) Long.MAX_VALUE else android.os.SystemClock.elapsedRealtime() - at
+    }
+
+    /** Track count the last full library query produced (0 if none yet). */
+    fun lastFullQueryCount(): Int = fullQueryCount
+
     /**
      * Fast synchronous disk read. Called during cold start initialization.
      * Returns pre-cached track list instantly (<10ms for 20k tracks).

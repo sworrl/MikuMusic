@@ -848,6 +848,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         private var flash = 0f         // 90ms glow flash when leaving an app for home
         private var flashAnim: ValueAnimator? = null
         private var claimed = false    // first light tick once the drag is clearly upward
+        private var holdScheduled = false  // holdCheck poll is running; see ACTION_MOVE
         private var relaxAnim: ValueAnimator? = null
         private var popAnim: ValueAnimator? = null
 
@@ -940,7 +941,7 @@ class MikuNotificationShadeService : AccessibilityService() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     relaxAnim?.cancel()
-                    down = true; fired = false; armed = false; claimed = false
+                    down = true; fired = false; armed = false; claimed = false; holdScheduled = false
                     startX = event.rawX; startY = event.rawY; curX = startX; curY = startY
                     velocity?.recycle(); velocity = VelocityTracker.obtain().also { it.addMovement(event) }
                     invalidate()
@@ -956,9 +957,23 @@ class MikuNotificationShadeService : AccessibilityService() {
                     stretch = if (dyUp <= max) dyUp / max else 1f + (dyUp - max) / max * 0.12f
                     shiftX = (dx * 0.5f).coerceIn(-dp(24f), dp(24f))
                     if (!claimed && (dyUp >= dp(8f) || abs(dx) >= dp(8f))) { claimed = true; MikuHaptics.tick(this) }   // light: claimed
+                    // APP SWITCHER FIX (2026-09-17). This used to removeCallbacks(holdCheck) and
+                    // re-post it on EVERY ACTION_MOVE. holdCheck is a self-re-posting 60 ms poll
+                    // that fires recents once the finger is held high and still — but a finger
+                    // held still STILL emits MOVE events (sub-pixel jitter), so the chain was
+                    // killed and restarted from its 150 ms delay over and over and effectively
+                    // never ran. That is why swipe-up-and-hold never opened the app switcher.
+                    // Now: arm ONCE on crossing the threshold, cancel only on dropping back below.
                     if (!fired) {
-                        mainHandler.removeCallbacks(holdCheck)
-                        if (dyUp >= max) mainHandler.postDelayed(holdCheck, RECENTS_HOLD_MS)
+                        if (dyUp >= max) {
+                            if (!holdScheduled) {
+                                holdScheduled = true
+                                mainHandler.postDelayed(holdCheck, RECENTS_HOLD_MS)
+                            }
+                        } else if (holdScheduled) {
+                            holdScheduled = false
+                            mainHandler.removeCallbacks(holdCheck)
+                        }
                     }
                     invalidate()
                     return true
@@ -966,6 +981,7 @@ class MikuNotificationShadeService : AccessibilityService() {
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!down) return false
                     down = false
+                    holdScheduled = false
                     mainHandler.removeCallbacks(holdCheck)
                     velocity?.addMovement(event)
                     velocity?.computeCurrentVelocity(1000)

@@ -62,6 +62,13 @@ object DailyHighlightEngine {
         }
 
         // 2. Score every track on multi-dimensional axes
+        // PERF: the daily jitter below used to build a brand-new java.util.Random PER TRACK — on an
+        // 11k-track library that is 11k Random objects (each wrapping an AtomicLong) plus three
+        // atomic CAS ops per nextDouble(), all inside the cold-start CPU burst. One instance is
+        // re-seeded per track instead: Random.setSeed() applies the exact same initial scramble the
+        // constructor does, so nextDouble() returns bit-identical values and today's mix is
+        // unchanged. Safe to share because this is a function-local instance on one thread.
+        val jitterRng = Random()
         val scoredTracks = allTracks.map { t ->
             val pc = trackPlayCounts[t.id] ?: 0
             val lp = trackLastPlayed[t.id] ?: 0L
@@ -109,7 +116,8 @@ object DailyHighlightEngine {
             }
 
             // F. Daily Deterministic Jitter (seeded by track ID + current date)
-            val jitter = Random(t.id xor (epochDay * 31L)).nextDouble() * 24.0
+            jitterRng.setSeed(t.id xor (epochDay * 31L))
+            val jitter = jitterRng.nextDouble() * 24.0
 
             val composite = (fav * 1.25) + (disc * 1.1) + (gem * 1.15) + audioBonus + jitter - recencyPenalty
 
@@ -138,8 +146,15 @@ object DailyHighlightEngine {
         // tagged collab strings for what's really one artist) was both inflating this diversity
         // count and, worse, letting the same real artist blow past MAX_PER_ARTIST by hiding
         // behind several different raw spellings that each got their own quota.
-        val distinctArtists = allTracks.map { canonicalArtistKey(it.artist, context) }.distinct().size
-        val MAX_PER_ARTIST = if (distinctArtists >= 15) 2 else 4
+        // PERF: this used to materialize an 11k-element String list and then a second distinct()
+        // list purely to compare the count against 15. Streamed into a HashSet with an early exit
+        // the moment the threshold is reached — same MAX_PER_ARTIST decision, no bulk allocation.
+        val artistKeySet = HashSet<String>()
+        for (t in allTracks) {
+            artistKeySet.add(canonicalArtistKey(t.artist, context))
+            if (artistKeySet.size >= 15) break
+        }
+        val MAX_PER_ARTIST = if (artistKeySet.size >= 15) 2 else 4
 
         fun tryAdd(st: ScoredTrack): Boolean {
             val aKey = canonicalArtistKey(st.track.artist, context)
