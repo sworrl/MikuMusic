@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -24,6 +25,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -78,6 +80,9 @@ fun MikuBpmObservatoryModal(
     LaunchedEffect(Unit) {
         MikuBeatClickerEngine.init(ctx)
         MikuBpmSeasonsEngine.init(ctx)
+        // Loads the saved timing offset and probes what the platform will tell us about output
+        // latency. Idempotent.
+        MikuRhythmCalibration.init(ctx)
     }
 
     // Modal Mode: 0 = Kawaii Beat Match, 1 = Sweet Leek Clicker, 2 = Producer Skills, 3 = Skins & Textures, 4 = Quests & DB, 5 = Seasons
@@ -421,9 +426,13 @@ private fun KawaiiSugarFeverGauge(
 @Composable
 private fun KawaiiTimingDeviationBar(
     offsetMs: Int,
-    maxWindowMs: Long,
+    windows: MikuRhythmTiming.Windows,
     modifier: Modifier = Modifier
 ) {
+    // The bar now DRAWS the real hit windows instead of a decorative 20% band: the player can
+    // see how much room each tier actually has, and watch those bands widen or tighten when the
+    // adaptive difficulty tier changes or a Timing Window Expander tier is bought. A scale you
+    // can see is a scale you can aim at.
     Canvas(
         modifier = modifier
             .fillMaxWidth()
@@ -432,6 +441,9 @@ private fun KawaiiTimingDeviationBar(
         val w = size.width
         val h = size.height
         val midX = w / 2f
+        // Full scale = the OK window plus a little headroom, so a MISS still lands on the bar.
+        val scaleMs = (windows.okMs * 1.25f).coerceAtLeast(40f)
+        fun halfWidthPx(ms: Int): Float = (ms / scaleMs) * (w / 2f)
 
         drawLine(
             color = Color(0x44FFFFFF),
@@ -441,12 +453,15 @@ private fun KawaiiTimingDeviationBar(
             cap = StrokeCap.Round
         )
 
-        val perfectZoneWidth = (w * 0.2f)
-        drawRect(
-            color = KawaiiSakuraPink.copy(alpha = 0.35f),
-            topLeft = Offset(midX - perfectZoneWidth / 2f, 0f),
-            size = Size(perfectZoneWidth, h)
-        )
+        // Widest tier first so the tighter ones paint on top.
+        fun band(ms: Int, color: Color) {
+            val half = halfWidthPx(ms)
+            drawRect(color = color, topLeft = Offset(midX - half, 0f), size = Size(half * 2f, h))
+        }
+        band(windows.okMs, KawaiiLavender.copy(alpha = 0.12f))
+        band(windows.goodMs, KawaiiSoftTeal.copy(alpha = 0.18f))
+        band(windows.greatMs, KawaiiSakuraPink.copy(alpha = 0.25f))
+        band(windows.perfectMs, KawaiiHotPink.copy(alpha = 0.45f))
 
         drawLine(
             color = Color.White,
@@ -455,18 +470,142 @@ private fun KawaiiTimingDeviationBar(
             strokeWidth = 2f
         )
 
-        val clampedOffset = offsetMs.toFloat().coerceIn(-maxWindowMs.toFloat(), maxWindowMs.toFloat())
-        val fraction = (clampedOffset / maxWindowMs.toFloat()).coerceIn(-1f, 1f)
+        val fraction = (offsetMs / scaleMs).coerceIn(-1f, 1f)
         val pointerX = midX + (fraction * (w / 2f - 6f))
 
         val pointerColor = when {
-            abs(offsetMs) <= 35 -> KawaiiHotPink
+            abs(offsetMs) <= windows.perfectMs -> KawaiiHotPink
+            abs(offsetMs) <= windows.greatMs -> KawaiiSakuraPink
             offsetMs < 0 -> KawaiiPeach
             else -> KawaiiSoftTeal
         }
 
         drawCircle(color = pointerColor, radius = 6f, center = Offset(pointerX, h / 2f))
         drawCircle(color = Color.White, radius = 3f, center = Offset(pointerX, h / 2f))
+    }
+}
+
+// =========================================================================
+// 🎨 SKIN GEOMETRY — the beat node's silhouette, per skin
+//
+// A skin that only swaps a hue is not a skin. These build the actual outline of the node and
+// of its approach ring, so Cyber Mirai is a hexagon closing on a hexagon while Snow Crystal is
+// a six-point snowflake — recognisable from across the room, not on a colour chip.
+// =========================================================================
+
+private fun polygonPath(cx: Float, cy: Float, r: Float, sides: Int, rotationDeg: Float): Path {
+    val p = Path()
+    for (i in 0 until sides) {
+        val a = Math.toRadians((rotationDeg + i * 360.0 / sides)).toFloat()
+        val x = cx + r * cos(a)
+        val y = cy + r * sin(a)
+        if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+    }
+    p.close()
+    return p
+}
+
+private fun starPath(cx: Float, cy: Float, rOuter: Float, rInner: Float, points: Int, rotationDeg: Float): Path {
+    val p = Path()
+    val steps = points * 2
+    for (i in 0 until steps) {
+        val r = if (i % 2 == 0) rOuter else rInner
+        val a = Math.toRadians((rotationDeg + i * 360.0 / steps)).toFloat()
+        val x = cx + r * cos(a)
+        val y = cy + r * sin(a)
+        if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
+    }
+    p.close()
+    return p
+}
+
+private fun skinOutline(
+    shape: MikuBeatClickerEngine.NodeShape,
+    cx: Float,
+    cy: Float,
+    r: Float
+): Path = when (shape) {
+    MikuBeatClickerEngine.NodeShape.ORB -> Path().apply {
+        addOval(androidx.compose.ui.geometry.Rect(cx - r, cy - r, cx + r, cy + r))
+    }
+    MikuBeatClickerEngine.NodeShape.DIAMOND -> polygonPath(cx, cy, r, 4, -90f)
+    MikuBeatClickerEngine.NodeShape.HEX -> polygonPath(cx, cy, r, 6, -90f)
+    MikuBeatClickerEngine.NodeShape.STAR -> starPath(cx, cy, r, r * 0.46f, 5, -90f)
+    MikuBeatClickerEngine.NodeShape.SNOWFLAKE -> starPath(cx, cy, r, r * 0.55f, 6, -90f)
+}
+
+/** The same silhouette as a clip/border [Shape] for the filled core of the node. */
+private fun skinNodeShape(shape: MikuBeatClickerEngine.NodeShape): Shape = GenericShape { size, _ ->
+    val cx = size.width / 2f
+    val cy = size.height / 2f
+    val r = minOf(size.width, size.height) / 2f
+    addPath(skinOutline(shape, cx, cy, r))
+}
+
+/**
+ * The PERFECT hit effect, one per skin. Same trigger, five completely different reads:
+ * an expanding ring, shards thrown outward, concentric splash rings, a soft velvet swell,
+ * or frost cracking away from the node.
+ */
+private fun DrawScope.drawSkinHitEffect(
+    skin: MikuBeatClickerEngine.BpmSkin,
+    center: Offset,
+    baseRadius: Float,
+    progress: Float,
+    strokePx: Float
+) {
+    val alpha = (1f - progress).coerceIn(0f, 1f)
+    val color = Color(skin.glowColor).copy(alpha = alpha * 0.85f)
+    when (skin.hitEffect) {
+        MikuBeatClickerEngine.HitEffect.RING ->
+            drawCircle(color, baseRadius + progress * 70f, center, style = Stroke(width = strokePx))
+        MikuBeatClickerEngine.HitEffect.SHARD -> {
+            for (i in 0 until 8) {
+                val a = Math.toRadians(i * 45.0).toFloat()
+                val inner = baseRadius + progress * 26f
+                val outer = inner + 22f * (1f - progress)
+                drawLine(
+                    color,
+                    Offset(center.x + cos(a) * inner, center.y + sin(a) * inner),
+                    Offset(center.x + cos(a) * outer, center.y + sin(a) * outer),
+                    strokeWidth = strokePx, cap = StrokeCap.Round
+                )
+            }
+        }
+        MikuBeatClickerEngine.HitEffect.SPLASH -> {
+            for (i in 0 until 3) {
+                val p = (progress + i * 0.18f).coerceAtMost(1f)
+                drawCircle(
+                    Color(skin.accentColor).copy(alpha = (1f - p) * 0.55f),
+                    baseRadius + p * 52f, center, style = Stroke(width = strokePx * 0.8f)
+                )
+            }
+        }
+        MikuBeatClickerEngine.HitEffect.VELVET_PULSE ->
+            drawPath(
+                skinOutline(skin.nodeShape, center.x, center.y, baseRadius * (1f + progress * 0.55f)),
+                Color(skin.primaryColor).copy(alpha = alpha * 0.30f)
+            )
+        MikuBeatClickerEngine.HitEffect.FROST_CRACK -> {
+            for (i in 0 until 6) {
+                val a = Math.toRadians(i * 60.0 + 15.0).toFloat()
+                val r1 = baseRadius + progress * 18f
+                val r2 = r1 + 34f * progress
+                val midA = a + 0.16f
+                drawLine(
+                    color,
+                    Offset(center.x + cos(a) * r1, center.y + sin(a) * r1),
+                    Offset(center.x + cos(midA) * ((r1 + r2) / 2f), center.y + sin(midA) * ((r1 + r2) / 2f)),
+                    strokeWidth = strokePx * 0.7f, cap = StrokeCap.Round
+                )
+                drawLine(
+                    color,
+                    Offset(center.x + cos(midA) * ((r1 + r2) / 2f), center.y + sin(midA) * ((r1 + r2) / 2f)),
+                    Offset(center.x + cos(a - 0.1f) * r2, center.y + sin(a - 0.1f) * r2),
+                    strokeWidth = strokePx * 0.7f, cap = StrokeCap.Round
+                )
+            }
+        }
     }
 }
 
@@ -480,9 +619,13 @@ private fun KawaiiProjectDivaBeatNode(
     isPlaying: Boolean,
     feverActive: Boolean,
     perfectShockwaveTrigger: Int,
+    skin: MikuBeatClickerEngine.BpmSkin,
     onTap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // The node's silhouette, its approach ring and its hit effect all come from the skin, so
+    // switching skin changes the thing the player is literally staring at while they tap.
+    val nodeShape = remember(skin) { skinNodeShape(skin.nodeShape) }
     val coroutineScope = rememberCoroutineScope()
     val touchScale = remember { Animatable(1f) }
     val rippleAnim = remember { Animatable(0f) }
@@ -520,19 +663,17 @@ private fun KawaiiProjectDivaBeatNode(
             val c = center
             val baseR = (size.minDimension / 2f) * 0.65f
 
-            // Approach Ring
+            // Approach Ring — follows the skin's silhouette (a hex closes on a hex).
             if (isPlaying && approachRadius > 0.01f) {
                 val currentApproachR = baseR + (approachRadius * 26f)
-                drawCircle(
-                    color = if (feverActive) KawaiiGoldenHoney.copy(alpha = 0.8f) else KawaiiSakuraPink.copy(alpha = 0.85f),
-                    radius = currentApproachR,
-                    center = c,
+                drawPath(
+                    skinOutline(skin.nodeShape, c.x, c.y, currentApproachR),
+                    color = if (feverActive) KawaiiGoldenHoney.copy(alpha = 0.8f) else Color(skin.primaryColor).copy(alpha = 0.85f),
                     style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round)
                 )
-                drawCircle(
+                drawPath(
+                    skinOutline(skin.nodeShape, c.x, c.y, currentApproachR),
                     color = Color.White.copy(alpha = 0.6f),
-                    radius = currentApproachR,
-                    center = c,
                     style = Stroke(width = 1.2.dp.toPx())
                 )
             }
@@ -541,37 +682,29 @@ private fun KawaiiProjectDivaBeatNode(
             if (rippleAnim.value > 0.01f && rippleAnim.value < 0.99f) {
                 val r = baseR + (rippleAnim.value * 35f)
                 val alpha = (1f - rippleAnim.value) * 0.9f
-                drawCircle(
-                    color = KawaiiHotPink.copy(alpha = alpha),
-                    radius = r,
-                    center = c,
+                drawPath(
+                    skinOutline(skin.nodeShape, c.x, c.y, r),
+                    color = Color(skin.accentColor).copy(alpha = alpha),
                     style = Stroke(width = 4.dp.toPx() * (1f - rippleAnim.value))
                 )
             }
 
-            // Perfect Shockwave
+            // Perfect hit effect — one per skin (ring / shards / splash / velvet / frost).
             if (shockwaveAnim.value > 0.01f && shockwaveAnim.value < 0.99f) {
-                val swR = baseR + (shockwaveAnim.value * 70f)
-                val swAlpha = (1f - shockwaveAnim.value) * 0.8f
-                drawCircle(
-                    color = KawaiiGoldenHoney.copy(alpha = swAlpha),
-                    radius = swR,
-                    center = c,
-                    style = Stroke(width = 2.5.dp.toPx())
-                )
+                drawSkinHitEffect(skin, c, baseR, shockwaveAnim.value, 2.5.dp.toPx())
             }
         }
 
         Box(
             modifier = Modifier
                 .size(104.dp)
-                .clip(CircleShape)
+                .clip(nodeShape)
                 .background(
                     Brush.radialGradient(
                         colors = listOf(
                             Color.White,
-                            if (feverActive) KawaiiGoldenHoney else KawaiiSakuraPink,
-                            Color(0xFF5A1A3A)
+                            if (feverActive) KawaiiGoldenHoney else Color(skin.primaryColor),
+                            Color(skin.accentColor).copy(alpha = 0.55f)
                         ),
                         center = Offset(34f, 34f),
                         radius = 105f
@@ -580,21 +713,25 @@ private fun KawaiiProjectDivaBeatNode(
                 .border(
                     BorderStroke(
                         2.5.dp,
-                        Brush.linearGradient(listOf(Color.White, KawaiiHotPink))
+                        Brush.linearGradient(listOf(Color.White, Color(skin.accentColor)))
                     ),
-                    CircleShape
+                    nodeShape
                 ),
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(if (feverActive) "✨🥬✨" else "🌸💖🌸", fontSize = 20.sp)
+                // The face of the node is the skin's own glyph alphabet.
                 Text(
-                    text = "TAP BEAT",
+                    if (feverActive) "✨🥬✨" else skin.burstGlyphs.take(3).joinToString(""),
+                    fontSize = 18.sp
+                )
+                Text(
+                    text = if (skin.judgmentArcade) "TAP BEAT" else "tap beat",
                     color = Color.White,
-                    fontSize = 13.sp,
+                    fontSize = 12.5.sp,
                     fontWeight = FontWeight.Black,
-                    fontFamily = AudiowideFont,
-                    letterSpacing = 0.5.sp
+                    fontFamily = if (skin.judgmentArcade) AudiowideFont else null,
+                    letterSpacing = (0.5f + skin.judgmentSpacing).sp
                 )
             }
         }
@@ -607,25 +744,87 @@ private fun KawaiiProjectDivaBeatNode(
 @Composable
 private fun KawaiiJuicyParticleOverlay(
     particles: List<MikuBeatClickerEngine.JuiceParticle>,
+    burst: MikuBeatClickerEngine.BurstStyle,
     modifier: Modifier = Modifier
 ) {
+    // Each skin's burst MOVES differently, not just in a different colour: petals fall and sway,
+    // sparks shoot straight out and die fast, bubbles rise and swell, ribbons swirl around the
+    // node, crystals hang and twinkle. This is the difference you notice without being told.
+    val durationMs = when (burst) {
+        MikuBeatClickerEngine.BurstStyle.SPARK_SHOT -> 380
+        MikuBeatClickerEngine.BurstStyle.BUBBLE_RISE -> 900
+        MikuBeatClickerEngine.BurstStyle.CRYSTAL_DRIFT -> 1000
+        else -> 620
+    }
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         particles.forEach { p ->
             key(p.id) {
                 val animProgress = remember { Animatable(0f) }
                 LaunchedEffect(p.id) {
-                    animProgress.animateTo(1f, tween(550, easing = LinearOutSlowInEasing))
+                    animProgress.animateTo(
+                        1f,
+                        tween(
+                            durationMs,
+                            easing = if (burst == MikuBeatClickerEngine.BurstStyle.SPARK_SHOT) LinearEasing
+                            else LinearOutSlowInEasing
+                        )
+                    )
                 }
-                val currentX = p.x + p.vx * animProgress.value
-                val currentY = p.y + p.vy * animProgress.value
-                val currentAlpha = (1f - animProgress.value).coerceIn(0f, 1f)
+                val t = animProgress.value
+                var x = p.x + p.vx * t
+                var y = p.y + p.vy * t
+                var scale = 1f
+                when (burst) {
+                    // Gravity plus a sideways sway — a petal never falls straight.
+                    MikuBeatClickerEngine.BurstStyle.PETAL_FALL -> {
+                        y += 70f * t * t
+                        x += sin(t * 9f + p.vx) * 9f
+                        scale = 1f - 0.2f * t
+                    }
+                    // Straight, fast, and gone.
+                    MikuBeatClickerEngine.BurstStyle.SPARK_SHOT -> {
+                        x = p.x + p.vx * t * 1.7f
+                        y = p.y + p.vy * t * 1.7f
+                        scale = 1f - 0.55f * t
+                    }
+                    // Slow buoyant rise, swelling as it goes.
+                    MikuBeatClickerEngine.BurstStyle.BUBBLE_RISE -> {
+                        y = p.y + p.vy * t * 0.35f - 60f * t
+                        x += sin(t * 5f + p.vy) * 6f
+                        scale = 1f + 0.45f * t
+                    }
+                    // Orbit the node while drifting outward.
+                    MikuBeatClickerEngine.BurstStyle.RIBBON_SWIRL -> {
+                        val ang = t * 3.4f
+                        val rad = 18f + 46f * t
+                        x = p.x + cos(ang + p.vx * 0.05f) * rad
+                        y = p.y + sin(ang + p.vx * 0.05f) * rad
+                        scale = 1f - 0.15f * t
+                    }
+                    // Hangs in the air, drifting down, twinkling out.
+                    MikuBeatClickerEngine.BurstStyle.CRYSTAL_DRIFT -> {
+                        x = p.x + p.vx * t * 0.5f
+                        y = p.y + p.vy * t * 0.5f + 26f * t
+                        scale = 1f - 0.1f * t
+                    }
+                }
+                val fade = (1f - t).coerceIn(0f, 1f)
+                val twinkle =
+                    if (burst == MikuBeatClickerEngine.BurstStyle.CRYSTAL_DRIFT)
+                        (0.55f + 0.45f * sin(t * 22f)).coerceIn(0f, 1f)
+                    else 1f
 
                 Text(
                     text = p.emoji,
+                    color = Color(p.colorHex),
                     fontSize = p.sizeDp.sp,
                     modifier = Modifier
-                        .offset(x = currentX.dp, y = currentY.dp)
-                        .graphicsLayer { alpha = currentAlpha }
+                        .offset(x = x.dp, y = y.dp)
+                        .graphicsLayer {
+                            alpha = fade * twinkle
+                            scaleX = scale
+                            scaleY = scale
+                        }
                 )
             }
         }
@@ -633,43 +832,108 @@ private fun KawaiiJuicyParticleOverlay(
 }
 
 /**
- * Dreamy Floating Kawaii Hearts and Sakura Canvas.
+ * Ambient backdrop — one treatment per skin, drawn behind the whole sheet.
+ *
+ * Every skin used to share the same drifting hearts, which is most of why they read as "the same
+ * screen, different tint". Now Sakura rains petals, Cyber Mirai runs a vertical hex/data rain,
+ * Honey Sweet floats fat bubbles upward, Gothic Lolita hangs a slow damask veil of diamonds, and
+ * Snow Crystal drifts snow sideways.
  */
 @Composable
 private fun KawaiiDreamyHeartCanvas(
     modifier: Modifier = Modifier,
-    isFever: Boolean
+    isFever: Boolean,
+    ambient: MikuBeatClickerEngine.AmbientStyle,
+    skinPrimary: Color,
+    skinAccent: Color
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "DreamyCanvas")
     val phase by infiniteTransition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(4500, easing = LinearEasing), RepeatMode.Restart),
+        animationSpec = infiniteRepeatable(
+            tween(
+                when (ambient) {
+                    MikuBeatClickerEngine.AmbientStyle.HEX_RAIN -> 2200
+                    MikuBeatClickerEngine.AmbientStyle.DAMASK_VEIL -> 7000
+                    else -> 4500
+                },
+                easing = LinearEasing
+            ),
+            RepeatMode.Restart
+        ),
         label = "phase"
     )
 
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
-        val count = 16
+        val count = if (ambient == MikuBeatClickerEngine.AmbientStyle.HEX_RAIN) 22 else 16
 
         for (i in 0 until count) {
             val seed = i * 142.3f
             val baseX = (seed % w)
             val baseY = ((seed * 2.1f) % h)
-            val driftY = (baseY - (phase * h * 0.6f) + (i * 18f)).mod(h)
-            val wobbleX = baseX + sin((phase * 6.28f) + i) * 14f
             val scale = (0.5f + (i % 4) * 0.15f)
-            val alpha = (0.2f + 0.5f * sin(phase * 3.14f + i)).coerceIn(0.1f, 0.75f)
-
-            val heartColor = when {
-                isFever -> if (i % 2 == 0) KawaiiGoldenHoney else KawaiiHotPink
-                i % 3 == 0 -> KawaiiSakuraPink
-                i % 3 == 1 -> KawaiiMikuMint
+            val tint = when {
+                isFever -> if (i % 2 == 0) KawaiiGoldenHoney else skinAccent
+                i % 3 == 0 -> skinPrimary
+                i % 3 == 1 -> skinAccent
                 else -> KawaiiLavender
             }
 
-            drawKawaiiHeart(center = Offset(wobbleX, driftY), size = 14f * scale, color = heartColor.copy(alpha = alpha))
+            when (ambient) {
+                // Petals tumble downward with a sideways sway.
+                MikuBeatClickerEngine.AmbientStyle.PETALS -> {
+                    val y = (baseY + (phase * h * 0.6f) + (i * 18f)).mod(h)
+                    val x = baseX + sin((phase * 6.28f) + i) * 16f
+                    val alpha = (0.2f + 0.5f * sin(phase * 3.14f + i)).coerceIn(0.1f, 0.7f)
+                    drawKawaiiHeart(Offset(x, y), 14f * scale, tint.copy(alpha = alpha))
+                }
+                // Vertical data rain: short bright hex dashes falling fast.
+                MikuBeatClickerEngine.AmbientStyle.HEX_RAIN -> {
+                    val y = (baseY - (phase * h * 1.6f) + (i * 31f)).mod(h)
+                    val len = 26f * scale
+                    drawLine(
+                        tint.copy(alpha = 0.28f),
+                        Offset(baseX, y), Offset(baseX, y + len),
+                        strokeWidth = 2f, cap = StrokeCap.Round
+                    )
+                    drawPath(
+                        polygonPath(baseX, y + len, 5f * scale, 6, -90f),
+                        tint.copy(alpha = 0.5f), style = Stroke(width = 1.4f)
+                    )
+                }
+                // Fat syrup bubbles rising and wobbling.
+                MikuBeatClickerEngine.AmbientStyle.HONEY_BUBBLES -> {
+                    val y = (baseY - (phase * h * 0.5f) + (i * 23f)).mod(h)
+                    val x = baseX + sin((phase * 4.2f) + i * 1.7f) * 12f
+                    val r = (7f + (i % 5) * 4f) * scale
+                    drawCircle(tint.copy(alpha = 0.18f), r, Offset(x, y))
+                    drawCircle(tint.copy(alpha = 0.45f), r, Offset(x, y), style = Stroke(width = 1.4f))
+                    drawCircle(Color.White.copy(alpha = 0.35f), r * 0.28f, Offset(x - r * 0.3f, y - r * 0.3f))
+                }
+                // A slow, heavy veil: stacked damask diamonds barely moving.
+                MikuBeatClickerEngine.AmbientStyle.DAMASK_VEIL -> {
+                    val y = (baseY + (phase * h * 0.12f) + (i * 29f)).mod(h)
+                    val r = 16f * scale
+                    drawPath(polygonPath(baseX, y, r, 4, -90f), tint.copy(alpha = 0.16f))
+                    drawPath(
+                        polygonPath(baseX, y, r * 1.6f, 4, -90f),
+                        tint.copy(alpha = 0.22f), style = Stroke(width = 1.2f)
+                    )
+                }
+                // Snow crossing the screen sideways as it falls.
+                MikuBeatClickerEngine.AmbientStyle.SNOW_DRIFT -> {
+                    val y = (baseY + (phase * h * 0.45f) + (i * 21f)).mod(h)
+                    val x = (baseX + phase * w * 0.35f).mod(w)
+                    val r = 9f * scale
+                    drawPath(
+                        starPath(x, y, r, r * 0.42f, 6, -90f),
+                        tint.copy(alpha = 0.45f), style = Stroke(width = 1.3f)
+                    )
+                }
+            }
         }
     }
 }
@@ -754,6 +1018,15 @@ private fun BpmHeroRhythmMatchCard(
     lastTapTimeMs: Long
 ) {
     // MODE 0: KAWAII BEAT MATCH HERO (LIVE BPM + PRECISION OFFSET GAUGE + SSS+ GRADE)
+    // The windows drawn here are the exact ones the tap handler judges against — same tier,
+    // same skill bonus, same tempo clamp — so the gauge can never flatter the scoring.
+    val rhythmTier by MikuBeatClickerEngine.rhythmTier.collectAsState()
+    val tempoLock by MikuTempoLock.tempo.collectAsState()
+    val windows = MikuRhythmTiming.windowsFor(
+        beatPeriodMs = beatIntervalMs,
+        leniency = rhythmTier.leniency,
+        bonusMs = MikuBeatClickerEngine.timingWindowBonusMs
+    )
     Row(
         Modifier
             .fillMaxWidth()
@@ -787,21 +1060,29 @@ private fun BpmHeroRhythmMatchCard(
                     )
                 }
                 Text(
-                    text = if (isPlaying) "BEAT TEMPO" else "PAUSED",
+                    text = when {
+                        !isPlaying -> "PAUSED"
+                        tempoLock.isLocked -> "🔒 LOCKED"
+                        else -> "LISTENING…"
+                    },
                     color = if (isPlaying) activeSkinPrimary else KawaiiTextMuted,
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = AudiowideFont
                 )
                 Text(
+                    // The tempo readout is HELD by MikuTempoLock, so this number does not twitch
+                    // between neighbouring BPMs while a track plays at one tempo. Before a lock
+                    // exists it says so, rather than showing a per-onset estimate as fact.
                     text = when {
+                        !isPlaying -> "ALSA Standby"
                         isPlaying && hasLiveTempo -> "${liveBpm.toInt()} BPM · ${beatIntervalMs}ms"
-                        isPlaying -> "Tempo not detected yet"
-                        else -> "ALSA Standby"
+                        else -> tempoLock.label
                     },
                     color = KawaiiSoftTeal,
                     fontSize = 10.5.sp,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
             }
         }
@@ -849,51 +1130,275 @@ private fun BpmHeroRhythmMatchCard(
                         maxLines = 1
                     )
                 }
-                // Arcade Performance Grade Badge
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0x44FF3385))
-                        .border(1.dp, KawaiiHotPink, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                ) {
+                // Arcade Performance Grade Badge + the ADAPTIVE DIFFICULTY tier underneath it.
+                // The tier is shown, never silent: a game that quietly moves the goalposts feels
+                // broken, while one that says "🌱 PRACTICE → 💖 DIVA" makes tightening a reward.
+                Column(horizontalAlignment = Alignment.End) {
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0x44FF3385))
+                            .border(1.dp, KawaiiHotPink, RoundedCornerShape(10.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = MikuBeatClickerEngine.sessionGrade,
+                            color = Color.White,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = AudiowideFont
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
                     Text(
-                        text = MikuBeatClickerEngine.sessionGrade,
-                        color = Color.White,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Black,
-                        fontFamily = AudiowideFont
+                        text = "${rhythmTier.badge} ${rhythmTier.label} ±${windows.perfectMs}ms",
+                        color = KawaiiGoldenHoney,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
             }
 
-            // Visual Rhythm Timing Calibration Gauge
+            // Visual Rhythm Timing Calibration Gauge + live combo ladder
             Column(Modifier.fillMaxWidth()) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("EARLY (-ms)", color = KawaiiPeach, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                    Text("EARLY ◀", color = KawaiiPeach, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                     Text(
-                        if (lastTapTimeMs > 0) {
-                            when {
-                                // Print the measured deviation; "(0ms)" was a literal
-                                // covering everything within ±35 ms.
-                                abs(timingOffsetMs) <= 35 -> "💖 ${if (timingOffsetMs < 0) "" else "+"}${timingOffsetMs}ms"
-                                timingOffsetMs < 0 -> "⚠️ ${timingOffsetMs}ms EARLY"
-                                else -> "⚠️ +${timingOffsetMs}ms LATE"
-                            }
-                        } else "TAP ON BEAT",
+                        // The deadzone already flattened this to 0 if the tap was within about a
+                        // frame of the beat, so "ON BEAT" here means genuinely unmeasurable-off,
+                        // not "close enough".
+                        if (lastTapTimeMs > 0) MikuRhythmTiming.nudgeHint(timingOffsetMs, windows) else "TAP ON BEAT",
                         color = judgmentColor,
                         fontSize = 10.5.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = AudiowideFont
                     )
-                    Text("LATE (+ms)", color = KawaiiSoftTeal, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+                    Text("▶ LATE", color = KawaiiSoftTeal, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(3.dp))
                 // Horizontal Target Bar with Deviation Pointer
-                KawaiiTimingDeviationBar(offsetMs = timingOffsetMs, maxWindowMs = (beatIntervalMs / 3).coerceIn(80L, 250L))
+                KawaiiTimingDeviationBar(offsetMs = timingOffsetMs, windows = windows)
+                Spacer(Modifier.height(2.dp))
+                BpmComboLadderLine()
+            }
+        }
+    }
+}
+
+/**
+ * The combo ladder in one line: where you are, what it is worth, and what the next rung costs.
+ *
+ * Risk/reward needs to be READABLE. "x17 combo" alone says nothing; "x17 · 3.0x yield · 15 more
+ * → x4" turns the next fifteen taps into a decision the player can choose to make. The shields
+ * on the right are the mercy rule made visible, so a break feels survivable rather than random.
+ *
+ * Kept as its own composable: MikuBpmObservatoryModal was already split because a Compose
+ * function over ART's 16384-instruction JIT ceiling runs interpreted forever.
+ */
+@Composable
+private fun BpmComboLadderLine() {
+    val combo by MikuBeatClickerEngine.combo.collectAsState()
+    val shields by MikuBeatClickerEngine.comboShields.collectAsState()
+    val mult = MikuBeatClickerEngine.effectiveComboMultiplier(combo)
+    val next = MikuBeatClickerEngine.nextComboRung(combo)
+    Row(
+        Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "x$combo · ${String.format(Locale.US, "%.1f", mult)}× YIELD",
+            color = if (combo >= 16) KawaiiGoldenHoney else KawaiiTextMuted,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Black
+        )
+        Text(
+            if (next != null) "${next.first} more → ${String.format(Locale.US, "%.1f", next.second)}×" else "★ TOP RUNG",
+            color = KawaiiSakuraPink,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            if (shields > 0) "🛡️".repeat(shields) else "no shield",
+            color = if (shields > 0) KawaiiMikuMint else KawaiiTextMuted,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Today's Setlist — three daily goals, the session's reason to start and to come back.
+ *
+ * Every counter is judged taps only, and the accuracy goal reads "—" until there are enough
+ * judged taps to state a rate honestly.
+ */
+@Composable
+private fun BpmDailySetlistRow() {
+    val daily by MikuBeatClickerEngine.dailySetlist.collectAsState()
+    Row(
+        Modifier.fillMaxWidth().padding(top = 3.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        BpmSetlistChip(
+            "TAPS",
+            "${daily.judgedTaps}/${MikuBeatClickerEngine.DailySetlist.GOAL_TAPS}",
+            daily.tapsDone
+        )
+        BpmSetlistChip(
+            "STREAK",
+            "${daily.bestCombo}/${MikuBeatClickerEngine.DailySetlist.GOAL_COMBO}",
+            daily.comboDone
+        )
+        BpmSetlistChip(
+            "≥GREAT",
+            if (daily.accuracyPct >= 0f) "${daily.accuracyPct.toInt()}%/${MikuBeatClickerEngine.DailySetlist.GOAL_ACCURACY_PCT.toInt()}%" else "—",
+            daily.accuracyDone
+        )
+    }
+}
+
+/**
+ * Tap-tempo vs detected-tempo agreement, stated honestly.
+ *
+ * BPM comparison must tolerate a few BPM (the detector is an estimator, not ground truth) and
+ * must treat half/double-time as a match: a 170 BPM track tapped at 85 is CORRECT. With nothing
+ * detected there is nothing to compare, and it says exactly that rather than implying a verdict.
+ */
+@Composable
+private fun BpmTempoMatchLine(hasLiveTempo: Boolean, liveBpm: Float, tappedBpm: Float?) {
+    if (tappedBpm == null) return
+    val text: String
+    val color: Color
+    if (!hasLiveTempo) {
+        text = "no detected tempo to compare against"
+        color = KawaiiTextMuted
+    } else {
+        val m = MikuRhythmTiming.octaveMultiplier(tappedBpm, liveBpm)
+        if (m != null) {
+            text = "✓ matches detected ${liveBpm.toInt()} BPM (${MikuRhythmTiming.octaveLabel(m)}, ±${MikuRhythmTiming.bpmTolerance(liveBpm).toInt()} BPM)"
+            color = KawaiiMikuMint
+        } else {
+            text = "✕ ${tappedBpm.toInt()} vs detected ${liveBpm.toInt()} BPM — try /2 or x2"
+            color = KawaiiPeach
+        }
+    }
+    Text(
+        text,
+        color = color,
+        fontSize = 9.5.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.padding(top = 2.dp)
+    )
+}
+
+@Composable
+private fun BpmSetlistChip(label: String, value: String, done: Boolean) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (done) Color(0x33FFD166) else Color(0x22FFFFFF))
+            .border(1.dp, if (done) KawaiiGoldenHoney else Color(0x33FFFFFF), RoundedCornerShape(8.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            "${if (done) "✅" else "🎯"} $label $value",
+            color = if (done) KawaiiGoldenHoney else KawaiiTextMuted,
+            fontSize = 9.5.sp,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Latency calibration strip.
+ *
+ * The whole chain (mixer buffer + DAC ahead of the Visualizer capture, touch sampling on the way
+ * back) adds a CONSTANT delay, which would otherwise make every honest tap read "late" forever.
+ * The CALIBRATE chip applies the median of the player's own recent judged deviations — real
+ * measured data, not a guess — and only appears once there are enough samples for a median to
+ * mean something. The platform's latency figure is printed as information and never applied
+ * silently, because on this device it is a lower bound (one mixer buffer), not the real value.
+ */
+@Composable
+private fun BpmTimingCalibrationRow() {
+    val ctx = LocalContext.current
+    val offset by MikuRhythmCalibration.offsetMs.collectAsState()
+    val suggestion by MikuRhythmCalibration.suggestionMs.collectAsState()
+    val samples by MikuRhythmCalibration.sampleCount.collectAsState()
+    val note by MikuRhythmCalibration.latencyNote.collectAsState()
+
+    Row(
+        Modifier.fillMaxWidth().padding(top = 3.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            "OFFSET ${if (offset >= 0) "+" else ""}${offset}ms" + if (note.isNotEmpty()) " · $note" else "",
+            color = KawaiiTextMuted,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
+        )
+        Spacer(Modifier.width(5.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0x2239C5BB))
+                .border(1.dp, KawaiiMikuMint, RoundedCornerShape(8.dp))
+                .clickable {
+                    MikuRhythmCalibration.nudge(-5)
+                    com.miku.launcher.haptics.MikuHaptics.tick(ctx)
+                }
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) { Text("−5", color = KawaiiMikuMint, fontSize = 10.sp, fontWeight = FontWeight.Black) }
+        Spacer(Modifier.width(3.dp))
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0x2239C5BB))
+                .border(1.dp, KawaiiMikuMint, RoundedCornerShape(8.dp))
+                .clickable {
+                    MikuRhythmCalibration.nudge(5)
+                    com.miku.launcher.haptics.MikuHaptics.tick(ctx)
+                }
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+        ) { Text("+5", color = KawaiiMikuMint, fontSize = 10.sp, fontWeight = FontWeight.Black) }
+        if (suggestion != null) {
+            Spacer(Modifier.width(5.dp))
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color(0x55FF3385))
+                    .border(1.dp, KawaiiHotPink, RoundedCornerShape(8.dp))
+                    .clickable {
+                        val applied = MikuRhythmCalibration.applySuggestion()
+                        com.miku.launcher.haptics.MikuHaptics.confirm(ctx)
+                        if (applied != null) {
+                            android.widget.Toast.makeText(
+                                ctx,
+                                "Timing offset calibrated to ${if (applied >= 0) "+" else ""}${applied}ms from your last $samples judged taps",
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                    .padding(horizontal = 7.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    "🎯 CALIBRATE ${if ((suggestion ?: 0) >= 0) "+" else ""}${suggestion}ms",
+                    color = Color.White,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Black,
+                    fontFamily = AudiowideFont
+                )
             }
         }
     }
@@ -1107,7 +1612,10 @@ private fun BpmHeroQuestsCard(
             KawaiiStatBadge("DB TRACKS", "$totalCal", KawaiiSoftTeal)
             KawaiiStatBadge("USER CAL", "$userCal", KawaiiSakuraPink)
             KawaiiStatBadge("LOGGED TAPS", "$totalTaps", KawaiiGoldenHoney)
-            KawaiiStatBadge("ACCURACY", if (accPct >= 0) "$accPct%" else "—", KawaiiMikuMint)
+            // Labelled PERFECT %, not "ACCURACY": the query behind it counts only accuracy='PERFECT'
+            // rows, and with five graded tiers a GREAT is not a failure — calling the perfect rate
+            // "accuracy" would understate a good player exactly as badly as it once overstated one.
+            KawaiiStatBadge("PERFECT %", if (accPct >= 0) "$accPct%" else "—", KawaiiMikuMint)
         }
     }
 }
@@ -1226,6 +1734,14 @@ private fun ColumnScope.BpmBeatNodeStage(
     var lastTapTimeMs by lastTapTimeMsState
     var perfectShockwaveTrigger by perfectShockwaveTriggerState
     var dbStats by dbStatsState
+    // The most recent cross-app unlock, shown as a banner over the node for a few seconds.
+    var newUnlock by remember { mutableStateOf<MikuUnlocks.Reward?>(null) }
+    LaunchedEffect(newUnlock) {
+        if (newUnlock != null) {
+            delay(4500L)
+            newUnlock = null
+        }
+    }
 
     Box(
         Modifier
@@ -1278,69 +1794,73 @@ private fun ColumnScope.BpmBeatNodeStage(
                     if (avg > 0) calculatedTapBpm = (60_000.0 / avg).toFloat().coerceIn(20f, 999f)
                 }
 
-                // Calculate Exact Millisecond Timing Offset (Early vs Late)
-                val accuracy: HitAccuracy
-                // With no beat to compare against there is no deviation to measure. This
-                // used to fabricate `timingOffsetMs = 0` + a GOOD judgment and write that
-                // row to bpm_tap_telemetry, inflating the rendered ACCURACY / LOGGED TAPS
-                // / lifetime goodHits stats with taps that were never judged at all.
-                // lastBeatEpochMs alone is NOT a beat reference: the metronome loop above
-                // free-runs from whenever isPlaying/beatIntervalMs last changed, so with no
-                // real pulse its phase is arbitrary — and the UI still printed
-                // "💖 PERFECT!! (+12ms)" and logged a deviationMs row against it. A judgment
-                // now requires a recent pulse from the detector itself.
+                // ---- JUDGMENT ------------------------------------------------------------
+                // A judgment requires a REAL, recent pulse from the detector. Everything below
+                // is measured against that pulse and nothing else — deliberately NOT against
+                // `lastBeatEpochMs`, the local metronome, whose phase is anchored on whenever
+                // isPlaying/beatIntervalMs last changed and is therefore arbitrary. (That, plus
+                // the older `elapsedRealtime % beatPeriod`, is exactly how every tap once scored
+                // PERFECT against a beat that did not exist.) With no pulse this is a FREE TAP:
+                // nothing is scored, nothing is persisted, and the UI says so.
+                val tier = MikuBeatClickerEngine.rhythmTier.value
+                val windows = MikuRhythmTiming.windowsFor(
+                    beatPeriodMs = beatIntervalMs,
+                    leniency = tier.leniency,
+                    bonusMs = MikuBeatClickerEngine.timingWindowBonusMs
+                )
                 // Read the pulse timestamp from the engine: this composable was extracted for the
                 // ART JIT limit and does not receive the whole BpmState.
-                val lastPulseMs = MikuBpmEngine.state.value.lastPulseEpochMs
-                val hasRecentPulse = lastPulseMs > 0L &&
-                    System.currentTimeMillis() - lastPulseMs < 5_000L
-                val hasBeatReference = isPlaying && lastBeatEpochMs > 0L && hasRecentPulse
-                if (hasBeatReference) {
-                    val cycle = (now - lastBeatEpochMs).mod(beatIntervalMs)
-                    val signedOffset = if (cycle > beatIntervalMs / 2) {
-                        (cycle - beatIntervalMs).toInt()
-                    } else {
-                        cycle.toInt()
-                    }
-                    timingOffsetMs = signedOffset
-
-                    val absOffset = abs(signedOffset)
-                    val perfectWin = maxOf(45, (beatIntervalMs / 8).toInt())
-                    val goodWin = maxOf(100, (beatIntervalMs / 4).toInt())
-
-                    accuracy = when {
-                        absOffset <= perfectWin -> HitAccuracy.PERFECT
-                        absOffset <= goodWin -> HitAccuracy.GOOD
-                        else -> HitAccuracy.MISS
-                    }
-                } else {
-                    timingOffsetMs = 0
-                    accuracy = HitAccuracy.GOOD
-                }
+                val signedOffset: Int? = if (isPlaying) MikuRhythmTiming.signedOffsetToBeat(
+                    tapEpochMs = System.currentTimeMillis(),
+                    lastPulseEpochMs = MikuBpmEngine.state.value.lastPulseEpochMs,
+                    beatPeriodMs = beatIntervalMs,
+                    // Constant device latency (output + touch) measured out, so a clean tap does
+                    // not read permanently "late". See MikuRhythmCalibration.
+                    calibrationMs = MikuRhythmCalibration.offsetMs.value
+                ) else null
+                val accuracy: HitAccuracy? = signedOffset?.let { MikuRhythmTiming.judge(it, windows) }
+                // Deadzone: inside ~1 frame the deviation is below what this panel can resolve,
+                // so it displays as a clean 0 rather than fake precision.
+                timingOffsetMs = if (signedOffset != null) MikuRhythmTiming.displayOffsetMs(signedOffset, windows) else 0
 
                 // Haptic FIRST — one short sharp pulse the instant the judgment is known,
                 // before any scoring/DB work, so it lands on the finger, not after it.
-                com.miku.launcher.haptics.MikuHaptics.beat(
-                    ctx,
-                    when (accuracy) { HitAccuracy.PERFECT -> 2; HitAccuracy.GOOD -> 1; HitAccuracy.MISS -> 0 }
-                )
+                com.miku.launcher.haptics.MikuHaptics.beat(ctx, accuracy?.hapticStrength ?: 0)
 
-                val yield = MikuBeatClickerEngine.tap(accuracy, liveBpm)
-                val pts = when (accuracy) {
-                    HitAccuracy.PERFECT -> 100L + clickerCombo * 15L
-                    HitAccuracy.GOOD -> 50L + clickerCombo * 5L
-                    HitAccuracy.MISS -> 0L
-                }
-                // Only a REAL detected tempo may reach the seasons engine: it feeds
-                // lifetimeStats.highestBpmLocked, which the "HIGH BPM" badge renders. The
-                // 120f rhythm-game default used to be persisted there as a measurement.
-                MikuBpmSeasonsEngine.recordTap(
-                    accuracy, clickerCombo, pts,
-                    if (hasLiveTempo) liveBpm else 0f
-                )
+                if (accuracy == null || signedOffset == null) {
+                    // FREE TAP: the idle economy still responds to the finger, but no accuracy
+                    // counter, combo, fever, season rank or telemetry row is touched.
+                    MikuBeatClickerEngine.freeTap()
+                    // Say WHY it is not scoring: acquiring a tempo lock, or nothing playing.
+                    judgmentTitle = if (isPlaying) "FREE TAP · ${MikuTempoLock.tempo.value.label}" else "FREE TAP · nothing playing"
+                    judgmentColor = KawaiiSoftTeal
+                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        MikuBeatClickerEngine.checkAchievements()
+                    }
+                } else {
+                    val comboBefore = clickerCombo
+                    // Real measured deviation feeds the offset calibrator (judged taps only).
+                    MikuRhythmCalibration.recordJudgedDeviation(signedOffset)
+                    MikuBeatClickerEngine.tap(accuracy, liveBpm, tier.scoreScale)
+                    val comboAfter = MikuBeatClickerEngine.combo.value
+                    // Crossing a combo rung is the moment worth celebrating — a distinct double
+                    // tap of haptics marks it so the player feels the multiplier change.
+                    if (MikuBeatClickerEngine.comboMultiplier(comboAfter) >
+                        MikuBeatClickerEngine.comboMultiplier(comboBefore)) {
+                        com.miku.launcher.haptics.MikuHaptics.confirm(ctx)
+                    }
+                    val pts = ((accuracy.seasonPoints * 5L +
+                        comboBefore * (if (accuracy.isGreatOrBetter) 15L else 5L)) * tier.scoreScale).toLong()
+                    // Only a REAL detected tempo may reach the seasons engine: it feeds
+                    // lifetimeStats.highestBpmLocked, which the "HIGH BPM" badge renders. The
+                    // 120f rhythm-game default used to be persisted there as a measurement.
+                    MikuBpmSeasonsEngine.recordTap(
+                        accuracy, comboBefore, pts,
+                        if (hasLiveTempo) liveBpm else 0f
+                    )
 
-                // Telemetry Logging to SQLite Database — judged taps only.
-                if (hasBeatReference) {
+                    // Telemetry Logging to SQLite Database — judged taps only. deviationMs is
+                    // the raw measured value, not the deadzone-flattened display value.
                     coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                         bpmDb.logTapTelemetry(
                             MikuBpmDatabase.TapTelemetryRecord(
@@ -1348,44 +1868,35 @@ private fun ColumnScope.BpmBeatNodeStage(
                                 title = trackTitle ?: "",
                                 tapEpochMs = System.currentTimeMillis(),
                                 targetBeatMs = beatIntervalMs,
-                                deviationMs = timingOffsetMs,
+                                deviationMs = signedOffset,
                                 accuracy = accuracy.name,
                                 // 0 = tempo not detected; never the 120f game default.
                                 instantaneousBpm = if (hasLiveTempo) liveBpm else 0f,
-                                comboAtTap = clickerCombo,
+                                comboAtTap = comboBefore,
                                 isFever = feverSeconds > 0
                             )
                         )
                         MikuBeatClickerEngine.checkAchievements()
+                        // Cross-app unlocks are earned here and ONLY here: this branch is the
+                        // judged-tap branch, so nothing a free tap did can ever pay one out.
+                        val granted = MikuUnlocks.evaluate(ctx)
+                        if (granted.isNotEmpty()) {
+                            newUnlock = granted.last()
+                            MikuSeasonalAudioEngine.playLevelUpFanfare()
+                        }
                         dbStats = bpmDb.getCalibrationStats()
                     }
-                } else {
-                    coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                        MikuBeatClickerEngine.checkAchievements()
-                    }
-                }
 
-                if (!hasBeatReference) {
-                    judgmentTitle = "FREE TAP · no beat reference"
-                    judgmentColor = KawaiiSoftTeal
-                } else when (accuracy) {
-                    HitAccuracy.PERFECT -> {
-                        // Print the deviation that was actually measured. "(0ms)" was a
-                        // literal, while the PERFECT window is up to beatInterval/8.
-                        val sign = if (timingOffsetMs < 0) "-" else "+"
-                        judgmentTitle = "💖 PERFECT!! ($sign${abs(timingOffsetMs)}ms)"
-                        judgmentColor = KawaiiHotPink
-                        perfectShockwaveTrigger++
+                    // Feedback that TEACHES: the tier word plus which way to move next time.
+                    judgmentTitle = "${accuracy.emoji} ${accuracy.label} · ${MikuRhythmTiming.nudgeHint(timingOffsetMs, windows)}"
+                    judgmentColor = when (accuracy) {
+                        HitAccuracy.PERFECT -> KawaiiHotPink
+                        HitAccuracy.GREAT -> KawaiiSakuraPink
+                        HitAccuracy.GOOD -> KawaiiSoftTeal
+                        HitAccuracy.OK -> KawaiiGoldenHoney
+                        HitAccuracy.MISS -> Color(0xFFFF6B8B)
                     }
-                    HitAccuracy.GOOD -> {
-                        val prefix = if (timingOffsetMs < 0) "EARLY" else "LATE"
-                        judgmentTitle = "✨ GOOD ($prefix ${abs(timingOffsetMs)}ms)"
-                        judgmentColor = KawaiiSoftTeal
-                    }
-                    HitAccuracy.MISS -> {
-                        judgmentTitle = "MISS (${abs(timingOffsetMs)}ms)"
-                        judgmentColor = Color(0xFFFF6B8B)
-                    }
+                    if (accuracy == HitAccuracy.PERFECT) perfectShockwaveTrigger++
                 }
             }
         )
@@ -1411,6 +1922,28 @@ private fun ColumnScope.BpmBeatNodeStage(
                     modifier = Modifier
                         .offset(x = ft.x.dp, y = (ft.y + animY.value).dp)
                         .graphicsLayer { alpha = animAlpha.value }
+                )
+            }
+        }
+
+        // Cross-app unlock banner — names the reward AND where it shows up, so an unlock is a
+        // concrete thing the player can go and use, not a vague "+1 unlocked".
+        newUnlock?.let { r ->
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color(0xCC2A1206))
+                    .border(1.5.dp, KawaiiGoldenHoney, RoundedCornerShape(12.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    "${r.icon} UNLOCKED · ${r.title}  →  ${r.where}",
+                    color = KawaiiGoldenHoney,
+                    fontSize = 10.5.sp,
+                    fontWeight = FontWeight.Black,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
@@ -1639,6 +2172,13 @@ private fun BpmCalibrationFooter(
             KawaiiStatBadge("TAP TEMPO", if (calculatedTapBpm != null) "${calculatedTapBpm!!.toInt()}" else "--", KawaiiMikuMint)
         }
 
+        // Today's Setlist goals — the reason to start a session and to come back tomorrow.
+        BpmDailySetlistRow()
+
+        // Does the tapped tempo agree with what the detector heard? Octave-aware, so tapping
+        // half-time on a 170 BPM track reads as CORRECT instead of wrong.
+        BpmTempoMatchLine(hasLiveTempo = hasLiveTempo, liveBpm = liveBpm, tappedBpm = calculatedTapBpm)
+
         if (calculatedTapBpm != null) {
             val tapVal = calculatedTapBpm!!
             val halfVal = (tapVal / 2f).coerceIn(20f, 999f)
@@ -1683,11 +2223,14 @@ private fun BpmCalibrationFooter(
                                             // as a "raw detected" measurement.
                                             rawDetectedBpm = if (hasLiveTempo) liveBpm else 0f,
                                             userTappedBpm = tapVal,
-                                            tempoMultiplier = if (hasLiveTempo) {
-                                                if (tapVal > liveBpm * 1.5f) 2.0f
-                                                else if (tapVal < liveBpm * 0.75f) 0.5f
-                                                else 1.0f
-                                            } else 1.0f,
+                                            // Octave-aware and epsilon-tolerant: the detector is
+                                            // an estimator, so "within a couple of BPM" is the
+                                            // same tempo, and half/double-time is a MATCH with a
+                                            // known multiplier rather than a disagreement. 1.0
+                                            // when nothing was detected to relate it to.
+                                            tempoMultiplier = if (hasLiveTempo)
+                                                (MikuRhythmTiming.octaveMultiplier(tapVal, liveBpm) ?: 1.0f)
+                                            else 1.0f,
                                             confidence = 1.0f,
                                             source = "USER_CALIBRATED",
                                             tapCount = tapCounter
@@ -1759,9 +2302,12 @@ private fun BpmCalibrationFooter(
             }
         }
 
+        // Constant output/touch latency trim — see BpmTimingCalibrationRow.
+        BpmTimingCalibrationRow()
+
         Spacer(Modifier.height(3.dp))
         Text(
-            text = if (isPlaying) "🌸 Tap node when the glowing ring closes on center!" else "⏸️ Playback Paused · Tap node to measure tempo",
+            text = if (isPlaying) "🌸 Tap node when the glowing ring closes on center!" else "⏸️ Playback Paused · Tap node to measure tempo (free taps are not scored)",
             color = if (isPlaying) KawaiiMikuMint else KawaiiTextMuted,
             fontSize = 11.5.sp,
             fontWeight = FontWeight.Bold,

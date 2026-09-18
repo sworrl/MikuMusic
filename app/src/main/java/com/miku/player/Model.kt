@@ -56,10 +56,22 @@ data class Track(
 )
 
 data class ArtistGroup(val name: String, val tracks: List<Track>) {
-    val albumCount get() = tracks.map { it.album }.distinct().size
+    // PERF (scroll jank, 2026-09-17): these were `get()` accessors, i.e. a fresh O(tracks) pass
+    // (plus, for albumCount, two whole intermediate lists) on EVERY read. The artist list row
+    // reads albumCount in its subtitle, so a fling re-walked a prolific artist's entire track
+    // list once per row bind, on the main thread, purely to render "N albums". `tracks` is an
+    // immutable val, so the answer can never change for a given group — compute it once, lazily,
+    // and hand back the same value forever. PUBLICATION mode: these are read from the UI thread
+    // and from background grouping/media-session code, and a duplicate race-computation is
+    // harmless (same input, same answer) whereas a lock per read is not free.
+    val albumCount: Int by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        tracks.mapTo(HashSet<String>()) { it.album }.size
+    }
     /** Most recent add-time across the artist's tracks — an artist reads as "new" from the moment
      *  its newest track landed, not its oldest. */
-    val dateAddedSec: Long get() = tracks.maxOfOrNull { it.dateAddedSec } ?: 0L
+    val dateAddedSec: Long by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        tracks.maxOfOrNull { it.dateAddedSec } ?: 0L
+    }
 }
 
 /** The track whose art represents this artist wherever a single piece of cover art is shown
@@ -76,16 +88,26 @@ fun ArtistGroup.coverTrack(ctx: android.content.Context): Track? {
 }
 
 data class AlbumGroup(val name: String, val artist: String, val tracks: List<Track>) {
+    // Same PERF change as ArtistGroup above: every album grid tile reads hasDiscImage and
+    // unsplitImageCount while binding, and each of these was a full O(tracks) pass per read.
     /** True when this album is (at least partly) a whole-CD image rip. */
-    val hasDiscImage: Boolean get() = tracks.any { it.isDiscImage }
+    val hasDiscImage: Boolean by lazy(LazyThreadSafetyMode.PUBLICATION) { tracks.any { it.isDiscImage } }
     /** Cue-less images still shown as ONE file (no real track list). */
-    val unsplitImageCount: Int get() = tracks.count { it.isDiscImage && it.parentId == 0L }
+    val unsplitImageCount: Int by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        tracks.count { it.isDiscImage && it.parentId == 0L }
+    }
     /** Number of physical disc images behind this album (multi-file ".1/.2" images count each). */
-    val discImageFiles: Int get() = tracks.filter { it.isDiscImage }.map { if (it.parentId != 0L) it.parentId else it.id }.distinct().size
+    val discImageFiles: Int by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        tracks.filter { it.isDiscImage }.map { if (it.parentId != 0L) it.parentId else it.id }.distinct().size
+    }
     /** Earliest year present on the album (0 if none) — used to order albums chronologically. */
-    val year: Int get() = tracks.mapNotNull { it.year.takeIf { y -> y > 0 } }.minOrNull() ?: 0
+    val year: Int by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        tracks.mapNotNull { it.year.takeIf { y -> y > 0 } }.minOrNull() ?: 0
+    }
     /** Most recent add-time across the album's tracks (same reasoning as ArtistGroup above). */
-    val dateAddedSec: Long get() = tracks.maxOfOrNull { it.dateAddedSec } ?: 0L
+    val dateAddedSec: Long by lazy(LazyThreadSafetyMode.PUBLICATION) {
+        tracks.maxOfOrNull { it.dateAddedSec } ?: 0L
+    }
 }
 
 /**

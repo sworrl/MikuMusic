@@ -57,7 +57,23 @@ object MikuLiveBeatDetector {
                 }
                 val musicOut = try { am?.isMusicActive == true } catch (_: Throwable) { false }
                 if (musicOut && vis == null) attach(app)
-                if (!musicOut && vis != null) { detach(); MikuBpmEngine.pushLivePlaying(false) }
+                if (!musicOut && vis != null) {
+                    detach()
+                    MikuBpmEngine.pushLivePlaying(false)
+                    // Output stopped: whatever comes back may be a different song, so the held
+                    // tempo is dropped rather than carried across the gap.
+                    MikuTempoLock.onPlaybackStopped()
+                }
+                // A track change is not an outlier to be argued down over six onsets — drop the
+                // lock at once and re-acquire. onTrackChanged() no-ops when the key is unchanged.
+                if (musicOut) {
+                    val key = try {
+                        val t = android.provider.Settings.Global.getString(app.contentResolver, "miku_now_playing_title")
+                        val a2 = android.provider.Settings.Global.getString(app.contentResolver, "miku_now_playing_artist")
+                        if (t.isNullOrBlank() && a2.isNullOrBlank()) null else "$a2|$t"
+                    } catch (_: Throwable) { null }
+                    MikuTempoLock.onTrackChanged(key)
+                }
                 // If capturing but no onset for >2.5s while music is out, keep isPlaying true but
                 // let BPM coast on the last value (steady-state / ambient track).
                 delay(600L)
@@ -120,8 +136,16 @@ object MikuLiveBeatDetector {
             lastBeatMs = now
             // Audio IS out, so report playing; but only publish a tempo once at least two intervals
             // have produced a real median. Before that there is nothing measured to publish.
-            if (liveBpm > 0f && beatIntervals.size >= 2) {
-                MikuBpmEngine.pushLivePulse(liveBpm)
+            //
+            // And never publish the raw per-onset estimate: it moves by a few BPM on every vocal
+            // transient, cymbal or fill, which made the readout flicker while a track played at
+            // one constant tempo. MikuTempoLock ACQUIRES a tempo from agreeing estimates, then
+            // HOLDS exactly that value (octave-tolerantly) until sustained evidence of a real
+            // tempo change, so what reaches the UI is solid. While it is still acquiring it
+            // returns 0 and we publish no tempo at all — "listening…", not a confident guess.
+            val published = if (liveBpm > 0f && beatIntervals.size >= 2) MikuTempoLock.onEstimate(liveBpm) else 0f
+            if (published > 0f) {
+                MikuBpmEngine.pushLivePulse(published)
             } else {
                 MikuBpmEngine.pushLivePlaying(true)
             }

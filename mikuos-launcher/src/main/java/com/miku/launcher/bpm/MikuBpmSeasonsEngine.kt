@@ -9,8 +9,8 @@ import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.*
 
-/** Beat-match accuracy tier for the rhythm game, seasons engine, and incremental clicker. */
-enum class HitAccuracy { PERFECT, GOOD, MISS }
+// [HitAccuracy] now lives in MikuRhythmTiming.kt, next to the hit windows that produce it —
+// the tier table and the millisecond windows are one design and have to be tuned together.
 
 /**
  * Hatsune Miku BPM Tap Observatory Lifetime & Monthly Seasons Engine.
@@ -35,14 +35,22 @@ object MikuBpmSeasonsEngine {
     }
 
     data class LifetimeStats(
+        // Every counter here is JUDGED taps only — a tap with no real detected beat behind it
+        // never reaches recordTap(), so none of these numbers can be inflated by free taps.
         val totalTaps: Long = 0L,
         val totalScore: Long = 0L,
         val maxCombo: Int = 0,
         val perfectHits: Long = 0L,
+        val greatHits: Long = 0L,
         val goodHits: Long = 0L,
+        val okHits: Long = 0L,
         val missHits: Long = 0L,
         val highestBpmLocked: Float = 0f
-    )
+    ) {
+        /** -1 = nothing judged yet, so there is no rate to report. Never a flattering 100. */
+        val greatOrBetterPct: Float
+            get() = if (totalTaps > 0L) (perfectHits + greatHits) * 100f / totalTaps else -1f
+    }
 
     data class SeasonStats(
         val seasonKey: String = "",       // "2026-08"
@@ -95,7 +103,10 @@ object MikuBpmSeasonsEngine {
                     totalScore = obj.optLong("score", 0L),
                     maxCombo = obj.optInt("combo", 0),
                     perfectHits = obj.optLong("perfect", 0L),
+                    // New tiers default to 0 so an existing save loads unchanged.
+                    greatHits = obj.optLong("great", 0L),
                     goodHits = obj.optLong("good", 0L),
+                    okHits = obj.optLong("ok", 0L),
                     missHits = obj.optLong("miss", 0L),
                     highestBpmLocked = obj.optDouble("highBpm", 0.0).toFloat()
                 )
@@ -148,6 +159,11 @@ object MikuBpmSeasonsEngine {
 
     /**
      * Records a rhythm tap event and updates both Lifetime and Monthly Season stats.
+     *
+     * CONTRACT: call this ONLY for a tap that was judged against a real detected beat. Every
+     * number it writes is rendered later as a measurement (lifetime PERFECTS badge, season
+     * score, rank), so a fabricated judgment in here is a fabricated statistic on screen.
+     * Free taps (no beat reference) must go to MikuBeatClickerEngine.freeTap() instead.
      */
     fun recordTap(
         accuracy: HitAccuracy,
@@ -155,11 +171,11 @@ object MikuBpmSeasonsEngine {
         scoreEarned: Long,
         currentBpm: Float
     ) {
-        val ptsGain = when (accuracy) {
-            HitAccuracy.PERFECT -> 15L + (currentCombo * 2L)
-            HitAccuracy.GOOD -> 8L + currentCombo
-            HitAccuracy.MISS -> 1L
-        }
+        // Season points come straight off the tier table (MikuRhythmTiming.kt) so the five
+        // graded tiers, the clicker payout and the rank ladder can never drift apart. A MISS
+        // pays 0 rank points, not 1: a whiffed tap should not creep you up the season ladder.
+        val comboKicker = if (accuracy.isHit) (currentCombo * (if (accuracy.isGreatOrBetter) 2L else 1L)) else 0L
+        val ptsGain = accuracy.seasonPoints + comboKicker
 
         // 1. Update Lifetime
         val curLife = _lifetime.value
@@ -168,7 +184,9 @@ object MikuBpmSeasonsEngine {
             totalScore = curLife.totalScore + scoreEarned,
             maxCombo = maxOf(curLife.maxCombo, currentCombo),
             perfectHits = curLife.perfectHits + if (accuracy == HitAccuracy.PERFECT) 1 else 0,
+            greatHits = curLife.greatHits + if (accuracy == HitAccuracy.GREAT) 1 else 0,
             goodHits = curLife.goodHits + if (accuracy == HitAccuracy.GOOD) 1 else 0,
+            okHits = curLife.okHits + if (accuracy == HitAccuracy.OK) 1 else 0,
             missHits = curLife.missHits + if (accuracy == HitAccuracy.MISS) 1 else 0,
             highestBpmLocked = maxOf(curLife.highestBpmLocked, currentBpm)
         )
@@ -202,7 +220,9 @@ object MikuBpmSeasonsEngine {
                 put("score", life.totalScore)
                 put("combo", life.maxCombo)
                 put("perfect", life.perfectHits)
+                put("great", life.greatHits)
                 put("good", life.goodHits)
+                put("ok", life.okHits)
                 put("miss", life.missHits)
                 put("highBpm", life.highestBpmLocked.toDouble())
             }

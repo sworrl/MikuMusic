@@ -16,7 +16,10 @@ import org.json.JSONObject
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.asCoroutineDispatcher
 
 /**
  * Release year fallback for when MediaStore's own `YEAR` column is empty — verified live against
@@ -37,10 +40,55 @@ object TrackYear {
     private val cache = mutableStateMapOf<Long, Int>()   // 0 = probed, nothing found
     private val mainH = Handler(Looper.getMainLooper())
     private val inFlight = HashSet<Long>()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // PERF (scroll jank, 2026-09-17): same change as TrackTech — this was Dispatchers.IO at
+    // NORMAL thread priority, so FLAC metadata-block walks on the SD card competed with the UI
+    // thread for CPU while the user scrolled. Dedicated 2-thread pool at THREAD_PRIORITY_BACKGROUND.
+    private val probeExecutor = Executors.newFixedThreadPool(2) { r ->
+        Thread({
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+            r.run()
+        }, "miku-year-probe").apply { isDaemon = true }
+    }
+    private val scope = CoroutineScope(SupervisorJob() + probeExecutor.asCoroutineDispatcher())
     private val ioGate = Semaphore(2)
     private var cacheFile: File? = null
+    /** Application context captured on first use, so a deferred probe can start without one. */
+    @Volatile private var appCtx: Context? = null
     @Volatile private var loaded = false
+
+    // Scroll gate — see the long note on TrackTech.beginScroll(). A fling through the songs list
+    // used to launch one FLAC year probe per row, from composition, on the main thread; the
+    // request is now merely recorded while a list is moving and drained when it stops, keeping at
+    // most DEFERRED_CAP of the most recent (i.e. on-screen) asks.
+    private val scrollDepth = AtomicInteger(0)
+    private const val DEFERRED_CAP = 600
+    private val deferred = LinkedHashMap<Long, Track>()
+
+    fun beginScroll() { scrollDepth.incrementAndGet() }
+
+    fun endScroll() {
+        if (scrollDepth.decrementAndGet() > 0) return
+        scrollDepth.set(0)
+        val pending = synchronized(deferred) {
+            if (deferred.isEmpty()) return
+            val snapshot = ArrayList(deferred.values)
+            deferred.clear()
+            snapshot
+        }
+        for (t in pending) startProbe(t)
+    }
+
+    private fun deferProbe(track: Track) {
+        synchronized(deferred) {
+            deferred.remove(track.id)
+            deferred[track.id] = track
+            while (deferred.size > DEFERRED_CAP) {
+                val iter = deferred.keys.iterator()
+                if (!iter.hasNext()) break
+                iter.next(); iter.remove()
+            }
+        }
+    }
 
     // Debounced persistence: probing thousands of null-year FLACs used to rewrite the ENTIRE
     // track_year.json once per file (O(n²) writes — the same stall TrackTech was throttled to fix).
@@ -58,6 +106,7 @@ object TrackYear {
     }
 
     private fun ensureLoaded(ctx: Context) {
+        if (appCtx == null) appCtx = ctx.applicationContext
         if (loaded) return
         synchronized(this) {
             if (loaded) return
@@ -114,7 +163,17 @@ object TrackYear {
             publish(track.id, 0)
             return 0
         }
-        synchronized(inFlight) { if (!inFlight.add(track.id)) return null }
+        // PERF: record instead of launching an IO coroutine per row from inside composition while
+        // a list is being flung (see the scroll gate above); endScroll() drains it and publish()
+        // wakes the row through its `cache[track.id]` snapshot read.
+        if (scrollDepth.get() > 0) { deferProbe(track); return null }
+        startProbe(track)
+        return null
+    }
+
+    private fun startProbe(track: Track) {
+        if (appCtx == null) return
+        synchronized(inFlight) { if (!inFlight.add(track.id)) return }
         scope.launch {
             ioGate.withPermit {
                 val y = runCatching { flacYear(track.path) }.getOrNull() ?: 0
@@ -123,7 +182,6 @@ object TrackYear {
                 schedulePersist()
             }
         }
-        return null
     }
 
     /**

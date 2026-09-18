@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -55,7 +56,22 @@ object AlbumArtCache {
     // after MISS_TTL_MS and are wiped outright whenever a library scan lands (clearMisses()).
     private const val MISS_TTL_MS = 5 * 60_000L
     private val misses = java.util.concurrent.ConcurrentHashMap<String, Long>()
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // PERF (scroll jank, 2026-09-17): art work ran on Dispatchers.IO, whose threads sit at NORMAL
+    // priority — so up to four concurrent MediaMetadataRetriever opens + bitmap decodes + lossless
+    // WebP encodes competed with the UI thread for CPU on a 4-little-core 665 exactly while the
+    // user was flinging a list. Own pool, one notch below the foreground default: nice enough that
+    // the scheduler always prefers the UI thread, but deliberately NOT full THREAD_PRIORITY_
+    // BACKGROUND (that drops the thread into the bg cgroup's few-percent CPU share, and album art
+    // is something the user is actively waiting to see, unlike the tech/year probes).
+    internal val artDispatcher = java.util.concurrent.Executors.newFixedThreadPool(4) { r ->
+        Thread({
+            android.os.Process.setThreadPriority(
+                android.os.Process.THREAD_PRIORITY_BACKGROUND + android.os.Process.THREAD_PRIORITY_MORE_FAVORABLE
+            )
+            r.run()
+        }, "miku-art").apply { isDaemon = true }
+    }.asCoroutineDispatcher()
+    private val scope = CoroutineScope(SupervisorJob() + artDispatcher)
     // PERF: this limiter existed but was only ever applied around [prewarm]'s own loop — the path
     // every on-screen AlbumArtImage actually takes (loadArtThumb) was completely UNBOUNDED. On a
     // cold start that meant the prewarm batch plus every art tile the first screen composes all
@@ -67,6 +83,7 @@ object AlbumArtCache {
     internal val gate = Semaphore(4)
     @Volatile private var prewarmed = false
 
+
     fun get(id: Long): ImageBitmap? = mem.get("$id")
     fun getHi(id: Long): ImageBitmap? = mem.get("$id#hi") ?: mem.get("$id")
     internal fun put(key: String, b: ImageBitmap) { mem.put(key, b) }
@@ -77,7 +94,7 @@ object AlbumArtCache {
     }
     internal fun markMiss(key: String) { misses[key] = android.os.SystemClock.elapsedRealtime() }
     /** Forget every recorded miss — after a rescan, after storage access is granted, etc. */
-    fun clearMisses() { misses.clear() }
+    fun clearMisses() { misses.clear(); clearFolderArtIndex() }
 
     fun prewarm(ctx: Context, tracks: List<Track>, memWarm: Int = 30) {
         if (prewarmed || tracks.isEmpty()) return
@@ -172,37 +189,75 @@ private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, o2)
 }
 
-private fun findFolderArt(trackPath: String): Bitmap? {
-    if (trackPath.isBlank()) return null
-    try {
-        val file = File(trackPath)
-        val dir = file.parentFile ?: return null
-        if (!dir.exists() || !dir.isDirectory) return null
+/**
+ * PERF (scroll jank, 2026-09-17): which file in a directory IS the cover was re-resolved for every
+ * single track in that directory — up to 16 File.exists() stat()s on the SD card, plus a full
+ * listFiles() with a regex over it, per track. An album of 15 tracks paid it 15 times for the
+ * identical answer. Memoised per directory ("" = looked, found nothing). Cleared alongside the
+ * art misses (AlbumArtCache.clearMisses) so a rescan or newly-granted storage access re-looks.
+ */
+private val folderArtIndex = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-        val candidates = listOf(
-            "cover.jpg", "cover.jpeg", "cover.png", "cover.webp",
-            "folder.jpg", "folder.jpeg", "folder.png", "folder.webp",
-            "front.jpg", "front.jpeg", "front.png", "front.webp",
-            "album.jpg", "album.jpeg", "album.png", "album.webp"
-        )
-        for (name in candidates) {
-            val imgFile = File(dir, name)
-            if (imgFile.exists() && imgFile.isFile && imgFile.length() > 0) {
-                BitmapFactory.decodeFile(imgFile.absolutePath)?.let { return it }
+internal fun clearFolderArtIndex() = folderArtIndex.clear()
+
+private fun resolveFolderArtFile(trackPath: String): File? {
+    if (trackPath.isBlank()) return null
+    val file = File(trackPath)
+    val dir = file.parentFile ?: return null
+    folderArtIndex[dir.path]?.let { return if (it.isEmpty()) null else File(it) }
+    var found: File? = null
+    try {
+        if (dir.exists() && dir.isDirectory) {
+            val candidates = listOf(
+                "cover.jpg", "cover.jpeg", "cover.png", "cover.webp",
+                "folder.jpg", "folder.jpeg", "folder.png", "folder.webp",
+                "front.jpg", "front.jpeg", "front.png", "front.webp",
+                "album.jpg", "album.jpeg", "album.png", "album.webp"
+            )
+            for (name in candidates) {
+                val imgFile = File(dir, name)
+                if (imgFile.exists() && imgFile.isFile && imgFile.length() > 0) { found = imgFile; break }
+            }
+            if (found == null) {
+                val imageFiles = dir.listFiles { f ->
+                    f.isFile && (f.extension.equals("jpg", true) || f.extension.equals("jpeg", true) ||
+                                 f.extension.equals("png", true) || f.extension.equals("webp", true))
+                }
+                if (imageFiles != null) {
+                    // "AlbumArt_{…}_Large.jpg", "cover.1.jpg", "Front Cover.png" — any obvious art name.
+                    found = imageFiles.firstOrNull { FOLDER_ART_NAME_RE.containsMatchIn(it.name) }
+                        ?: imageFiles.singleOrNull()
+                }
             }
         }
-        val imageFiles = dir.listFiles { f ->
-            f.isFile && (f.extension.equals("jpg", true) || f.extension.equals("jpeg", true) ||
-                         f.extension.equals("png", true) || f.extension.equals("webp", true))
-        }
-        if (imageFiles != null) {
-            // "AlbumArt_{…}_Large.jpg", "cover.1.jpg", "Front Cover.png" — any obvious art name.
-            imageFiles.firstOrNull { FOLDER_ART_NAME_RE.containsMatchIn(it.name) }
-                ?.let { f -> BitmapFactory.decodeFile(f.absolutePath)?.let { return it } }
-            if (imageFiles.size == 1) BitmapFactory.decodeFile(imageFiles[0].absolutePath)?.let { return it }
-        }
-    } catch (_: Throwable) {}
-    return null
+    } catch (_: Throwable) { found = null }
+    folderArtIndex[dir.path] = found?.absolutePath ?: ""
+    return found
+}
+
+/**
+ * Folder cover art, decoded DOWNSAMPLED. This used to be a bare `BitmapFactory.decodeFile` of the
+ * full-size image: a 3000x3000 cover.jpg meant a 36 MB bitmap allocated (and then immediately
+ * thrown away by the caller's rescale) for a 320px thumbnail — once per track, straight into the
+ * GC churn that shows up as scroll stutter. [target] is the size the caller is about to scale to;
+ * inSampleSize is chosen to stay at or above it on the SHORTER side, so the decoded image is never
+ * softer than what the old full-size path produced.
+ */
+private fun findFolderArt(trackPath: String, target: Int = THUMB_PX): Bitmap? {
+    val f = resolveFolderArtFile(trackPath) ?: return null
+    return decodeSampledFile(f, target)
+}
+
+private fun decodeSampledFile(f: File, target: Int): Bitmap? {
+    return try {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.absolutePath, bounds)
+        val short = minOf(bounds.outWidth, bounds.outHeight)
+        if (short <= 0) return BitmapFactory.decodeFile(f.absolutePath)
+        var s = 1
+        while (short / (s * 2) >= target) s *= 2
+        BitmapFactory.decodeFile(f.absolutePath, BitmapFactory.Options().apply { inSampleSize = s })
+    } catch (_: Throwable) { null }
 }
 
 private val FOLDER_ART_NAME_RE = Regex("(?i)^(albumart|cover|folder|front|album)[^/]*\\.(jpe?g|png|webp)$")
@@ -214,7 +269,7 @@ private val FOLDER_ART_NAME_RE = Regex("(?i)^(albumart|cover|folder|front|album)
  * (Confirmed live 2026-08-25: the app's manage-external-storage op was still "default", so every
  * album whose art lives only as a folder cover.jpg rendered the placeholder.)
  */
-private fun findFolderArtViaMediaStore(ctx: Context, trackPath: String): Bitmap? {
+private fun findFolderArtViaMediaStore(ctx: Context, trackPath: String, target: Int = THUMB_PX): Bitmap? {
     if (trackPath.isBlank()) return null
     val dir = trackPath.substringBeforeLast('/', "")
     if (dir.isBlank()) return null
@@ -245,7 +300,10 @@ private fun findFolderArtViaMediaStore(ctx: Context, trackPath: String): Bitmap?
             if (pick >= 0) {
                 val uri = ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, pick)
                 ctx.contentResolver.openInputStream(uri)?.use { ins ->
-                    return BitmapFactory.decodeStream(ins)
+                    // PERF: was a full-size decodeStream — a 3000px folder cover became a 36 MB
+                    // bitmap per track before the caller scaled it away. Same two-pass
+                    // downsampling as decodeSampled (bytes, because a stream can't be re-read).
+                    return decodeSampled(ins.readBytes(), target)
                 }
             }
         }
@@ -256,7 +314,7 @@ private fun findFolderArtViaMediaStore(ctx: Context, trackPath: String): Bitmap?
 /** MediaProvider's own per-album art (content://media/external/audio/albumart/<albumId>) — built by
  *  the platform scanner from ANY track's embedded picture or the folder cover, with full file
  *  access we may not have. Last resort before giving up. */
-private fun loadMediaStoreAlbumArt(ctx: Context, trackId: Long): Bitmap? {
+private fun loadMediaStoreAlbumArt(ctx: Context, trackId: Long, target: Int = THUMB_PX): Bitmap? {
     try {
         val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, trackId)
         var albumId = -1L
@@ -265,14 +323,15 @@ private fun loadMediaStoreAlbumArt(ctx: Context, trackId: Long): Bitmap? {
         }
         if (albumId <= 0) return null
         val artUri = ContentUris.withAppendedId(android.net.Uri.parse("content://media/external/audio/albumart"), albumId)
-        ctx.contentResolver.openInputStream(artUri)?.use { ins -> return BitmapFactory.decodeStream(ins) }
+        // PERF: downsampled rather than a full-size decode — see findFolderArtViaMediaStore.
+        ctx.contentResolver.openInputStream(artUri)?.use { ins -> return decodeSampled(ins.readBytes(), target) }
     } catch (_: Throwable) {}
     return null
 }
 
 /** Thumb pipeline: memory -> WebP disk -> embedded picture -> folder art -> MediaStore. */
 suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", keepInMemory: Boolean = true): ImageBitmap? =
-    withContext(Dispatchers.IO) {
+    withContext(AlbumArtCache.artDispatcher) {
         AlbumArtCache.get(trackId)?.let { return@withContext it }
         if (AlbumArtCache.isMiss("$trackId")) return@withContext null
         // PERF: everything below is the expensive part (MediaMetadataRetriever on an SD-card FLAC,
@@ -351,7 +410,7 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
     }
 
 /** Hi-res pipeline for full Now Playing stage — same 100% accurate embedded & folder art priority. */
-suspend fun loadArtHiRes(ctx: Context, trackId: Long, trackPath: String = ""): ImageBitmap? = withContext(Dispatchers.IO) {
+suspend fun loadArtHiRes(ctx: Context, trackId: Long, trackPath: String = ""): ImageBitmap? = withContext(AlbumArtCache.artDispatcher) {
     AlbumArtCache.getHi(trackId)?.let { if (it.width >= THUMB_PX + 1) return@withContext it }
     if (AlbumArtCache.isMiss("$trackId#hi")) return@withContext AlbumArtCache.get(trackId)
     try {
@@ -378,10 +437,10 @@ suspend fun loadArtHiRes(ctx: Context, trackId: Long, trackPath: String = ""): I
 
         // 2. Secondary Source: Local Folder Cover Art (raw file, then via MediaStore.Images)
         if (bmp == null && trackPath.isNotBlank()) {
-            bmp = findFolderArt(trackPath) ?: findFolderArtViaMediaStore(ctx, trackPath)
+            bmp = findFolderArt(trackPath, HIRES_PX) ?: findFolderArtViaMediaStore(ctx, trackPath, HIRES_PX)
         }
         // 3. Platform album art (any track of the album)
-        if (bmp == null) bmp = loadMediaStoreAlbumArt(ctx, trackId)
+        if (bmp == null) bmp = loadMediaStoreAlbumArt(ctx, trackId, HIRES_PX)
 
         val b = bmp
         if (b != null) {

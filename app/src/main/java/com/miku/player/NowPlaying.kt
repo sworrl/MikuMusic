@@ -1465,23 +1465,39 @@ fun TieredRainbowHeart(
     onLongPress: (() -> Unit)? = null
 ) {
     val ctx = LocalContext.current
-    var phase by remember { mutableStateOf(0f) }
-    var beat by remember { mutableStateOf(0f) }
+    // PERF (scroll jank, 2026-09-17) — this was the single most expensive thing a liked list row
+    // did. `phase`/`beat` tick at 60 Hz for as long as the heart is liked and on screen, and the
+    // heartbeat scale below USED to be computed in this composable's body
+    // (`val pulse = ...; .scale(pulse)`). That made `beat` a COMPOSITION-phase read, so every
+    // liked heart recomposed 60 times a second — and with a heart on every liked artist/album/
+    // track row plus the docked now-playing bar, a screenful of liked rows meant several hundred
+    // full recompositions per second (each one re-allocating the Canvas lambda and re-running its
+    // ~20 path/gradient draw ops) on the same main thread the list scrolls on.
+    //
+    // Both values are now read ONLY from the layer/draw phase: `beat` inside graphicsLayer{} and
+    // `phase` inside the Canvas draw lambda. The animation is pixel-identical; it just no longer
+    // recomposes anything. They're also float states now, so the 60 Hz ticks stop boxing a Float
+    // per frame per heart.
+    val phase = remember { mutableFloatStateOf(0f) }
+    val beat = remember { mutableFloatStateOf(0f) }
     LaunchedEffect(liked) {
         if (!liked) return@LaunchedEffect
         while (true) {
             if (IdleController.screenActive) {
-                phase = (phase + 2.4f) % 360f; beat = (beat + 0.014f) % 1f
+                phase.floatValue = (phase.floatValue + 2.4f) % 360f
+                beat.floatValue = (beat.floatValue + 0.014f) % 1f
                 delay(16)
             } else delay(500)
         }
     }
-    val pulse = if (liked) 1f + 0.065f * heartbeat(beat) else 1f
     val label = when (tier) { LikeTier.TRACK -> "song"; LikeTier.ALBUM -> "album"; LikeTier.ARTIST -> "artist" }
     Box(
         Modifier
             .size(size)
-            .scale(pulse)
+            .graphicsLayer {
+                val pulse = if (liked) 1f + 0.065f * heartbeat(beat.floatValue) else 1f
+                scaleX = pulse; scaleY = pulse
+            }
             .semantics { contentDescription = "${if (liked) "Unlike" else "Like"} $label"; role = Role.Checkbox; toggleableState = ToggleableState(liked) }
             .combinedClickable(
                 interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
@@ -1502,20 +1518,23 @@ fun TieredRainbowHeart(
             val w = this.size.width
             val h = this.size.height
             val p = heartPath(w, h)
+            // Draw-phase read (see the note at the top of this function): ticking `phase` now
+            // invalidates only this Canvas's drawing, never composition.
+            val ph = phase.floatValue
 
             if (liked) {
-                // 1. 3D Physical Drop Shadow underneath the heart
-                val shadowPath = heartPath(w, h)
+                // 1. 3D Physical Drop Shadow underneath the heart — same geometry as `p`, which
+                //    used to be built a second time from scratch on every single frame.
                 drawContext.canvas.save()
                 drawContext.canvas.translate(0f, 3.5f)
-                drawPath(shadowPath, Color(0x99000000))
+                drawPath(p, Color(0x99000000))
                 drawContext.canvas.restore()
 
                 // 2. Ambient Chromatic Bloom / Aura behind the heart
                 drawCircle(
                     brush = Brush.radialGradient(
                         listOf(
-                            Color.hsv((phase + 120f) % 360f, 0.9f, 1f, 0.45f),
+                            Color.hsv((ph + 120f) % 360f, 0.9f, 1f, 0.45f),
                             Color.Transparent
                         ),
                         center = Offset(w * 0.5f, h * 0.45f),
@@ -1525,9 +1544,9 @@ fun TieredRainbowHeart(
 
                 // 3. Dynamic Rotating Rainbow Chromatic Core
                 val cols = when (tier) {
-                    LikeTier.TRACK -> (0..6).map { Color.hsv(((it * 52) + phase) % 360f, 0.88f, 1f) }
-                    LikeTier.ALBUM -> (0..6).map { Color.hsv(((it * 52) + phase * 1.4f + 40f) % 360f, 0.80f, 0.98f) }
-                    LikeTier.ARTIST -> (0..7).map { Color.hsv(((it * 46) + phase * 0.7f + 200f) % 360f, 0.92f, 1f) }
+                    LikeTier.TRACK -> (0..6).map { Color.hsv(((it * 52) + ph) % 360f, 0.88f, 1f) }
+                    LikeTier.ALBUM -> (0..6).map { Color.hsv(((it * 52) + ph * 1.4f + 40f) % 360f, 0.80f, 0.98f) }
+                    LikeTier.ARTIST -> (0..7).map { Color.hsv(((it * 46) + ph * 0.7f + 200f) % 360f, 0.92f, 1f) }
                 }
                 val brush = when (tier) {
                     LikeTier.TRACK -> Brush.linearGradient(cols, Offset(0f, h), Offset(w, 0f))
@@ -1612,11 +1631,10 @@ fun TieredRainbowHeart(
                 }
             } else {
                 // 3D Debossed Engraved Cavity when unliked
-                // Top inset shadow
-                val insetShadowPath = heartPath(w, h)
+                // Top inset shadow — reuses `p` instead of rebuilding the identical path.
                 drawContext.canvas.save()
                 drawContext.canvas.translate(0f, 1.8f)
-                drawPath(insetShadowPath, Color(0x95000000))
+                drawPath(p, Color(0x95000000))
                 drawContext.canvas.restore()
 
                 // Soft teal halo so the un-liked heart still reads as a heart against the

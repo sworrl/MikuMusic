@@ -778,7 +778,7 @@ public final class MikuDirectAudioSink implements AudioSink {
           bufferSize = bitPerfectBufferSize;
         }
       }
-      android.util.Log.i(
+      if (audioDebugLoggingEnabled()) android.util.Log.i(
           TAG,
           "BITPERFECT cfg: mode=PCM rate=" + outputSampleRate
               + " enc=" + outputEncoding
@@ -787,7 +787,7 @@ public final class MikuDirectAudioSink implements AudioSink {
               + " deepBufferThreshold=" + deepBufferPromotionBytes
               + " minBuf=" + getAudioTrackMinBufferSize(outputSampleRate, outputChannelConfig, outputEncoding)
               + " underThreshold=" + (bufferSize < deepBufferPromotionBytes));
-    } else {
+    } else if (audioDebugLoggingEnabled()) {
       android.util.Log.i(TAG, "BITPERFECT cfg: mode=" + outputMode + " (NOT PCM - buffer trick skipped)");
     }
     offloadDisabledUntilNextConfiguration = false;
@@ -1046,6 +1046,26 @@ public final class MikuDirectAudioSink implements AudioSink {
     return false;
   }
 
+  /**
+   * Per-track audio diagnostics, OFF by default so the hot path writes nothing.
+   *
+   * Turn on live with:   adb shell settings put global miku_audio_debug_log 1
+   * Turn off with:       adb shell settings put global miku_audio_debug_log 0
+   * Takes effect on the next track change (this is read in configure(), not per buffer).
+   * Prints the buffer-size decision that determines whether playback is bit-perfect:
+   * requested bufferSize vs the deep-buffer promotion threshold vs the platform minimum.
+   */
+  private boolean audioDebugLoggingEnabled() {
+    if (context == null) return false;   // the sink can be built without a Context
+    try {
+      return android.provider.Settings.Global.getInt(
+              context.getContentResolver(), "miku_audio_debug_log", 0)
+          == 1;
+    } catch (Throwable t) {
+      return false;
+    }
+  }
+
   private AudioTrack buildAudioTrackWithRetry() throws InitializationException {
     try {
       return buildAudioTrack(checkNotNull(configuration));
@@ -1065,6 +1085,8 @@ public final class MikuDirectAudioSink implements AudioSink {
           try {
             AudioTrack audioTrack = buildAudioTrack(minConfiguration);
             configuration = minConfiguration;
+            // Deliberately NOT gated on the debug flag: this fires only when bit-perfect output
+            // could not be obtained, which is exactly the case someone needs to see after the fact.
             android.util.Log.w(
                 TAG, "BITPERFECT: small buffer refused, fell back to platform min " + platformMin);
             return audioTrack;

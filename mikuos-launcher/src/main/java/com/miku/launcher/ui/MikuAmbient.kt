@@ -1,6 +1,12 @@
 package com.miku.launcher.ui
 
+import android.content.Context
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -65,7 +71,47 @@ object MikuAmbient {
     /** Non-compose read (modifiers, draw lambdas). */
     val isActive: Boolean
         get() = (_attention.value || _playing.value) && _covered.value == 0 &&
-            MikuPowerProfile.visible.value && !MikuPowerProfile.isLowPower
+            MikuPowerProfile.visible.value && !MikuPowerProfile.isLowPower &&
+            // The OS-wide idle ladder has taken the panel dim: whatever is on screen is barely
+            // visible and about to sleep, so no ambient animation is worth a frame.
+            MikuIdleTier.tier.value == MikuIdleTier.TIER_ACTIVE
+}
+
+/**
+ * Read-only mirror of the OS-wide idle ladder that MikuOS SystemUI runs
+ * (mikuos-systemui/.../MikuIdleDim.kt): it publishes `Settings.Global miku_idle_tier` =
+ * 0 ACTIVE / 1 DIM / 2 AMBIENT whenever the tier changes, and dims the real backlight.
+ *
+ * Cross-process by a ContentObserver, so this costs one callback per tier change (at most three
+ * per idle cycle) and nothing at all in between - no polling, matching the ladder's own
+ * event-driven design. If SystemUI is not running the key is simply absent and the tier stays
+ * ACTIVE, i.e. the launcher behaves exactly as it did before.
+ */
+object MikuIdleTier {
+    const val KEY = "miku_idle_tier"
+    const val TIER_ACTIVE = 0
+
+    private val _tier = MutableStateFlow(TIER_ACTIVE)
+    val tier: StateFlow<Int> = _tier.asStateFlow()
+    private var observer: ContentObserver? = null
+
+    /** Idempotent; safe to call from anywhere that has a Context. */
+    fun attach(ctx: Context) {
+        if (observer != null) return
+        val app = ctx.applicationContext
+        fun read() {
+            _tier.value = runCatching { Settings.Global.getInt(app.contentResolver, KEY, TIER_ACTIVE) }
+                .getOrDefault(TIER_ACTIVE)
+        }
+        read()
+        val obs = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) { read() }
+        }
+        // Only remember it if the registration actually took, so a failure can be retried on the
+        // next composition rather than silently leaving the tier pinned at ACTIVE forever.
+        runCatching { app.contentResolver.registerContentObserver(Settings.Global.getUriFor(KEY), false, obs) }
+            .onSuccess { observer = obs }
+    }
 }
 
 /**
@@ -75,12 +121,20 @@ object MikuAmbient {
  */
 @Composable
 fun rememberAmbientGate(): State<Boolean> {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    // Attach the OS idle-tier mirror the first time any gated animation composes. Idempotent, so
+    // the hundreds of call sites cost one registration in total.
+    LaunchedEffect(Unit) { MikuIdleTier.attach(ctx) }
     val low by rememberLowPower()
     val attention by MikuAmbient.attention.collectAsState()
     val playing by MikuAmbient.playing.collectAsState()
     val covered by MikuAmbient.covered.collectAsState()
     val visible by MikuPowerProfile.visible.collectAsState()
+    val idleTier by MikuIdleTier.tier.collectAsState()
     return remember {
-        derivedStateOf { low || covered > 0 || !visible || !(attention || playing) }
+        derivedStateOf {
+            // idleTier > 0 = the OS ladder has dimmed the backlight; freeze everything.
+            low || covered > 0 || !visible || !(attention || playing) || idleTier != MikuIdleTier.TIER_ACTIVE
+        }
     }
 }

@@ -554,6 +554,13 @@ private fun extraTiles(ctx: Context, onRefresh: () -> Unit): List<QsTile> {
     val ingest = Settings.Global.getInt(cr, "miku_ingest_enabled", 0) == 1
     val pause = Settings.Global.getInt(cr, "miku_pause_on_unplug", 1) == 1
     val hud = Settings.Global.getInt(cr, "miku_track_hud_enabled", 1) == 1
+    // Idle dim ladder (MikuIdleDim.kt): on/off here, timings cycled by long-press. Every value is
+    // a Settings.Global key too, so `settings put global miku_idle_dim_active_sec 45` retunes it
+    // live without a rebuild - same idiom as the rest of the MikuOS toggles.
+    val idleDimOn = Settings.Global.getInt(cr, MikuIdleDimSettings.KEY_ENABLED, 1) == 1
+    val idleActiveSec = MikuIdleDimSettings.activeSec(ctx)
+    val idleDimSec = MikuIdleDimSettings.dimSec(ctx)
+    val idleAmbientSec = MikuIdleDimSettings.ambientSec(ctx)
     fun putGlobal(k: String, v: Int) {
         runCatching { Settings.Global.putInt(cr, k, v) }.onFailure { RootShell.execFast("settings put global $k $v") }
     }
@@ -572,7 +579,24 @@ private fun extraTiles(ctx: Context, onRefresh: () -> Unit): List<QsTile> {
                 onRefresh()
             }),
         QsTile("track_hud", "Track HUD", if (hud) "Pops over apps" else "Off", Icons.Default.MusicNote, hud,
-            onClick = { putGlobal("miku_track_hud_enabled", if (hud) 0 else 1); onRefresh() })
+            onClick = { putGlobal("miku_track_hud_enabled", if (hud) 0 else 1); onRefresh() }),
+        QsTile(
+            "idle_dim", "Idle Dim",
+            if (idleDimOn) MikuIdleDimSettings.presetName(idleActiveSec, idleDimSec, idleAmbientSec) +
+                " \u00b7 dim " + idleActiveSec + "s \u00b7 sleep " + (idleActiveSec + idleDimSec + idleAmbientSec) + "s"
+            else "Off - screen cuts straight to black",
+            Icons.Default.BrightnessMedium, idleDimOn,
+            onClick = {
+                putGlobal(MikuIdleDimSettings.KEY_ENABLED, if (idleDimOn) 0 else 1)
+                onRefresh()
+            },
+            onLongClick = {
+                // Cycle Quick -> Normal -> Relaxed. A custom (shell-set) ladder lands on Quick.
+                val cur = Triple(idleActiveSec, idleDimSec, idleAmbientSec)
+                val idx = MikuIdleDimSettings.PRESETS.indexOf(cur)
+                MikuIdleDimSettings.applyPreset(ctx, MikuIdleDimSettings.PRESETS[(idx + 1) % MikuIdleDimSettings.PRESETS.size])
+                onRefresh()
+            })
     )
 }
 

@@ -91,6 +91,9 @@ class MikuNotificationShadeService : AccessibilityService() {
     }
 
     private lateinit var windowManager: WindowManager
+    /** OS-wide idle dim + tap-to-awaken ladder (see MikuIdleDim.kt). Lives here because this
+     *  service is the only thing on the device that sees input from every app. */
+    private var idleDim: MikuIdleDimController? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val workThread = HandlerThread("miku-nav-work").apply { start() }
     private val workHandler = Handler(workThread.looper)
@@ -163,6 +166,7 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        idleDim = MikuIdleDimController(this, windowManager)
         trackHud = MikuTrackHud(this, windowManager) { dragPx -> openShadeActivity(dragPx) }
         MikuPowerProfile.observe(this)
         startAccentObserver()
@@ -184,6 +188,10 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        // Before addOverlays(): accessibility overlays stack in add order, so starting the idle
+        // ladder first puts its 1px touch sentinel UNDERNEATH the nav strips rather than stealing
+        // the top-left pixel of the shade pull strip.
+        idleDim?.start()
         addOverlays()
         MikuNotificationStore.ensureEnabled(this)
         suppressStockShade()
@@ -193,6 +201,7 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     override fun onDestroy() {
         try { unregisterReceiver(receiver) } catch (_: Throwable) {}
+        idleDim?.destroy(); idleDim = null
         trackHud?.destroy(); trackHud = null
         accentJob?.cancel(); accentAnim?.cancel()
         removeOverlays()
@@ -535,6 +544,8 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
         if (event == null) return false
         if (fnLockSwallows(event.keyCode)) return true
+        // Any key (incl. the volume knob) is an interaction: restore full brightness immediately.
+        if (event.action == android.view.KeyEvent.ACTION_DOWN) idleDim?.poke()
         if (event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_UP ||
             event.keyCode == android.view.KeyEvent.KEYCODE_VOLUME_DOWN) {
             if (handleVolumeKnob(event)) return true
@@ -556,7 +567,22 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        // Idle ladder: a THIRD interaction source behind the 1px touch sentinel and onKeyEvent.
+        // ONLY unambiguously user-initiated event types are listed. Deliberately excluded:
+        // TYPE_WINDOW_CONTENT_CHANGED (a ticking clock fires it every second), TYPE_VIEW_SCROLLED
+        // (programmatic scrolls and animations fire it) and TYPE_VIEW_TEXT_CHANGED (a field
+        // updated in code fires it) — any of those would reset the idle timer with nobody
+        // touching the device and the screen would never dim at all.
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_CLICKED,
+            AccessibilityEvent.TYPE_VIEW_LONG_CLICKED,
+            AccessibilityEvent.TYPE_TOUCH_INTERACTION_START,
+            AccessibilityEvent.TYPE_GESTURE_DETECTION_START -> idleDim?.poke()
+        }
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // Hand the ladder the new foreground app so it can stand down for the apps that run
+            // their own brightness lifecycle (Miku Music, the MikuOS lockscreen/AOD).
+            idleDim?.setForeground(event.packageName?.toString(), event.className?.toString())
             val cls = event.className?.toString() ?: ""
             val pkg = event.packageName?.toString() ?: ""
             if (cls.contains("GlobalActions", ignoreCase = true) ||

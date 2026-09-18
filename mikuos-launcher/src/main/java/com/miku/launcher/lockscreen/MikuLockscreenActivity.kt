@@ -1785,35 +1785,49 @@ private fun LockscreenNowPlayingWidget(
                                     // telemetry table that backs the displayed ACCURACY %.
                                     //
                                     // NOW: a judgment requires a real, recent beat pulse from the
-                                    // detector, and the offset is measured against THAT pulse.
-                                    val pulseEpochMs = com.miku.launcher.bpm.MikuBpmEngine.state.value.lastPulseEpochMs
-                                    val nowEpochMs = System.currentTimeMillis()
-                                    val hasBeatReference = beatPeriodMs > 0 && pulseEpochMs > 0L &&
-                                        nowEpochMs - pulseEpochMs < 5_000L
-                                    val offsetMs: Int? = if (hasBeatReference) {
-                                        val sincePulse = (nowEpochMs - pulseEpochMs) % beatPeriodMs
-                                        // Signed distance to the nearest beat, in [-period/2, +period/2].
-                                        (if (sincePulse > beatPeriodMs / 2) sincePulse - beatPeriodMs else sincePulse).toInt()
-                                    } else null
-                                    val accuracy = when {
-                                        offsetMs == null -> null
-                                        Math.abs(offsetMs) <= 45 -> com.miku.launcher.bpm.HitAccuracy.PERFECT
-                                        Math.abs(offsetMs) <= 90 -> com.miku.launcher.bpm.HitAccuracy.GOOD
-                                        else -> com.miku.launcher.bpm.HitAccuracy.MISS
+                                    // detector, the offset is measured against THAT pulse, and it is
+                                    // graded through the shared five-tier window model so the
+                                    // lockscreen and the observatory can never disagree about what
+                                    // "PERFECT" means.
+                                    com.miku.launcher.bpm.MikuRhythmCalibration.init(context)
+                                    val rhythmTier = com.miku.launcher.bpm.MikuBeatClickerEngine.rhythmTier.value
+                                    val hitWindows = com.miku.launcher.bpm.MikuRhythmTiming.windowsFor(
+                                        beatPeriodMs = beatPeriodMs,
+                                        leniency = rhythmTier.leniency,
+                                        bonusMs = com.miku.launcher.bpm.MikuBeatClickerEngine.timingWindowBonusMs
+                                    )
+                                    val offsetMs: Int? = com.miku.launcher.bpm.MikuRhythmTiming.signedOffsetToBeat(
+                                        tapEpochMs = System.currentTimeMillis(),
+                                        lastPulseEpochMs = com.miku.launcher.bpm.MikuBpmEngine.state.value.lastPulseEpochMs,
+                                        beatPeriodMs = beatPeriodMs,
+                                        calibrationMs = com.miku.launcher.bpm.MikuRhythmCalibration.offsetMs.value
+                                    )
+                                    val accuracy = offsetMs?.let {
+                                        com.miku.launcher.bpm.MikuRhythmTiming.judge(it, hitWindows)
                                     }
-                                    miniJudgment = when (accuracy) {
-                                        com.miku.launcher.bpm.HitAccuracy.PERFECT -> "💖 PERFECT"
-                                        com.miku.launcher.bpm.HitAccuracy.GOOD -> "✨ GOOD"
-                                        com.miku.launcher.bpm.HitAccuracy.MISS -> "🎵 TAP"
+                                    // Deadzone-aware display: a tap inside ~1 frame of the beat
+                                    // reads as clean instead of being graded down or shown with
+                                    // precision this panel cannot actually resolve.
+                                    val shownOffsetMs = offsetMs?.let {
+                                        com.miku.launcher.bpm.MikuRhythmTiming.displayOffsetMs(it, hitWindows)
+                                    }
+                                    miniJudgment = if (accuracy == null) {
                                         // No beat to judge against — the tap still counts as a tap.
-                                        null -> "🎵 FREE TAP"
+                                        "🎵 FREE TAP"
+                                    } else if (shownOffsetMs == 0) {
+                                        "${accuracy.emoji} ${accuracy.label}"
+                                    } else {
+                                        // Teach the correction, not just the grade.
+                                        "${accuracy.emoji} ${accuracy.label} ${if ((shownOffsetMs ?: 0) < 0) "◀" else "▶"}"
                                     }
 
                                     coroutineScope.launch {
                                         miniTapAnimScale.snapTo(0.78f)
                                         miniTapAnimScale.animateTo(1.0f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
                                     }
-                                    com.miku.launcher.haptics.MikuHaptics.tick(context)
+                                    // Graded haptic: the judgment lands on the finger, and a
+                                    // PERFECT feels different from an OK without looking down.
+                                    com.miku.launcher.haptics.MikuHaptics.beat(context, accuracy?.hapticStrength ?: 0)
                                     val liveTapped = miniTappedBpm ?: nowPlaying.bpm
 
                                     // Play ascending pentatonic chime melody synchronized with combo
@@ -1821,15 +1835,23 @@ private fun LockscreenNowPlayingWidget(
 
                                     // Record Beat Clicker & Seasons Economy — only a judgment that
                                     // was actually measured may feed the scored economy and the
-                                    // accuracy statistics.
-                                    if (accuracy != null) {
-                                        com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped)
+                                    // accuracy statistics. A free tap gets the idle game's plain
+                                    // base click and touches no statistic at all.
+                                    if (accuracy != null && offsetMs != null) {
+                                        com.miku.launcher.bpm.MikuRhythmCalibration.recordJudgedDeviation(offsetMs)
+                                        com.miku.launcher.bpm.MikuBeatClickerEngine.tap(accuracy, liveTapped, rhythmTier.scoreScale)
+                                        val comboNow = com.miku.launcher.bpm.MikuBeatClickerEngine.combo.value
                                         com.miku.launcher.bpm.MikuBpmSeasonsEngine.recordTap(
                                             accuracy = accuracy,
-                                            currentCombo = miniTapCount,
-                                            scoreEarned = if (accuracy == com.miku.launcher.bpm.HitAccuracy.PERFECT) 100L else 50L,
+                                            currentCombo = comboNow,
+                                            // Straight off the shared tier table, scaled by the
+                                            // difficulty the player is actually being graded at.
+                                            scoreEarned = ((accuracy.seasonPoints * 5L +
+                                                comboNow * (if (accuracy.isGreatOrBetter) 15L else 5L)) * rhythmTier.scoreScale).toLong(),
                                             currentBpm = liveTapped
                                         )
+                                    } else {
+                                        com.miku.launcher.bpm.MikuBeatClickerEngine.freeTap()
                                     }
 
                                     // Log Calibration Telemetry to SQLite Database. A tap with no
@@ -1866,8 +1888,14 @@ private fun LockscreenNowPlayingWidget(
                                                     // nowPlaying.bpm was 0 (the common case), i.e.
                                                     // an octave claim out of nothing; it is only
                                                     // meaningful against a real detected tempo.
-                                                    tempoMultiplier = if (nowPlaying.bpm in 40f..300f &&
-                                                        miniTappedBpm!! > nowPlaying.bpm * 1.5f) 2.0f else 1.0f,
+                                                    // Octave-aware and epsilon-tolerant (a detector
+                                                    // estimate within a couple of BPM is the same
+                                                    // tempo; half/double-time is a match with a
+                                                    // known multiplier, not a disagreement).
+                                                    tempoMultiplier = if (nowPlaying.bpm in 40f..300f)
+                                                        (com.miku.launcher.bpm.MikuRhythmTiming
+                                                            .octaveMultiplier(miniTappedBpm!!, nowPlaying.bpm) ?: 1.0f)
+                                                    else 1.0f,
                                                     // Was a hardcoded 0.98 for a 6-tap tap-tempo.
                                                     // Nothing computed it, and the DB documents 0 as
                                                     // "no confidence was ever computed". Derive it

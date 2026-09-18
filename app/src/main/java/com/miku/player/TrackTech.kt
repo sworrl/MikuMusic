@@ -100,11 +100,11 @@ object TrackTech {
     fun endScroll() {
         if (scrollDepth.decrementAndGet() > 0) return
         scrollDepth.set(0)
-        val pending: List<Track>
-        synchronized(deferred) {
+        val pending = synchronized(deferred) {
             if (deferred.isEmpty()) return
-            pending = deferred.values.toList()
+            val snapshot = ArrayList(deferred.values)
             deferred.clear()
+            snapshot
         }
         for (t in pending) startProbe(t)
     }
@@ -114,8 +114,9 @@ object TrackTech {
             deferred.remove(track.id)          // re-insert so it counts as the most recent request
             deferred[track.id] = track
             while (deferred.size > DEFERRED_CAP) {
-                val eldest = deferred.keys.iterator()
-                eldest.next(); eldest.remove()
+                val iter = deferred.keys.iterator()
+                if (!iter.hasNext()) break
+                iter.next(); iter.remove()
             }
         }
     }
@@ -126,8 +127,10 @@ object TrackTech {
      *  mirror is written from a fresh main-looper message, so composition can neither race it nor
      *  be the one writing it. */
     private fun publish(id: Long, t: Tech) {
-        data[id] = t
-        techVersion.incrementAndGet()   // lets cached group breakdowns know they're worth redoing
+        val prev = data.put(id, t)
+        // Only a genuinely NEW/changed answer can change a group's figures — a repeat publish of
+        // the same value must not mark every cached group breakdown stale.
+        if (prev != t) techVersion.incrementAndGet()
         mainH.post { cache[id] = t }
     }
 
@@ -530,11 +533,6 @@ object TrackTech {
         val isVinylRip: Boolean = false
     )
 
-    /**
-     * Calculates the comprehensive relative quality distribution across an entire Album or Artist.
-     * Computes exact breakdown fractions for Master (192k+/32-bit/DSD), Studio Hi-Res (24-bit/96k),
-     * CD Lossless (16-bit/44.1k), and Lossy (MP3/AAC).
-     */
     /** The "nothing to say yet" breakdown. Every consumer already early-returns on
      *  `totalTracks == 0`, so this doubles as the placeholder [qualityForGroup] hands back while a
      *  real one is still being computed off the main thread. Shared instance: it used to be
@@ -603,8 +601,11 @@ object TrackTech {
     private fun scheduleGroupQuality(app: Context, key: Int, tracks: List<Track>) {
         synchronized(qInFlight) { if (!qInFlight.add(key)) return }
         scope.launch {
-            val v = techVersion.get()
             val bd = runCatching { computeQualityBreakdown(app, tracks) }.getOrDefault(EMPTY_QUALITY)
+            // Sampled AFTER the pass on purpose: computing a breakdown itself resolves (and
+            // publishes) the lossy tracks in the group, so sampling before would leave the result
+            // permanently "stale" and refresh it forever on a timer.
+            val v = techVersion.get()
             if (qData.size > 4000) qData.clear()   // a few rescans' worth of dead group lists
             qData[key] = GroupQuality(tracks, bd, v, System.currentTimeMillis())
             mainH.post { qMirror[key] = bd }
@@ -616,6 +617,11 @@ object TrackTech {
      *  [computeQualityBreakdown], where it used to allocate a fresh List on every single track. */
     private val MASTER_FORMATS = setOf("DSD", "DSF", "DFF")
 
+    /**
+     * Calculates the comprehensive relative quality distribution across an entire Album or Artist.
+     * Computes exact breakdown fractions for Master (192k+/32-bit/DSD), Studio Hi-Res (24-bit/96k),
+     * CD Lossless (16-bit/44.1k), and Lossy (MP3/AAC).
+     */
     fun computeQualityBreakdown(ctx: Context, tracks: List<Track>): QualityBreakdown {
         if (tracks.isEmpty()) return EMPTY_QUALITY
 

@@ -1849,26 +1849,37 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
         if (deltaBadge != null) { delay(4000); deltaBadge = null }
     }
 
-    val rotationTransition = rememberInfiniteTransition(label = "spin")
-    val spinAngle by rotationTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = 360f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "spinAngle"
-    )
-
-    val auraAlpha by rotationTransition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 0.9f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "auraAlpha"
-    )
+    // PERF (scroll jank, 2026-09-17): these two infinite transitions used to be created
+    // unconditionally — i.e. 60 animation frames a second for the entire life of the app — and
+    // `spinAngle` was unwrapped with `by` and read in this composable's BODY
+    // (`.rotate(spinAngle)` on the refresh icon). Since the pill lives in the always-visible
+    // header that sits on top of every list screen, that meant ScannerPill recomposed 60 times a
+    // second, forever, whether or not a scan was running, competing with list scrolling for the
+    // main thread. Now the transition only EXISTS while a scan is actually running (same
+    // conditional-composable-call pattern TechBadgeChip already uses for its shimmer), and both
+    // values are read from the layer/draw phase so even during a scan nothing recomposes for them.
+    val scanAnim: Pair<androidx.compose.runtime.State<Float>, androidx.compose.runtime.State<Float>>? = if (isScanning) {
+        val rotationTransition = rememberInfiniteTransition(label = "spin")
+        val spin = rotationTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(1000, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "spinAngle"
+        )
+        val aura = rotationTransition.animateFloat(
+            initialValue = 0.35f,
+            targetValue = 0.9f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "auraAlpha"
+        )
+        spin to aura
+    } else null
 
     // Same 3D-embossed-key language as HapticIconButton/DataChip: raised face lit from the top +
     // drop shadow at rest, springy scale + inverted sunk lighting while held, haptic tick on tap
@@ -1921,7 +1932,13 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 }
                 drawRoundRect(
                     Brush.horizontalGradient(
-                        if (isScanning) listOf(MikuTealBright.copy(alpha = auraAlpha), MikuPink.copy(alpha = auraAlpha))
+                        // Draw-phase read of the aura animation (it was already read here, so
+                        // this one never cost a recomposition) — .value because the transition is
+                        // now conditional and handed around as a State rather than unwrapped.
+                        if (isScanning) {
+                            val aa = scanAnim?.second?.value ?: 0.35f
+                            listOf(MikuTealBright.copy(alpha = aa), MikuPink.copy(alpha = aa))
+                        }
                         else listOf(MikuTeal.copy(alpha = 0.6f), MikuPink.copy(alpha = 0.4f))
                     ),
                     cornerRadius = rr, style = Stroke(1.2.dp.toPx())
@@ -1942,7 +1959,9 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 tint = if (isScanning) MikuTealBright else MikuTeal,
                 modifier = Modifier
                     .size(13.dp)
-                    .rotate(if (isScanning) spinAngle else 0f)
+                    // graphicsLayer, not .rotate(): the angle is read in the LAYER phase, so the
+                    // 60 Hz spin no longer recomposes the pill (see the note above).
+                    .graphicsLayer { rotationZ = scanAnim?.first?.value ?: 0f }
             )
             Spacer(Modifier.width(4.dp))
             Text(
@@ -2279,6 +2298,30 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 shape = RoundedCornerShape(10.dp)
             ) {
                 Text("🛰 Open Ingress Engine (SD scan)", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            // BPM / rhythm game entry point. The game lives in the MikuOS launcher's BPM
+            // observatory (it owns the live output-mix beat detector); hand off the same way the
+            // ingress button does, via an `open_bpm` launch extra.
+            Button(
+                onClick = {
+                    val launch = ctx.packageManager.getLaunchIntentForPackage("com.miku.launcher")?.apply {
+                        putExtra("open_bpm", true)
+                        flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    }
+                    if (launch == null) {
+                        android.widget.Toast.makeText(ctx, "MikuOS launcher not installed - BPM game unavailable", android.widget.Toast.LENGTH_SHORT).show()
+                    } else try { ctx.startActivity(launch) } catch (t: Throwable) {
+                        android.widget.Toast.makeText(ctx, "Couldn't open the BPM game: ${t.message}", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MikuPink.copy(alpha = 0.16f)),
+                shape = RoundedCornerShape(10.dp)
+            ) {
+                Text("BPM Rhythm Game", color = MikuPink, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -3074,6 +3117,31 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexed(
     list: List<Track>, row: @Composable (Int, Track) -> Unit
 ) = items(list.size, key = { list[it].id }, contentType = { "track" }) { i -> row(i, list[i]) }
 
+/**
+ * PERF (scroll jank, 2026-09-17). Per-track bit-depth/sample-rate (TrackTech) and release-year
+ * (TrackYear) probes are requested from inside list item bodies, so a fling used to launch one SD
+ * card probe coroutine per row that flew past — thousands of them, from the main thread, mid-fling,
+ * and then minutes of SD I/O afterwards for rows nobody is looking at any more. This tells both
+ * caches "a list is moving": while it is, a request is only recorded, and the recording (capped to
+ * the most recent screenful-and-then-some) is drained the instant scrolling stops.
+ *
+ * Deliberately its own tiny composable: `state.isScrollInProgress` is read HERE, so only this
+ * zero-output function recomposes when a fling starts or stops — putting the read in the list
+ * screen itself would re-run that whole (very large) composable twice per fling.
+ */
+@Composable private fun PauseProbesWhileScrolling(scrolling: Boolean) {
+    DisposableEffect(scrolling) {
+        if (scrolling) { TrackTech.beginScroll(); TrackYear.beginScroll() }
+        onDispose { if (scrolling) { TrackTech.endScroll(); TrackYear.endScroll() } }
+    }
+}
+
+@Composable private fun PauseProbesWhileScrolling(state: LazyListState) =
+    PauseProbesWhileScrolling(state.isScrollInProgress)
+
+@Composable private fun PauseProbesWhileScrolling(state: LazyGridState) =
+    PauseProbesWhileScrolling(state.isScrollInProgress)
+
 @Composable
 private fun <T> AlphabetFastScroller(
     items: List<T>,
@@ -3108,14 +3176,25 @@ private fun <T> AlphabetFastScroller(
     var containerHeight by remember { mutableIntStateOf(1) }
     var scrollJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
-    // Sync active letter with normal list scrolling when not dragging
-    val visibleIdx by remember { derivedStateOf { firstVisibleIndex() } }
-    LaunchedEffect(visibleIdx, isDragging) {
-        if (!isDragging && visibleIdx in items.indices) {
-            val name = getItemName(items[visibleIdx]).trim()
-            val sortKey = formatArtistSortKey(name, true, ctx)
-            val firstChar = sortKey.firstOrNull()?.uppercaseChar() ?: '#'
-            activeLetter = if (firstChar in 'A'..'Z') firstChar else '#'
+    // Sync active letter with normal list scrolling when not dragging.
+    // PERF (scroll jank, 2026-09-17): this used to be
+    //     val visibleIdx by remember { derivedStateOf { firstVisibleIndex() } }
+    //     LaunchedEffect(visibleIdx, isDragging) { ... }
+    // i.e. the first-visible-item index was read in THIS composable's body. That index changes
+    // continuously during a fling, so the whole rail — all 27 letter Texts plus the gesture
+    // modifiers — recomposed several times a second on every scroll, and the LaunchedEffect was
+    // cancelled and relaunched each time. The index is observed inside the effect now, so a
+    // recomposition only happens when the ACTIVE LETTER actually changes, which is the only thing
+    // the rail draws differently.
+    LaunchedEffect(items, isDragging) {
+        if (isDragging) return@LaunchedEffect
+        snapshotFlow { firstVisibleIndex() }.collect { idx ->
+            if (idx in items.indices) {
+                val name = getItemName(items[idx]).trim()
+                val sortKey = formatArtistSortKey(name, true, ctx)
+                val firstChar = sortKey.firstOrNull()?.uppercaseChar() ?: '#'
+                activeLetter = if (firstChar in 'A'..'Z') firstChar else '#'
+            }
         }
     }
 
@@ -3400,6 +3479,8 @@ fun MikuEmptyState(
         }
     }
     val scope = rememberCoroutineScope()
+    // Don't queue per-track SD-card probes for rows flying past mid-fling (see the function).
+    PauseProbesWhileScrolling(listState)
 
     Column(Modifier.fillMaxSize()) {
         MikuSearchBar(
@@ -3457,6 +3538,8 @@ fun MikuEmptyState(
     }
     val scope = rememberCoroutineScope()
     val hazeState = remember { HazeState() }
+    // Don't queue per-track SD-card probes for rows flying past mid-fling (see the function).
+    PauseProbesWhileScrolling(listState)
 
     Column(Modifier.fillMaxSize()) {
         MikuSearchBar(
@@ -3527,8 +3610,26 @@ fun MikuEmptyState(
                     items(filteredArtists.size, key = { "${filteredArtists[it].name}#${filteredArtists[it].tracks.firstOrNull()?.id ?: it}" }, contentType = { "artist" }) { i ->
                         val a = filteredArtists[i]
                         val rowCtx = LocalContext.current
-                        val reprTrack = a.coverTrack(rowCtx)
-                        val aQuality = remember(a.tracks) { TrackTech.computeQualityBreakdown(rowCtx, a.tracks) }
+                        // PERF (scroll jank, 2026-09-17), per artist row that scrolls into view:
+                        //  - coverTrack() was called on every recomposition: a canonicalArtistKey
+                        //    lookup plus a SharedPreferences read plus a key-string allocation,
+                        //    for a value that can only change when the artist or its tracks do.
+                        //    remember()ed on exactly that.
+                        //  - computeQualityBreakdown() walked the artist's ENTIRE track list on
+                        //    the MAIN THREAD (hundreds of tracks for a prolific artist), allocated
+                        //    a format string + a counting map per call, registered a Compose
+                        //    snapshot read for every one of those tracks, and launched one IO
+                        //    probe coroutine per unprobed file from inside composition. The
+                        //    remember() key made it survive recomposition but NOT scrolling out
+                        //    of and back into view, so a fling paid all of that per row, twice
+                        //    (down and back). qualityForGroup() is a map lookup that computes the
+                        //    same breakdown once, off the main thread, and wakes the row when it
+                        //    lands — see TrackTech's group-quality cache.
+                        val reprTrack = remember(a.name, a.tracks) { a.coverTrack(rowCtx) }
+                        val aQuality = TrackTech.qualityForGroup(rowCtx, a.tracks)
+                        // One lookup per row instead of two (name colour + heart): each one
+                        // canonicalises the artist name and then scans the liked-artists list.
+                        val artistLiked = LikeStore.isArtistLiked(a.name, rowCtx)
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp)
                                 .pressableGlassCard { onOpen(a) }
@@ -3553,25 +3654,31 @@ fun MikuEmptyState(
                             }
                             Spacer(Modifier.width(14.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(a.name, color = if (LikeStore.isArtistLiked(a.name, rowCtx)) MikuTeal else Color(0xFFE8F4F2), fontSize = 16.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontFamily = Baloo2Font)
+                                Text(a.name, color = if (artistLiked) MikuTeal else Color(0xFFE8F4F2), fontSize = 16.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = FontWeight.SemiBold, fontFamily = Baloo2Font)
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text("${a.tracks.size} tracks · ${a.albumCount} albums", color = Muted, fontSize = 12.5.sp, fontFamily = Baloo2Font)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("·", color = Muted.copy(alpha = 0.5f), fontSize = 12.sp)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        aQuality.specTag,
-                                        color = when (aQuality.highestTier) {
-                                            4 -> Color(0xFFDFB8FF)
-                                            3 -> Color(0xFFFFD166)
-                                            2 -> MikuTealBright
-                                            else -> Muted
-                                        },
-                                        fontSize = 11.5.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    // Guarded on totalTracks like every other quality widget
+                                    // (AudioQualityCrestOverlay / AudioQualitySpecLine already
+                                    // were): the breakdown now arrives a beat after the row binds,
+                                    // and the placeholder's "No audio" must never flash here.
+                                    if (aQuality.totalTracks > 0) {
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("·", color = Muted.copy(alpha = 0.5f), fontSize = 12.sp)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            aQuality.specTag,
+                                            color = when (aQuality.highestTier) {
+                                                4 -> Color(0xFFDFB8FF)
+                                                3 -> Color(0xFFFFD166)
+                                                2 -> MikuTealBright
+                                                else -> Muted
+                                            },
+                                            fontSize = 11.5.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                             Spacer(Modifier.width(6.dp))
@@ -3579,7 +3686,7 @@ fun MikuEmptyState(
                                 Icon(Icons.Default.Shuffle, "Shuffle Artist", tint = MikuTealBright, modifier = Modifier.size(20.dp))
                             }
                             Spacer(Modifier.width(4.dp))
-                            ArtistRainbowHeart(LikeStore.isArtistLiked(a.name, rowCtx)) { LikeStore.toggleArtist(rowCtx, a.name) }
+                            ArtistRainbowHeart(artistLiked) { LikeStore.toggleArtist(rowCtx, a.name) }
                             Spacer(Modifier.width(4.dp))
                             Icon(Icons.Default.ChevronRight, null, tint = Muted)
                         }
@@ -3794,6 +3901,8 @@ private fun ArtistSortSettingsModal(
     val albums = remember(a.tracks) { a.tracks.albums() }
     val totalPlays = remember(a.tracks) { a.tracks.sumOf { PlayerPreferences.loadPlayCount(ctx, it.id) } }
     val hazeState = remember { HazeState() }
+    // Don't queue per-track SD-card probes for rows flying past mid-fling (see the function).
+    PauseProbesWhileScrolling(listState)
 
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         // 1. Fullscreen Hero Header Banner (Spotify Style)
@@ -3859,7 +3968,8 @@ private fun ArtistSortSettingsModal(
                     )
 
                     // Glanceable Audio Fidelity Spec Line for Artist
-                    val artistQualityBreakdown = remember(a.tracks) { TrackTech.computeQualityBreakdown(ctx, a.tracks) }
+                    // PERF (2026-09-17): off the main thread + cached (see TrackTech.qualityForGroup).
+                    val artistQualityBreakdown = TrackTech.qualityForGroup(ctx, a.tracks)
                     Spacer(Modifier.height(6.dp))
                     AudioQualitySpecLine(artistQualityBreakdown)
 
@@ -3919,7 +4029,11 @@ private fun ArtistSortSettingsModal(
                     albums.forEachIndexed { i, al ->
                         val albumRepr = al.tracks.firstOrNull()
                         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-                        val alQuality = remember(al.tracks) { TrackTech.computeQualityBreakdown(ctx, al.tracks) }
+                        // PERF (2026-09-17): this FlowRow composes EVERY album of the artist in a
+                        // single LazyColumn item, so opening a prolific artist ran one full
+                        // O(tracks) breakdown pass per album back-to-back on the main thread.
+                        // Cached/backgrounded like the list rows.
+                        val alQuality = TrackTech.qualityForGroup(ctx, al.tracks)
                         Column(
                             // 108dp (was 112) so THREE album tiles fit per row on the 360dp-wide
                             // M500 (3*108 + 2*4dp gaps = 332 <= 336dp usable) instead of two.
@@ -3957,7 +4071,8 @@ private fun ArtistSortSettingsModal(
                             Spacer(Modifier.height(6.dp))
                             Text(al.name, color = Color(0xFFE8F4F2), fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             val yr = al.tracks.firstOrNull { it.year > 0 }?.year ?: 0
-                            Text(
+                            // Guarded — see the artist row: the breakdown resolves asynchronously.
+                            if (alQuality.totalTracks > 0) Text(
                                 alQuality.specTag,
                                 color = when (alQuality.highestTier) {
                                     4 -> Color(0xFFDFB8FF)
@@ -4002,6 +4117,8 @@ private fun ArtistSortSettingsModal(
         }
     }
     val scope = rememberCoroutineScope()
+    // Don't queue per-track SD-card probes for tiles flying past mid-fling (see the function).
+    PauseProbesWhileScrolling(gridState)
 
     Column(Modifier.fillMaxSize()) {
         MikuSearchBar(
@@ -4043,7 +4160,11 @@ private fun ArtistSortSettingsModal(
                                 )
                                 .padding(8.dp)
                         ) {
-                            val alQuality = remember(al.tracks) { TrackTech.computeQualityBreakdown(ctx, al.tracks) }
+                            // PERF (2026-09-17): same change as the artist row — this walked the
+                            // album's whole track list on the main thread on every tile bind (and
+                            // launched a probe coroutine per unprobed track from composition).
+                            // Now a cached lookup computed once on the background probe pool.
+                            val alQuality = TrackTech.qualityForGroup(ctx, al.tracks)
                             // Album Art Box with Overlays
                             Box(
                                 Modifier
@@ -4103,7 +4224,8 @@ private fun ArtistSortSettingsModal(
                                 DataChip(tag, ReleaseTagColor)
                             }
                             if (al.hasDiscImage) DataChip(if (al.unsplitImageCount > 0) "💿 FULL-CD RIP" else "💿 CD RIP · CUE SPLIT", DiscImageColor)
-                            Text(
+                            // Guarded — see the artist row: the breakdown resolves asynchronously.
+                            if (alQuality.totalTracks > 0) Text(
                                 alQuality.specTag,
                                 color = when {
                                     alQuality.isVinylRip -> Color(0xFFFFB300)
@@ -4154,6 +4276,8 @@ private fun ArtistSortSettingsModal(
     }
     val totalPlays = remember(sortedTracks) { sortedTracks.sumOf { PlayerPreferences.loadPlayCount(ctx, it.id) } }
     val hazeState = remember { HazeState() }
+    // Don't queue per-track SD-card probes for rows flying past mid-fling (see the function).
+    PauseProbesWhileScrolling(listState)
 
     LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
         // Hero Album Banner Header (Spotify Style) — full-bleed blurred album art as the backdrop
@@ -4183,7 +4307,8 @@ private fun ArtistSortSettingsModal(
                         .hazeChild(state = hazeState, style = HazeMaterials.regular(Color(0xFF041416)))
                         .statusBarsPadding().padding(16.dp)
                 ) {
-                    val albumQualityBreakdown = remember(sortedTracks) { TrackTech.computeQualityBreakdown(ctx, sortedTracks) }
+                    // PERF (2026-09-17): off the main thread + cached (see TrackTech.qualityForGroup).
+                    val albumQualityBreakdown = TrackTech.qualityForGroup(ctx, sortedTracks)
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         // Large Cover Artwork (120x120dp) with Glanceable Quality Crest Overlay
                         Box(Modifier.size(120.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFF0C2B2E))) {
@@ -6961,7 +7086,15 @@ object TransportShapes {
     // The raw fraction only updates every 500ms poll tick, which steps the line visibly — glide
     // between samples so it reads as continuous playback, not a ticking gauge.
     val targetProgress = (pos.toFloat() / dur.coerceAtLeast(1L).toFloat()).coerceIn(0f, 1f)
-    val progress by animateFloatAsState(targetProgress, tween(520, easing = LinearEasing), label = "barProgress")
+    // PERF (scroll jank, 2026-09-17): kept as a State and NOT unwrapped with `by`. This animation
+    // re-targets on every 500ms position poll, so it produces a new value on essentially every
+    // frame for as long as anything is playing. It used to be read as a plain Float in this
+    // function's body (`Modifier.fillMaxWidth(progress)` further down), which put a ~60Hz
+    // invalidation on NowPlayingBar's own recomposition scope: the entire docked bar — artwork,
+    // marquee AnnotatedString, chips, buttons — recomposed every frame, forever, on the same main
+    // thread the library lists scroll on. The value is now read in the DRAW phase only (see the
+    // progress line below): identical animation, zero recomposition.
+    val progress = animateFloatAsState(targetProgress, tween(520, easing = LinearEasing), label = "barProgress")
     // Palette comes from the app-wide theme (extracted from the real art once it's loaded) and
     // glides between tracks — no more "stays teal because the art wasn't cached at first compose".
     LaunchedEffect(track.id) { MikuArtTheme.update(ctx, track) }
@@ -7056,13 +7189,20 @@ object TransportShapes {
                     )
                 )
                 Column(Modifier.fillMaxWidth()) {
-                    // Live playback progress line
-                    Box(Modifier.fillMaxWidth().height(3.dp).background(Color(0xFF07201F))) {
-                        Box(
-                            Modifier.fillMaxWidth(progress).height(3.dp)
-                                .background(Brush.horizontalGradient(listOf(palette.color1, MikuTealBright)))
-                        )
+                    // Live playback progress line. Was a nested Box sized with
+                    // `Modifier.fillMaxWidth(progress)` — a COMPOSITION-phase read of a per-frame
+                    // animation (see the note on `progress` above). Same pixels, drawn from the
+                    // draw phase, so only this 3dp strip is invalidated per frame.
+                    val progressBrush = remember(palette.color1) {
+                        Brush.horizontalGradient(listOf(palette.color1, MikuTealBright))
                     }
+                    Box(
+                        Modifier.fillMaxWidth().height(3.dp).background(Color(0xFF07201F))
+                            .drawBehind {
+                                val w = size.width * progress.value.coerceIn(0f, 1f)
+                                if (w > 0f) drawRect(progressBrush, size = Size(w, size.height))
+                            }
+                    )
 
                     // ROW 1 — thumb + one long marquee line with the full width of the bar.
                     Row(
