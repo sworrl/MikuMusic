@@ -1,7 +1,97 @@
-# Proprietary source — this repo tracks distributable build artifacts only, not source.
-# Miku Music Player is fully owned by Justin Earl / Falcon Technix. Source stays local/private;
-# only minified, obfuscated, encrypted release APKs in minified_apks/ are version-controlled here.
-*
-!minified_apks/
-!minified_apks/**
-!.gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+#  Miku Music — what never goes in the repo.
+#
+#  Three rules, in order of how badly you do not want to get them wrong:
+#    1. Nothing that can sign a build.
+#    2. Nothing with a key, a password, a host, or an address in it.
+#    3. Nothing a clean checkout can rebuild for itself.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── 1. Signing material ──────────────────────────────────────────────────────
+# The Falcon Technix platform key is what makes a MikuOS build trusted by the OS
+# it replaces. It is not in this repo and it never will be.
+*.jks
+*.keystore
+*.pk8
+*.pem
+*.p12
+*.key
+*.der
+keystore.properties
+signing/
+platform.*
+
+# ── 2. Secrets and anything personal ─────────────────────────────────────────
+# local.properties carries the SDK path plus every build-time credential: the
+# Last.fm API key and secret, the Windy key, the ingest host, the entitlement
+# HMAC. Templates are committed, the real file never is.
+local.properties
+*.env
+!*.env.example
+secrets.*
+*.token
+# Network configs hold PSKs and personal addressing.
+*.conf
+!**/rsyncd.conf
+
+# ── 3. Build output and tooling state ────────────────────────────────────────
+build/
+.gradle/
+.cxx/
+.kotlin/
+captures/
+gen/
+*.hprof
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# ── Binaries ─────────────────────────────────────────────────────────────────
+# APKs belong on the Releases page. Git is bad at 100MB blobs, and a repo that
+# carries every build forever stops being cloneable.
+*.apk
+*.aab
+*.apks
+*.apk.idsig
+*.dex
+*.ap_
+*.so
+*.img
+*.zip
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# ── Not ours to redistribute ─────────────────────────────────────────────────
+# The 80 presets in app/src/main/assets/miku_presets/ ARE ours and are committed.
+# projectM's "cream of the crop" pack and the 150 curated community presets are
+# other people's work, by named authors, and the pack alone is 31MB. The README
+# says where to get them.
+app/src/main/assets/presets_pack.zip
+app/src/main/assets/presets/
+
+# Decompiled HiBy firmware and extracted stock apps. Useful on a workstation,
+# not publishable: it is their code, and those trees hold third-party keys.
+**/decompiled_vendor_software/
+**/extracted_fs/
+**/hiby-extracted/
+**/vendor-media/
+**/smali*/
+minified_apks/
+optional_apks/
+
+# ── Agent / editor scratch ───────────────────────────────────────────────────
+.claude/
+.aider*
+.cursor/
+*.orig
+*.rej
+*.bak
+*~
+
+# ── OS noise ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

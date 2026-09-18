@@ -1,0 +1,85 @@
+[preset00]
+MILKDROP_PRESET_VERSION=1
+fRating=5.000000
+fGammaAdj=1.800000
+fDecay=0.880000
+fVideoEchoZoom=1.000000
+fVideoEchoAlpha=0.250000
+nVideoEchoOrientation=1
+nWaveMode=3
+bAdditiveWaves=1
+bWaveDots=0
+bWaveThick=1
+bModWaveAlphaByVolume=1
+bMaximizeWaveColor=1
+bTexWrap=0
+bDarkenCenter=0
+bRedBlueStereo=0
+bBrighten=0
+bDarken=0
+bSolarize=0
+bInvert=0
+fWaveAlpha=0.800000
+fWaveScale=3.500000
+fWaveSmoothing=0.750000
+fWaveParam=0.000000
+fModWaveAlphaStart=0.710000
+fModWaveAlphaEnd=1.300000
+fWarpAnimSpeed=1.000000
+fWarpScale=1.000000
+fZoomExponent=1.000000
+fShader=0.000000
+zoom=1.000000
+rot=0.000000
+cx=0.500000
+cy=0.500000
+dx=0.000000
+dy=0.000000
+warp=0.000000
+sx=1.000000
+sy=1.000000
+wave_r=0.500000
+wave_g=0.500000
+wave_b=0.500000
+wave_x=0.500000
+wave_y=0.500000
+ob_size=0.005000
+ob_r=0.000000
+ob_g=0.000000
+ob_b=0.000000
+ob_a=0.000000
+ib_size=0.010000
+ib_r=0.250000
+ib_g=0.250000
+ib_b=0.250000
+ib_a=0.000000
+nMotionVectorsX=0.000000
+nMotionVectorsY=0.000000
+mv_dx=0.000000
+mv_dy=0.000000
+mv_l=0.000000
+mv_r=1.000000
+mv_g=1.000000
+mv_b=1.000000
+mv_a=0.000000
+wavecode_0_enabled=0
+wavecode_1_enabled=0
+wavecode_2_enabled=0
+wavecode_3_enabled=0
+shapecode_0_enabled=0
+shapecode_1_enabled=0
+shapecode_2_enabled=0
+shapecode_3_enabled=0
+per_frame_1=mk1r = 0.620; mk1g = 0.950; mk1b = 1.000;
+per_frame_2=mk2r = 0.900; mk2g = 0.980; mk2b = 1.000;
+per_frame_3=mix = 0.5 + 0.5*sin(time*0.37) * 0.6 + bass_att*0.25;
+per_frame_4=mix = min(1, max(0, mix));
+per_frame_5=wave_r = mk1r + (mk2r - mk1r)*mix;
+per_frame_6=wave_g = mk1g + (mk2g - mk1g)*mix;
+per_frame_7=wave_b = mk1b + (mk2b - mk1b)*mix;
+per_frame_8=decay = 0.86 + 0.12*bass_att;
+per_frame_9=dy = -0.0060;
+per_frame_10=wave_a = 0.9;
+per_frame_11=wave_y = 0.5;
+per_pixel_1=dx = 0.006*sin(y*18*3.1416 + time*2);
+per_pixel_2=zoom = 1.0;

@@ -26,7 +26,9 @@ stage_source() {
         -o -name '*.json' -o -name '*.toml' -o -name '*.md' -o -name '*.txt' \
         -o -name '*.png' -o -name '*.webp' -o -name '*.jpg' -o -name '*.svg' \
         -o -name '*.ttf' -o -name '*.otf' -o -name '*.ogg' -o -name '*.mp3' \
-        -o -name '*.sh' \
+        -o -name '*.sh' -o -name '*.milk' -o -name '*.cpp' -o -name '*.h' \
+        -o -name '*.hpp' -o -name '*.c' -o -name '*.cmake' -o -name 'CMakeLists.txt' \
+        -o -name '*.glsl' -o -name '*.frag' -o -name '*.vert' -o -name '*.pro' \
      \) \
     ! -name '*.apk' ! -name '*.aab' ! -name '*.keystore' ! -name '*.jks' \
     ! -name 'local.properties' ! -name 'arco.properties' \
