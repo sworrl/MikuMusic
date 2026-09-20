@@ -112,6 +112,8 @@ class MikuNotificationShadeService : AccessibilityService() {
     /** OS-wide idle dim + tap-to-awaken ladder (see MikuIdleDim.kt). Lives here because this
      *  service is the only thing on the device that sees input from every app. */
     private var idleDim: MikuIdleDimController? = null
+    /** The shade, as a persistent window rather than an Activity. See MikuShadeWindow. */
+    private var shadeWindow: MikuShadeWindow? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val workThread = HandlerThread("miku-nav-work").apply { start() }
     private val workHandler = Handler(workThread.looper)
@@ -210,6 +212,23 @@ class MikuNotificationShadeService : AccessibilityService() {
         // ladder first puts its 1px touch sentinel UNDERNEATH the nav strips rather than stealing
         // the top-left pixel of the shade pull strip.
         idleDim?.start()
+        // Attach BEFORE the nav overlays so the shade sits underneath the top strip and the home
+        // pill in z-order: the strip must keep receiving the pull that opens it.
+        if (shadeWindow == null) {
+            shadeWindow = MikuShadeWindow(
+                ctx = this,
+                windowManager = windowManager,
+                onOpenSettings = {
+                    runCatching {
+                        packageManager.getLaunchIntentForPackage("com.miku.settings")
+                            ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            ?.let { startActivity(it) }
+                    }
+                },
+                onOpenPower = { openPowerMenuActivity() }
+            )
+        }
+        shadeWindow?.attach()
         addOverlays()
         MikuNotificationStore.ensureEnabled(this)
         suppressStockShade()
@@ -220,6 +239,7 @@ class MikuNotificationShadeService : AccessibilityService() {
     override fun onDestroy() {
         try { unregisterReceiver(receiver) } catch (_: Throwable) {}
         idleDim?.destroy(); idleDim = null
+        shadeWindow?.detach(); shadeWindow = null
         trackHud?.destroy(); trackHud = null
         accentJob?.cancel(); accentAnim?.cancel()
         removeOverlays()
@@ -334,10 +354,21 @@ class MikuNotificationShadeService : AccessibilityService() {
         }
     }
 
-    private fun openShadeActivity(dragOffsetPx: Int = -1) =
+    /**
+     * Opens the shade. Named for history: it is no longer an Activity.
+     *
+     * MikuShadeActivity cost 524 to 861ms on a warm launch, paid on EVERY pull, with the first
+     * frames of the drag landing inside activity creation. [shadeWindow] is composed once when this
+     * service connects and only shown, which is how a Pixel's shade works. The Activity is still in
+     * the manifest so the quick-settings tile and any external launcher intent keep working.
+     */
+    private fun openShadeActivity(dragOffsetPx: Int = -1) {
+        val w = shadeWindow
+        if (w != null) { w.open(dragOffsetPx); return }
         launchOwnActivity(MikuShadeActivity::class.java, 0) {
             if (dragOffsetPx >= 0) putExtra(MikuShadeActivity.EXTRA_DRAG_OFFSET_PX, dragOffsetPx)
         }
+    }
 
     private var lastPowerMenuOpenMs = 0L
     private fun openPowerMenuActivity() {

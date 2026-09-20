@@ -17,6 +17,7 @@ class MikuPrefsReceiver : BroadcastReceiver() {
         /** Launcher "Force Scan" → LOCAL rescan of every storage volume (SD + internal): re-mirrors
          *  MediaStore into the FastLibraryStore index AND walks the volumes for files MediaStore
          *  hasn't indexed yet. Never touches the network; works with the ingress engine OFF. */
+        const val ACTION_PROFILE = "com.miku.player.action.PROFILE"
         const val ACTION_FORCE_LIBRARY_SCAN = "com.miku.player.action.FORCE_LIBRARY_SCAN"
         const val ACTION_RESCAN_LIBRARY = "com.miku.player.action.RESCAN_LIBRARY"
         /** Flip the ingress engine (Settings.Global miku_ingest_enabled) — extra "enabled". */
@@ -45,6 +46,23 @@ class MikuPrefsReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
+            // Sampling profiler from inside the process, because `am profile` writes nothing on
+            // this device while the app is under load and nothing else works without root.
+            //   adb shell am broadcast -a com.miku.player.action.PROFILE --ei seconds 8
+            //   adb shell run-as com.miku.player cat files/profile.trace > profile.trace
+            // Debug builds only. A profiler trigger in a release build is a foot-gun.
+            ACTION_PROFILE -> if (BuildConfig.DEBUG) {
+                val secs = intent.getIntExtra("seconds", 8).coerceIn(1, 60)
+                val f = java.io.File(context.filesDir, "profile.trace")
+                runCatching {
+                    android.os.Debug.startMethodTracingSampling(f.absolutePath, 64 * 1024 * 1024, 1000)
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        runCatching { android.os.Debug.stopMethodTracing() }
+                        android.util.Log.i("MikuProfile", "sampling trace written: ${f.absolutePath} (${f.length()} bytes)")
+                    }, secs * 1000L)
+                    android.util.Log.i("MikuProfile", "sampling for ${secs}s")
+                }.onFailure { android.util.Log.w("MikuProfile", "start failed: $it") }
+            }
             ACTION_FORCE_LIBRARY_SCAN, ACTION_RESCAN_LIBRARY -> triggerLocalRescan(context, intent.action ?: "broadcast")
             ACTION_SET_INGEST_ENABLED -> MikuIngestGate.setEnabled(context, intent.getBooleanExtra(EXTRA_ENABLED, false))
             ACTION_PLAY_RANDOM -> {

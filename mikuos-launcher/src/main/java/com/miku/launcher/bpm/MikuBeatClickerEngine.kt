@@ -583,8 +583,13 @@ object MikuBeatClickerEngine {
             }
         }
 
+        // THE SHOW. The crowd reacts, Miku reacts, and a chaos mutator can be running with real
+        // rules attached to it. Its payout multiplier is applied here so the number on screen and
+        // the number banked can never disagree. See MikuStagePerformance.
+        val stageMult = MikuStagePerformance.onJudgedTap(accuracy, _combo.value)
+
         val totalTapYield = baseClick * accuracy.yieldMultiplier * comboBonus * critMultiplier *
-            feverMult * bpmBonus * scoreScale.coerceIn(0.5f, 3f)
+            feverMult * bpmBonus * scoreScale.coerceIn(0.5f, 3f) * stageMult
         _leeks.value += totalTapYield
         _totalEarned.value += totalTapYield
 

@@ -3,6 +3,8 @@ package com.miku.player
 import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.haze
 import dev.chrisbanes.haze.hazeChild
+import com.miku.player.ui.mikuGlassPanel
+import com.miku.player.ui.mikuHazeSource
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
 import dev.chrisbanes.haze.materials.HazeMaterials
 
@@ -80,6 +82,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.draw.blur
@@ -521,7 +524,19 @@ class MainActivity : ComponentActivity() {
                     ActivityResultContracts.RequestMultiplePermissions()
                 ) { result -> granted = result[audioPermission()] ?: hasAudioPermission() }
                 LaunchedEffect(Unit) { launcher.launch(permissionsToRequest()) }
-                Surface(color = MikuArtTheme.colors().ground, modifier = Modifier.fillMaxSize()) {
+                // Collapse the whole semantics tree to ONE node when the only accessibility service
+                // is our own navigation (which never reads content). Marking the content view
+                // unimportant did NOT stop Compose's delegate: it still walked every node and
+                // computed every window bound on every layout pass, 43% of the UI thread while
+                // scrolling. A one-node tree makes that walk free. With a real screen reader
+                // enabled the gate is off and the full tree is back. See MikuSemanticsGate.
+                val navOnly = remember { MikuSemanticsGate.onlyMikuNavEnabled(this@MainActivity) }
+                Surface(
+                    color = MikuArtTheme.colors().ground,
+                    modifier = Modifier.fillMaxSize().then(
+                        if (navOnly) Modifier.clearAndSetSemantics {} else Modifier
+                    )
+                ) {
                     if (granted) {
                         var refresh by remember { mutableStateOf(0) }
                         var lastSeenGen by remember { mutableStateOf(ScanProgress.generation.get()) }
@@ -536,16 +551,37 @@ class MainActivity : ComponentActivity() {
                                 delay(2500L)
                             }
                         }
-                        // Instant binary cache for 0ms cold start
-                        val cachedTracks = remember { FastLibraryStore.loadSync(this@MainActivity) ?: emptyList() }
-                        var hasLoadedOnce by remember { mutableStateOf(cachedTracks.isNotEmpty()) }
-                        val tracks by produceState(initialValue = cachedTracks, refresh) {
-                            val result = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { queryTracks() }
+                        // The binary cache load is NOT on the main thread any more. It was, inside
+                        // remember{}, under a comment promising "0ms cold start", and it measured 7 to
+                        // 10 SECONDS on this device because the launch-time background work starved
+                        // the UI thread (see MikuBackground). The cache lands from IO in well under a
+                        // second when nothing is fighting it, the screen draws a loading state until
+                        // then, and the full MediaStore query follows on the low-priority pool.
+                        var hasLoadedOnce by remember { mutableStateOf(FastLibraryStore.peek() != null) }
+                        val tracks by produceState(
+                            initialValue = FastLibraryStore.peek() ?: emptyList(), refresh
+                        ) {
+                            if (value.isEmpty()) {
+                                val cached = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    FastLibraryStore.loadSync(this@MainActivity)
+                                }
+                                if (!cached.isNullOrEmpty()) { value = cached; hasLoadedOnce = true }
+                            }
+                            // Skip the 45-second walk when MediaStore has not changed since the cache was
+                            // written. A rescan (refresh > 0) or an empty cache always walks.
+                            if (refresh == 0 && value.isNotEmpty() && FastLibraryStore.cacheIsCurrent(this@MainActivity)) {
+                                android.util.Log.i("MikuPlayer", "library: MediaStore generation unchanged, cache is current, skipping full query")
+                                hasLoadedOnce = true
+                                return@produceState
+                            }
+                            val result = kotlinx.coroutines.withContext(MikuBackground.dispatcher) { queryTracks() }
                             hasLoadedOnce = true
                             if (value.isEmpty() || result.size != value.size || (result.isNotEmpty() && value.isNotEmpty() && (result.first().id != value.first().id || result.last().id != value.last().id))) {
                                 value = result
                                 FastLibraryStore.saveAsync(this@MainActivity, result)
                             }
+                            // The cache now reflects THIS generation of MediaStore.
+                            FastLibraryStore.stampGeneration(this@MainActivity)
                         }
                         IdleWatcher()
                         val idleTier = IdleController.tier
@@ -646,6 +682,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        MikuSemanticsGate.apply(this)   // see MikuSemanticsGate: no semantics tree for a nav-only a11y service
         VisualizerMemoryGuard.release()
         IdleController.loadPrefs(this)
         IdleController.syncDisplayState(this)   // resuming means the panel is lit; re-arm the loops
@@ -799,7 +836,24 @@ class MainActivity : ComponentActivity() {
         return p.toTypedArray()
     }
 
-    private fun queryTracks(): List<Track> {
+    /** Compiled once. This used to be `Regex(...)` INSIDE the per-row loop: 16.6k compiles a walk. */
+    private val LEADING_TRACK_NUMBER_RE = Regex("^(\\d{1,3})[\\s.\\-_]")
+
+    /**
+     * SINGLE FLIGHT. A rescan bumps ScanProgress.generation more than once (scan start, scan end),
+     * each bump re-keys the produceState, and produceState cancels the previous coroutine, but a
+     * blocking walk inside withContext cannot be interrupted, so the old walk ran to completion
+     * while the new one started: TWO full MediaStore walks at once (seen live: tids 14580 and
+     * 14581 both reporting 16609 rows, and the walk went from 18s to 58s). Now the second caller
+     * waits for the first and takes its result.
+     */
+    private val queryLock = Any()
+    @Volatile private var queryInFlight: List<Track>? = null
+
+    private fun queryTracks(): List<Track> = synchronized(queryLock) { queryTracksLocked() }
+
+    private fun queryTracksLocked(): List<Track> {
+        val tQuery0 = android.os.SystemClock.elapsedRealtime()
         val out = ArrayList<Track>()
         val hasBitrate = Build.VERSION.SDK_INT >= 30
         val proj = arrayListOf(
@@ -850,8 +904,8 @@ class MainActivity : ComponentActivity() {
 
                 // 2. Infer from leading filename digits if missing (e.g., "01 - Track.flac", "04. Title.mp3")
                 if (parsedTrackNo <= 0 && path.isNotBlank()) {
-                    val fname = java.io.File(path).nameWithoutExtension
-                    val match = Regex("^(\\d{1,3})[\\s.\\-_]").find(fname)
+                    val fname = path.substringAfterLast('/').substringBeforeLast('.')
+                    val match = LEADING_TRACK_NUMBER_RE.find(fname)
                     val inferred = match?.groupValues?.get(1)?.toIntOrNull()
                     if (inferred != null && inferred > 0) {
                         parsedTrackNo = inferred
@@ -865,22 +919,27 @@ class MainActivity : ComponentActivity() {
 
                 val albumArtist = if (iAlbumArtist >= 0 && !c.isNull(iAlbumArtist)) c.getString(iAlbumArtist) ?: "" else ""
                 out.add(Track(
-                    id, c.getString(iT) ?: "Unknown", c.getString(iA) ?: "Unknown artist",
-                    c.getString(iAl) ?: "", c.getLong(iD), c.getLong(iS),
-                    if (iBr >= 0 && !c.isNull(iBr)) c.getInt(iBr) / 1000 else 0, c.getString(iM) ?: "",
+                    id, c.getString(iT) ?: "Unknown", FastLibraryStore.intern(c.getString(iA) ?: "Unknown artist"),
+                    FastLibraryStore.intern(c.getString(iAl) ?: ""), c.getLong(iD), c.getLong(iS),
+                    if (iBr >= 0 && !c.isNull(iBr)) c.getInt(iBr) / 1000 else 0, FastLibraryStore.intern(c.getString(iM) ?: ""),
                     path,
                     if (iYear >= 0 && !c.isNull(iYear)) c.getInt(iYear) else 0,
                     if (iAlbumId >= 0 && !c.isNull(iAlbumId)) c.getLong(iAlbumId) else 0L,
                     parsedTrackNo,
-                    albumArtist,
+                    FastLibraryStore.intern(albumArtist),
                     if (iDateAdded >= 0 && !c.isNull(iDateAdded)) c.getLong(iDateAdded) else 0L,
                     discNumber = discNo
                 ))
             }
         }
+        val tQuery1 = android.os.SystemClock.elapsedRealtime()
         PlayerPreferences.flushTrackNumbers(this) // one batched write for every saveTrackNumber() call made during this pass, not one per track
+        val tFlush = android.os.SystemClock.elapsedRealtime()
         // Whole-CD image rips: flag + label, split into virtual tracks where a cue sheet allows.
         val result = DiscImage.apply(this, out)
+        val tDisc = android.os.SystemClock.elapsedRealtime()
+        android.util.Log.i("MikuPlayer", "queryTracks: mediastore=${tQuery1 - tQuery0}ms (${out.size} rows) " +
+            "flush=${tFlush - tQuery1}ms discimage=${tDisc - tFlush}ms")
         // PERF (cold start): stamp this sweep so LibraryDaemonService can skip its own identical
         // "initial background sync" query — the two used to run concurrently on every launch.
         FastLibraryStore.noteFullQuery(result.size)
@@ -1002,7 +1061,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
         // else in this chain should be able to take the whole library's grouping down with it —
         // catch, log, and keep the previous result rather than get permanently stuck either way.
         runCatching {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withContext(MikuBackground.dispatcher) {
                 tracks.artists(ctx, ignoreThe = sortIgnoreThe, displayMode = displayTheMode)
             }
         }.onSuccess { artistGroups = it; hasGroupedOnce = true }
@@ -1012,7 +1071,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
     var albumGroups by remember { mutableStateOf(emptyList<AlbumGroup>()) }
     LaunchedEffect(tracks, sortIgnoreThe) {
         val result = runCatching {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withContext(MikuBackground.dispatcher) {
                 tracks.albums(ctx, ignoreThe = sortIgnoreThe)
             }
         }.onFailure { android.util.Log.e("MikuPlayer", "album grouping failed, keeping previous result", it) }
@@ -1259,7 +1318,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
             // gesture zones. System back still lands via BackHandler below.)
     ) {
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.weight(1f).haze(hazeState).padding(top = with(density) { headerHeightPx.toDp() })) {
+            Box(Modifier.weight(1f).mikuHazeSource(ctx, hazeState).padding(top = with(density) { headerHeightPx.toDp() })) {
                 // Same priority chain the old hard-cut `when` rendered in, snapshotted into an
                 // immutable route so the outgoing screen can finish its exit animation from its
                 // own captured data (see ContentRoute's doc comment).
@@ -1351,7 +1410,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
                 .onSizeChanged { headerHeightPx = it.height }
-                .hazeChild(state = hazeState, style = HazeMaterials.thick(artGround))
+                .mikuGlassPanel(ctx, hazeState, HazeMaterials.thick(artGround), artGround)
         ) {
             Header(
                 count = tracks.size,
@@ -2056,7 +2115,7 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                     indication = null
                 ) {}
                 .clip(RoundedCornerShape(22.dp))
-                .hazeChild(state = hazeState, style = HazeMaterials.thick(Ground))
+                .mikuGlassPanel(ctx, hazeState, HazeMaterials.thick(Ground), Ground)
                 .background(Brush.verticalGradient(listOf(Color(0xE6072328), Color(0xF2031114))))
                 .border(1.dp, MikuTealBright.copy(alpha = 0.5f), RoundedCornerShape(22.dp))
                 .padding(18.dp)
@@ -2423,10 +2482,10 @@ private fun MikuAnimatedBootSplash(onFinished: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 260.dp)
-                    .hazeChild(
-                        state = hazeState,
-                        shape = RoundedCornerShape(22.dp),
-                        style = HazeMaterials.thick(Color(0xFF0F1522))
+                    .mikuGlassPanel(
+                        androidx.compose.ui.platform.LocalContext.current, hazeState,
+                        HazeMaterials.thick(Color(0xFF0F1522)), Color(0xFF0F1522),
+                        shape = RoundedCornerShape(22.dp)
                     )
                     .border(1.5.dp, Brush.horizontalGradient(listOf(MikuCyan.copy(alpha = 0.8f), MikuNeonPink.copy(alpha = 0.6f))), RoundedCornerShape(22.dp))
             ) {
@@ -3578,7 +3637,7 @@ fun MikuEmptyState(
             onQueryChange = { searchQuery = it },
             placeholder = "Search ${artists.size} artists..."
         )
-        Box(Modifier.weight(1f).fillMaxWidth().haze(hazeState)) {
+        Box(Modifier.weight(1f).fillMaxWidth().mikuHazeSource(androidx.compose.ui.platform.LocalContext.current, hazeState)) {
             if (loading && filteredArtists.isEmpty()) {
                 // Still waiting on the first queryTracks() to resolve — a real "0 artists" empty
                 // state would be misleading here; this isn't a verdict on the library yet.
@@ -3777,10 +3836,10 @@ private fun ArtistSortSettingsModal(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .hazeChild(
-                    state = hazeState,
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    style = HazeMaterials.thick(Color(0xFF07191C))
+                .mikuGlassPanel(
+                    androidx.compose.ui.platform.LocalContext.current, hazeState,
+                    HazeMaterials.thick(Color(0xFF07191C)), Color(0xFF07191C),
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
                 )
                 .border(1.dp, MikuTeal.copy(alpha = 0.5f), RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .clickable(
@@ -3944,15 +4003,15 @@ private fun ArtistSortSettingsModal(
                 // Background Cover Artwork — marked as the haze blur SOURCE so the text panel
                 // below can show a real frosted-glass view of it instead of a flat dark scrim.
                 // Real artist photo when one is known (see artistart/); the album art below otherwise.
-                ArtistPhotoImage(artist = a, modifier = Modifier.fillMaxSize().haze(hazeState)) {
+                ArtistPhotoImage(artist = a, modifier = Modifier.fillMaxSize().mikuHazeSource(ctx, hazeState)) {
                     if (reprTrack != null) {
                         AlbumArtImage(
                             trackId = reprTrack.id,
-                            modifier = Modifier.fillMaxSize().haze(hazeState),
+                            modifier = Modifier.fillMaxSize().mikuHazeSource(ctx, hazeState),
                             trackPath = reprTrack.path
                         )
                     } else {
-                        Box(Modifier.fillMaxSize().haze(hazeState).background(Color(0xFF0C2B2E)))
+                        Box(Modifier.fillMaxSize().mikuHazeSource(ctx, hazeState).background(Color(0xFF0C2B2E)))
                     }
                 }
 
@@ -3970,10 +4029,10 @@ private fun ArtistSortSettingsModal(
                 Column(
                     modifier = Modifier.align(Alignment.BottomStart)
                         .fillMaxWidth()
-                        .hazeChild(
-                            state = hazeState,
-                            shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp),
-                            style = HazeMaterials.thick(Color(0xFF041416))
+                        .mikuGlassPanel(
+                            androidx.compose.ui.platform.LocalContext.current, hazeState,
+                            HazeMaterials.thick(Color(0xFF041416)), Color(0xFF041416),
+                            shape = RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp)
                         )
                         .padding(horizontal = 16.dp, vertical = 12.dp)
                 ) {
@@ -4319,11 +4378,11 @@ private fun ArtistSortSettingsModal(
                 if (reprTrack != null) {
                     AlbumArtImage(
                         trackId = reprTrack.id,
-                        modifier = Modifier.matchParentSize().haze(hazeState),
+                        modifier = Modifier.matchParentSize().mikuHazeSource(ctx, hazeState),
                         trackPath = reprTrack.path
                     )
                 } else {
-                    Box(Modifier.matchParentSize().haze(hazeState).background(Color(0xFF123F44)))
+                    Box(Modifier.matchParentSize().mikuHazeSource(ctx, hazeState).background(Color(0xFF123F44)))
                 }
                 Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color(0x99123F44), Color(0xCC041416)))))
 
@@ -4335,7 +4394,7 @@ private fun ArtistSortSettingsModal(
                 }
                 Column(
                     Modifier.fillMaxWidth()
-                        .hazeChild(state = hazeState, style = HazeMaterials.regular(Color(0xFF041416)))
+                        .mikuGlassPanel(ctx, hazeState, HazeMaterials.regular(Color(0xFF041416)), Color(0xFF041416), fallbackAlpha = 0.82f)
                         .statusBarsPadding().padding(16.dp)
                 ) {
                     // PERF (2026-09-17): off the main thread + cached (see TrackTech.qualityForGroup).

@@ -163,7 +163,10 @@ object MikuArtTheme {
     /** Animated, composition-aware colors — call once per screen/section and read fields. */
     @Composable
     fun colors(durationMs: Int = 650): Colors {
-        val target = derive(palette)
+        // derive() now runs five 12-step binary searches for contrast. Cheap, but it was being
+        // re-run on EVERY recomposition of every screen that reads the theme. Once per palette.
+        val p = palette
+        val target = androidx.compose.runtime.remember(p) { derive(p) }
         val accent by animateColorAsState(target.accent, tween(durationMs), label = "artAccent")
         val accent2 by animateColorAsState(target.accent2, tween(durationMs), label = "artAccent2")
         val ground by animateColorAsState(target.ground, tween(durationMs + 250), label = "artGround")

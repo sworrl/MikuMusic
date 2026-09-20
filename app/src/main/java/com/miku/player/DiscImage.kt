@@ -77,11 +77,14 @@ object DiscImage {
     fun apply(ctx: Context, tracks: List<Track>): List<Track> {
         if (tracks.isEmpty()) return tracks
         val report = Report()
+        val t0 = android.os.SystemClock.elapsedRealtime()
+        var cueLookups = 0; var cueMs = 0L; var splitMs = 0L; var splitCalls = 0
         // Files per album folder (disc subfolders collapsed) — the "single big file" signal.
         val folderCounts = HashMap<String, Int>(tracks.size / 8 + 16)
         for (t in tracks) if (t.path.isNotBlank()) {
             val k = folderKey(t.path); folderCounts[k] = (folderCounts[k] ?: 0) + 1
         }
+        val tPre = android.os.SystemClock.elapsedRealtime()
         val canReadFiles = MikuStorageAccess.hasAllFilesAccess()
         val cueDirCache = HashMap<String, List<File>>()
         val out = ArrayList<Track>(tracks.size + 64)
@@ -97,7 +100,14 @@ object DiscImage {
             // than after. Gated on longEnough so this stays one cached dir listing per candidate
             // folder, not per track in the library.
             var cue = t.cuePath
-            if (cue.isBlank() && canReadFiles && longEnough) cue = findCue(t.path, cueDirCache) ?: ""
+            // Only where an image could plausibly live: a whole-disc rip sits in a folder with a
+            // handful of files, not a 40-track folder. Listing every long track's directory on the
+            // SD card cost 23 seconds a launch; this keeps it to the few that can matter.
+            if (cue.isBlank() && canReadFiles && longEnough && folderN <= 6) {
+                val c0 = android.os.SystemClock.elapsedRealtime()
+                cue = findCue(t.path, cueDirCache) ?: ""
+                cueMs += android.os.SystemClock.elapsedRealtime() - c0; cueLookups++
+            }
 
             /*
              * WHY THIS IS STRICTER THAN IT WAS (2026-09-17, Justin: "some of the whole disk one
@@ -116,9 +126,13 @@ object DiscImage {
              * song reaches. A track that carries a real track number in a folder full of other
              * audio is never an image no matter what it is called.
              */
-            val imageName = name.isNotBlank() &&
+            // ONLY for tracks long enough to be an image. These were evaluated eagerly for all
+            // 16.6k tracks (my 2026-09-17 rewrite hoisted them out of the `when`), and norm() is a
+            // Unicode-class regex pass: four of them per track was 21 of the pass's 24 seconds.
+            // A track under 18 minutes cannot be an image, so it never needs its name inspected.
+            val imageName = longEnough && name.isNotBlank() &&
                 (IMAGE_NAME_RE.containsMatchIn(name) || CDIMAGE_NAME_RE.containsMatchIn(name))
-            val artistAlbumName = t.album.isNotBlank() &&
+            val artistAlbumName = longEnough && t.album.isNotBlank() &&
                 (norm(base) == norm("${t.artist} - ${t.album}") || norm(base) == norm("${t.albumArtist} - ${t.album}"))
             // Sits among siblings AND is numbered like one of them: that is a track, not a disc.
             val numberedAmongSiblings = folderN > 2 && t.trackNumber > 0
@@ -139,15 +153,20 @@ object DiscImage {
             val image = t.copy(isDiscImage = true, discNumber = disc, cuePath = cue,
                 trackNumber = if (t.trackNumber == 0) 1 else t.trackNumber)
             var virtual: List<Track>? = null
+            val s0 = android.os.SystemClock.elapsedRealtime()
             for (sp in splitters) {
+                splitCalls++
                 virtual = runCatching { sp.split(ctx, image) }.onFailure { Log.w(TAG, "${sp.name} failed on ${t.path}", it) }.getOrNull()
                 if (!virtual.isNullOrEmpty()) break
             }
+            splitMs += android.os.SystemClock.elapsedRealtime() - s0
             if (!virtual.isNullOrEmpty()) { report.split++; report.virtualTracks += virtual.size; out.addAll(virtual) } else out.add(image)
         }
         lastReport = report
         for (sp in splitters) runCatching { sp.endPass(ctx) }.onFailure { Log.w(TAG, "${sp.name} endPass failed", it) }
         if (report.images > 0) Log.i(TAG, "Whole-disc images: ${report.images} (with cue: ${report.withCue}, split: ${report.split}, virtual tracks: ${report.virtualTracks})")
+        Log.i(TAG, "apply: total=${android.os.SystemClock.elapsedRealtime() - t0}ms folderCountPass=${tPre - t0}ms cueLookups=$cueLookups (${cueMs}ms) " +
+            "splitterCalls=$splitCalls (${splitMs}ms) tracks=${tracks.size}")
         return out
     }
 

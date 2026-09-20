@@ -17,6 +17,11 @@ import androidx.media3.session.MediaSession
  * android.media.browse.MediaBrowserService) and the automotive_app_desc media descriptor.
  */
 class PlaybackService : MediaLibraryService() {
+    companion object {
+        private const val EARLY_CHANNEL = "miku_playback_early"
+        /** Media3's DefaultMediaNotificationProvider uses id 1001; ours must differ so both can coexist. */
+        private const val EARLY_NOTIFICATION_ID = 1002
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -39,7 +44,44 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    /**
+     * Go foreground IMMEDIATELY, before anything else.
+     *
+     * Media3 posts the real media notification (and with it the startForeground call) from its own
+     * notification manager, lazily, when the player state next updates. Under memory pressure that
+     * did not happen inside the platform's 5 second window and the OS killed the process:
+     * "Context.startForegroundService() did not then call Service.startForeground()", ANR at
+     * 22:49 on 2026-09-19 in the middle of a library rescan, 119k page faults in six seconds. A
+     * placeholder notification posted synchronously here satisfies the contract on the first
+     * line of onStartCommand; Media3 replaces it with the real one moments later.
+     */
+    private fun ensureForegroundNow() {
+        try {
+            val nm = getSystemService(android.app.NotificationManager::class.java)
+            if (android.os.Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(EARLY_CHANNEL) == null) {
+                nm.createNotificationChannel(
+                    android.app.NotificationChannel(EARLY_CHANNEL, "Playback", android.app.NotificationManager.IMPORTANCE_LOW)
+                        .apply { setShowBadge(false) }
+                )
+            }
+            val n = androidx.core.app.NotificationCompat.Builder(this, EARLY_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setContentTitle("Miku Music")
+                .setContentText("Starting playback service")
+                .setOngoing(true)
+                .setSilent(true)
+                .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+                .build()
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                startForeground(EARLY_NOTIFICATION_ID, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else startForeground(EARLY_NOTIFICATION_ID, n)
+        } catch (t: Throwable) {
+            android.util.Log.w("PlaybackService", "early startForeground failed: $t")
+        }
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        ensureForegroundNow()
         if (intent?.action == Intent.ACTION_MEDIA_BUTTON || intent?.action == "hiby_media_button_action") {
             PlayerHolder.ensureSession(this)
             PlayerHolder.ensureControllerConnected(this)

@@ -37,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.graphicsLayer
 import com.miku.launcher.ui.mikuPressScale
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
@@ -163,6 +164,10 @@ class MikuLockscreenActivity : ComponentActivity() {
         overridePendingTransition(com.miku.launcher.R.anim.lockscreen_curtain_down, 0)
 
         setContent {
+            val navOnly = androidx.compose.runtime.remember { com.miku.launcher.ui.MikuSemanticsGate.onlyMikuNavEnabled(this) }
+            androidx.compose.foundation.layout.Box(
+                if (navOnly) androidx.compose.ui.Modifier.clearAndSetSemantics {} else androidx.compose.ui.Modifier
+            ) {
             MikuKawaiiLockscreenScreen(
                 wakeupTrigger = wakeupTriggerState,
                 onUnlock = {
@@ -173,14 +178,15 @@ class MikuLockscreenActivity : ComponentActivity() {
                     // request, then vacate unconditionally.
                     try {
                         getSystemService(KeyguardManager::class.java)
-                            ?.requestDismissKeyguard(this, null)
+                            ?.requestDismissKeyguard(this@MikuLockscreenActivity, null)
                     } catch (_: Throwable) {}
                     finishAndRemoveTask()
                     @Suppress("DEPRECATION")
                     overridePendingTransition(0, com.miku.launcher.R.anim.lockscreen_curtain_up)
                 }
             )
-        }
+                    }
+}
     }
 
     fun wakeUpBright() {
@@ -564,6 +570,8 @@ fun MikuKawaiiLockscreenScreen(
     val controller by rememberMusicController()
     var nowPlaying by remember { mutableStateOf(MikuNowPlaying()) }
     var localLikedState by remember { mutableStateOf(false) }
+    /** Is there anywhere for a like to GO for the current session? Drives whether the heart shows. */
+    var likeRoutable by remember { mutableStateOf(true) }
     var showHistoryDrawer by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
@@ -628,10 +636,15 @@ fun MikuKawaiiLockscreenScreen(
                 val bpm = if (isMiku) {
                     try { Settings.Global.getFloat(cr, "miku_now_playing_bpm", 0f) } catch (_: Throwable) { 0f }
                 } else 0f
-                val isLikedFromSettings = isMiku && try {
-                    Settings.Global.getString(cr, "miku_current_track_liked") == "1"
-                } catch (_: Throwable) { false }
+                // Our player publishes its like state; a third-party session reports its own, or
+                // reports nothing, and "nothing" is NOT "not liked" (see MikuMediaLink).
+                val sessionLiked = if (isMiku) null else c?.likedFromSession
+                val isLikedFromSettings = if (isMiku) {
+                    try { Settings.Global.getString(cr, "miku_current_track_liked") == "1" }
+                    catch (_: Throwable) { false }
+                } else sessionLiked ?: false
                 localLikedState = isLikedFromSettings
+                likeRoutable = isMiku || (c?.likeSupport ?: MikuMediaLink.LikeSupport.NONE) != MikuMediaLink.LikeSupport.NONE
 
                 if (!title.isNullOrEmpty()) {
                     MikuPlayHistoryStore.recordPlay(
@@ -950,6 +963,30 @@ fun MikuKawaiiLockscreenScreen(
                     npAccentLock = npAccentLock,
                     localLikedState = localLikedState,
                     onLikedChange = { localLikedState = it },
+                    likeRoutable = likeRoutable,
+                    onLikeRequested = { want ->
+                        val link = controller
+                        val pkg = link?.packageName ?: "com.miku.player"
+                        if (pkg == "com.miku.player") {
+                            runCatching {
+                                context.sendBroadcast(
+                                    Intent("com.miku.player.action.TOGGLE_LIKE").apply {
+                                        setPackage("com.miku.player")
+                                        nowPlaying.mediaId?.toLongOrNull()?.let { putExtra("track_id", it) }
+                                    }
+                                )
+                            }.getOrNull()?.let { "com.miku.player" }
+                        } else if (link != null && link.toggleLike(want)) {
+                            pkg
+                        } else {
+                            android.util.Log.i(
+                                "MikuLockscreen",
+                                "like has nowhere to go for $pkg; session advertises " +
+                                    (link?.customActionIds()?.joinToString() ?: "no custom actions")
+                            )
+                            null
+                        }
+                    },
                     showHistoryDrawer = showHistoryDrawer,
                     onHistoryDrawerChange = { showHistoryDrawer = it },
                     onInteraction = { lastInteractionMs = System.currentTimeMillis() },
@@ -1502,6 +1539,10 @@ private fun LockscreenNowPlayingWidget(
     npAccentLock: com.miku.launcher.ui.NpAccent,
     localLikedState: Boolean,
     onLikedChange: (Boolean) -> Unit,
+    /** True when a like has somewhere to go for THIS session. False hides the heart. */
+    likeRoutable: Boolean,
+    /** Performs the like. Returns the destination it reached, or null if there was none. */
+    onLikeRequested: (Boolean) -> String?,
     showHistoryDrawer: Boolean,
     onHistoryDrawerChange: (Boolean) -> Unit,
     onInteraction: () -> Unit,
@@ -1592,8 +1633,11 @@ private fun LockscreenNowPlayingWidget(
                             )
                         }
 
-                        // Interactive Like Heart Button with Cyber Glow & Textured Haptics
-                        Box(
+                        // Interactive Like Heart Button with Cyber Glow & Textured Haptics.
+                        // Hidden outright when the session offers no rating action and no save
+                        // custom action: a heart that cannot record anything is a lie, and the
+                        // Spotify case is exactly that until its session advertises one.
+                        if (likeRoutable) Box(
                             Modifier
                                 .scale(heartAnimScale.value)
                                 .size(30.dp)
@@ -1625,6 +1669,7 @@ private fun LockscreenNowPlayingWidget(
                                 .clickable {
                                     onInteraction()
                                     onLikedChange(!localLikedState)
+
                                     coroutineScope.launch {
                                         heartAnimScale.snapTo(0.65f)
                                         heartAnimScale.animateTo(1.35f, spring(dampingRatio = Spring.DampingRatioMediumBouncy))
@@ -1635,13 +1680,18 @@ private fun LockscreenNowPlayingWidget(
                                     } else {
                                         com.miku.launcher.haptics.MikuHaptics.reject(context)
                                     }
-                                    try {
-                                        val i = Intent("com.miku.player.action.TOGGLE_LIKE").apply {
-                                            setPackage("com.miku.player")
-                                            nowPlaying.mediaId?.toLongOrNull()?.let { putExtra("track_id", it) }
-                                        }
-                                        context.sendBroadcast(i)
-                                    } catch (_: Throwable) {}
+                                    // ROUTE BY SESSION. This used to broadcast to com.miku.player
+                                    // unconditionally, so on a Spotify/Tidal/Qobuz session the heart
+                                    // animated and nothing happened: the broadcast went to an app
+                                    // that had never heard of the track.
+                                    val want = !localLikedState
+                                    val sentTo = onLikeRequested(want)
+                                    if (sentTo == null) {
+                                        // Nothing to send to. Put the heart back rather than leave
+                                        // it showing a like that was never recorded anywhere.
+                                        onLikedChange(localLikedState)
+                                        com.miku.launcher.haptics.MikuHaptics.reject(context)
+                                    }
                                 },
                             contentAlignment = Alignment.Center
                         ) {

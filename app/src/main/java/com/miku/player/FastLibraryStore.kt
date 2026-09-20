@@ -29,6 +29,41 @@ object FastLibraryStore {
     @Volatile private var fullQueryCount = 0
 
     /** Record that a FULL library query just completed in this process. */
+    // ================================================================= generation gate
+    //
+    // WHY. queryTracks() ran on EVERY launch, unconditionally, and it measured 21 seconds for the
+    // MediaStore walk plus 23 seconds for the disc-image pass on 16.6k rows (2026-09-19). The binary
+    // cache exists so that a launch does not have to do that, but nothing ever checked whether the
+    // cache was still current, so the full walk happened anyway and the app was sluggish for the
+    // first 45 seconds of every session. MediaStore keeps a cheap monotonic generation counter per
+    // volume that moves whenever its content changes. Stamp it with the cache; if it has not moved,
+    // the cache IS the library and the walk is skipped.
+
+    private const val GEN_PREFS = "miku_library_gen"
+    private const val KEY_GEN = "mediastore_generation"
+
+    /** Every external volume's generation, joined, so an SD-card change is seen too. */
+    fun currentGeneration(context: Context): String = try {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.provider.MediaStore.getExternalVolumeNames(context).sorted().joinToString("|") { v ->
+                v + "=" + runCatching { android.provider.MediaStore.getGeneration(context, v) }.getOrDefault(-1L)
+            }
+        } else ""
+    } catch (_: Throwable) { "" }
+
+    fun stampGeneration(context: Context) {
+        val g = currentGeneration(context)
+        if (g.isNotEmpty()) context.getSharedPreferences(GEN_PREFS, Context.MODE_PRIVATE).edit().putString(KEY_GEN, g).apply()
+    }
+
+    /** True when MediaStore has not changed since the cache was written, so a full walk is waste. */
+    fun cacheIsCurrent(context: Context): Boolean {
+        val now = currentGeneration(context)
+        if (now.isEmpty()) return false
+        val stamped = context.getSharedPreferences(GEN_PREFS, Context.MODE_PRIVATE).getString(KEY_GEN, null)
+        return stamped == now
+    }
+
     fun noteFullQuery(count: Int) {
         fullQueryCount = count
         lastFullQueryAtMs = android.os.SystemClock.elapsedRealtime()
@@ -47,6 +82,25 @@ object FastLibraryStore {
      * Fast synchronous disk read. Called during cold start initialization.
      * Returns pre-cached track list instantly (<10ms for 20k tracks).
      */
+    /** The in-memory copy if a load has already happened, without touching disk. Main-thread safe. */
+    fun peek(): List<Track>? = memoryCache
+
+    /**
+     * Dedupes the strings that repeat across a library: artist, album, album artist, mime type.
+     * 17k tracks carry maybe 2k distinct artists and 4k distinct albums, and without this every
+     * track held its own copy of each. Cutting that halves the library's heap footprint, which is
+     * what a rescan doubles (old list + new list live together), and the rescan is exactly where
+     * the app went into a page-fault thrash and got ANR-killed on 2026-09-19. Bounded so a
+     * pathological library cannot turn the interner itself into a leak.
+     */
+    private val intern = java.util.concurrent.ConcurrentHashMap<String, String>()
+    fun intern(v: String): String {
+        if (v.length > 200) return v
+        intern[v]?.let { return it }
+        if (intern.size < 60_000) intern[v] = v
+        return v
+    }
+
     fun loadSync(context: Context): List<Track>? {
         memoryCache?.let { return it }
 
@@ -55,7 +109,10 @@ object FastLibraryStore {
 
         val start = System.currentTimeMillis()
         try {
-            DataInputStream(BufferedInputStream(FileInputStream(file), 65536)).use { dis ->
+            // One read of the whole file (4MB for 17k tracks), then parse from memory. The
+            // per-field reads below are then pure CPU with no syscalls behind them.
+            val bytes = file.readBytes()
+            DataInputStream(java.io.ByteArrayInputStream(bytes)).use { dis ->
                 val magic = dis.readInt()
                 if (magic != MAGIC_HEADER) return null
                 val ver = dis.readInt()
@@ -68,17 +125,17 @@ object FastLibraryStore {
                 for (i in 0 until count) {
                     val id = dis.readLong()
                     val title = dis.readUTF()
-                    val artist = dis.readUTF()
-                    val album = dis.readUTF()
+                    val artist = intern(dis.readUTF())
+                    val album = intern(dis.readUTF())
                     val durationMs = dis.readLong()
                     val sizeBytes = dis.readLong()
                     val bitrateKbps = dis.readInt()
-                    val mime = dis.readUTF()
+                    val mime = intern(dis.readUTF())
                     val path = dis.readUTF()
                     val year = dis.readInt()
                     val albumId = dis.readLong()
                     val trackNumber = dis.readInt()
-                    val albumArtist = dis.readUTF()
+                    val albumArtist = intern(dis.readUTF())
                     val dateAddedSec = dis.readLong()
                     val discNumber = dis.readInt()
                     val isDiscImage = dis.readBoolean()

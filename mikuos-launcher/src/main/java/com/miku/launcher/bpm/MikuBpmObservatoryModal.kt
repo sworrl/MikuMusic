@@ -73,6 +73,9 @@ fun MikuBpmObservatoryModal(
     onClose: () -> Unit,
     bpmState: MikuBpmEngine.BpmState
 ) {
+    // A fresh set every time the stage opens: full-ish room, neutral mood, no chaos running.
+    androidx.compose.runtime.LaunchedEffect(Unit) { MikuStagePerformance.beginSet() }
+
     val ctx = LocalContext.current
     val bpmDb = remember { MikuBpmDatabase.getInstance(ctx) }
     val coroutineScope = rememberCoroutineScope()
@@ -1027,9 +1030,11 @@ private fun BpmHeroRhythmMatchCard(
     // same skill bonus, same tempo clamp — so the gauge can never flatter the scoring.
     val rhythmTier by MikuBeatClickerEngine.rhythmTier.collectAsState()
     val tempoLock by MikuTempoLock.tempo.collectAsState()
+    // The active chaos mutator really does change the windows, so the bar the player is reading
+    // and the judgment they get are computed from the same number.
     val windows = MikuRhythmTiming.windowsFor(
         beatPeriodMs = beatIntervalMs,
-        leniency = rhythmTier.leniency,
+        leniency = rhythmTier.leniency * MikuStagePerformance.windowScale(),
         bonusMs = MikuBeatClickerEngine.timingWindowBonusMs
     )
     Row(
@@ -1188,6 +1193,10 @@ private fun BpmHeroRhythmMatchCard(
                 KawaiiTimingDeviationBar(offsetMs = timingOffsetMs, windows = windows)
                 Spacer(Modifier.height(2.dp))
                 BpmComboLadderLine()
+                Spacer(Modifier.height(4.dp))
+                // The show: the crowd you can actually lose, Miku reacting, and whatever chaos is
+                // running. Its own file, because this composable is already near the JIT ceiling.
+                MikuStageStrip()
             }
         }
     }
@@ -1992,7 +2001,7 @@ private fun ColumnScope.BpmBeatNodeStage(
                 val tier = MikuBeatClickerEngine.rhythmTier.value
                 val windows = MikuRhythmTiming.windowsFor(
                     beatPeriodMs = beatIntervalMs,
-                    leniency = tier.leniency,
+                    leniency = tier.leniency * MikuStagePerformance.windowScale(),
                     bonusMs = MikuBeatClickerEngine.timingWindowBonusMs
                 )
                 // Read the pulse timestamp from the engine: this composable was extracted for the

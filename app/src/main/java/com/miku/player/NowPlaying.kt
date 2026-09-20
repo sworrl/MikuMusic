@@ -1505,8 +1505,15 @@ fun TieredRainbowHeart(
     // per frame per heart.
     val phase = remember { mutableFloatStateOf(0f) }
     val beat = remember { mutableFloatStateOf(0f) }
-    LaunchedEffect(liked) {
-        if (!liked) return@LaunchedEffect
+    // PERF (2026-09-19): the pulse is for the big Now Playing heart only. A liked heart in a LIST
+    // ROW used to run this 60 Hz loop too, and each tick re-recorded that row's graphics layer
+    // and its Canvas: a screen with six liked artists was six layer re-records per frame, forever,
+    // whether or not anything else was happening. That is a permanent tax on scrolling for an
+    // animation nobody is looking at while they scroll. Small hearts are static now; the liked
+    // state still reads as filled + glowing, it just does not beat.
+    val animated = liked && size >= 36.dp
+    LaunchedEffect(animated) {
+        if (!animated) return@LaunchedEffect
         while (true) {
             if (IdleController.screenActive) {
                 phase.floatValue = (phase.floatValue + 2.4f) % 360f
@@ -1520,7 +1527,7 @@ fun TieredRainbowHeart(
         Modifier
             .size(size)
             .graphicsLayer {
-                val pulse = if (liked) 1f + 0.065f * heartbeat(beat.floatValue) else 1f
+                val pulse = if (animated) 1f + 0.065f * heartbeat(beat.floatValue) else 1f
                 scaleX = pulse; scaleY = pulse
             }
             .semantics { contentDescription = "${if (liked) "Unlike" else "Like"} $label"; role = Role.Checkbox; toggleableState = ToggleableState(liked) }

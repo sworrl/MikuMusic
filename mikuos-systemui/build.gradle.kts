@@ -14,8 +14,8 @@ android {
         applicationId = "com.miku.systemui"
         minSdk = 26
         targetSdk = 34
-        versionCode = 114
-        versionName = "0.1.23"
+        versionCode = 118
+        versionName = "0.1.27"
     }
 
     val signingProps = Properties().apply {
@@ -113,4 +113,10 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
+    // Compose in a window that is NOT an Activity needs the three ViewTree owners set by hand.
+    // See MikuShadeWindow: the shade is an accessibility overlay, not an Activity, so that a pull
+    // shows an already-composed window instead of paying an activity launch every time.
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.6")
+    implementation("androidx.savedstate:savedstate-ktx:1.2.1")
 }

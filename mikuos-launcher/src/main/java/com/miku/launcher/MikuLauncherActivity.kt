@@ -78,6 +78,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
@@ -338,7 +339,15 @@ class MikuLauncherActivity : ComponentActivity() {
         }.start()
 
         setContent {
-            MikuLauncherScreen()
+            // One semantics node for the whole launcher when the only accessibility service is our
+            // own navigation. Compose rebuilt and re-walked the full tree on every layout pass for
+            // it, for content it never reads. Full tree comes back with a real screen reader on.
+            val navOnly = androidx.compose.runtime.remember { com.miku.launcher.ui.MikuSemanticsGate.onlyMikuNavEnabled(this) }
+            androidx.compose.foundation.layout.Box(
+                if (navOnly) androidx.compose.ui.Modifier.clearAndSetSemantics {} else androidx.compose.ui.Modifier
+            ) {
+                MikuLauncherScreen()
+            }
         }
     }
 

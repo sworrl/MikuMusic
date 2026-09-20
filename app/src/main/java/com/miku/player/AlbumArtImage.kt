@@ -50,7 +50,7 @@ private const val HIRES_PX = 800
  *  - Last fallback: MediaStore thumbnail API
  */
 object AlbumArtCache {
-    private val cacheSize = (Runtime.getRuntime().maxMemory() / 1024 / 4).toInt()
+    private val cacheSize = (Runtime.getRuntime().maxMemory() / 1024 / 3).toInt()
     private val mem = object : LruCache<String, ImageBitmap>(cacheSize) {
         override fun sizeOf(key: String, v: ImageBitmap) = (v.width * v.height * 4) / 1024
     }
@@ -205,13 +205,38 @@ private fun artDir(ctx: Context): File {
 private fun thumbFile(ctx: Context, id: Long) = File(artDir(ctx), "$id.webp")
 private fun hiresFile(ctx: Context, id: Long) = File(artDir(ctx), "${id}_hi.webp")
 
-private fun writeWebp(bmp: Bitmap, f: File) {
+/**
+ * Thumbs are LOSSY WebP now.
+ *
+ * They were lossless: 320px squares averaging 86KB and peaking at 200KB, 175MB on disk for 1.6k of
+ * them. Lossless WebP is the slow decoder path, and the in-memory cache only holds ~160 of these
+ * bitmaps, so a scroll through a 17k-track library was a stream of cache misses each paying an
+ * 86KB lossless decode on the art pool before the row could show anything. That is "the album art
+ * loads slowly every time" (2026-09-19). At q=88 the same thumb is 8 to 15KB and decodes several
+ * times faster; on a 3.2 inch panel the difference is not visible. Hi-res stays lossless because it
+ * is the full Now Playing stage and there is one of it.
+ */
+private fun writeWebp(bmp: Bitmap, f: File, lossless: Boolean = false) {
     try {
         f.outputStream().use {
-            if (Build.VERSION.SDK_INT >= 30) bmp.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, it)
-            else @Suppress("DEPRECATION") bmp.compress(Bitmap.CompressFormat.WEBP, 95, it)
+            if (Build.VERSION.SDK_INT >= 30) {
+                if (lossless) bmp.compress(Bitmap.CompressFormat.WEBP_LOSSLESS, 100, it)
+                else bmp.compress(Bitmap.CompressFormat.WEBP_LOSSY, 88, it)
+            } else @Suppress("DEPRECATION") bmp.compress(Bitmap.CompressFormat.WEBP, if (lossless) 100 else 88, it)
         }
     } catch (_: Throwable) { runCatching { f.delete() } }
+}
+
+/** Legacy lossless thumbs above this size get re-encoded lossy the first time they are read. */
+private const val FAT_THUMB_BYTES = 40_000L
+
+/**
+ * Thumb decode options: RGB_565 halves the bitmap's memory (200KB instead of 400KB at 320px), so
+ * the LruCache holds twice as many rows' art before it starts evicting. Album art at 16-bit on a
+ * list row is indistinguishable from 32-bit at this size and density.
+ */
+private fun thumbDecodeOptions() = BitmapFactory.Options().apply {
+    inPreferredConfig = Bitmap.Config.RGB_565
 }
 
 private fun decodeSampled(bytes: ByteArray, target: Int): Bitmap? {
@@ -253,8 +278,13 @@ private object AlbumScope {
     /** album key -> track ids on that album, so a sibling's embedded picture can be borrowed. */
     private val albumTracks = java.util.concurrent.ConcurrentHashMap<String, List<Pair<Long, String>>>()
     private val trackAlbumKey = java.util.concurrent.ConcurrentHashMap<Long, String>()
+    /** id -> MediaStore albumId, so albumIdIsOneAlbum is a map lookup and not a 17k-track scan. */
+    private val trackAlbumId = java.util.concurrent.ConcurrentHashMap<Long, Long>()
 
-    fun clear() { builtFor = 0; dirSingleAlbum.clear(); albumIdSingle.clear(); albumTracks.clear(); trackAlbumKey.clear() }
+    fun clear() {
+        builtFor = 0; dirSingleAlbum.clear(); albumIdSingle.clear(); albumTracks.clear()
+        trackAlbumKey.clear(); trackAlbumId.clear()
+    }
 
     private fun key(t: Track): String {
         val who = t.albumArtist.ifBlank { t.artist }.trim().lowercase()
@@ -263,7 +293,10 @@ private object AlbumScope {
 
     @Synchronized
     private fun build(ctx: Context) {
-        val lib = runCatching { FastLibraryStore.loadSync(ctx) }.getOrNull() ?: return
+        // peek(), never loadSync(): this runs on the art threads during launch, and a disk
+        // deserialization of the whole library from here would race the real load and double the
+        // memory. If the library is not in memory yet, every answer below is "unknown" = allow.
+        val lib = FastLibraryStore.peek() ?: return
         if (lib.isEmpty() || lib.size == builtFor) return
         val perDir = HashMap<String, MutableSet<String>>()
         val perAlbumId = HashMap<Long, MutableSet<String>>()
@@ -272,6 +305,7 @@ private object AlbumScope {
             if (t.parentId != 0L) continue          // virtual cue cuts share their parent's art
             val k = key(t)
             trackAlbumKey[t.id] = k
+            if (t.albumId != 0L) trackAlbumId[t.id] = t.albumId
             perAlbum.getOrPut(k) { mutableListOf() }.add(t.id to t.path)
             if (t.path.isNotBlank()) {
                 val dir = t.path.substringBeforeLast('/', "")
@@ -302,10 +336,10 @@ private object AlbumScope {
     /** Does this MediaStore albumId map to exactly one real album? Unknown = true, as above. */
     fun albumIdIsOneAlbum(ctx: Context, trackId: Long): Boolean {
         build(ctx)
-        val lib = runCatching { FastLibraryStore.loadSync(ctx) }.getOrNull() ?: return true
-        val t = lib.firstOrNull { it.id == trackId } ?: return true
-        if (t.albumId == 0L) return true
-        return albumIdSingle[t.albumId] ?: true
+        // Was lib.firstOrNull { it.id == trackId }: a 17k-object scan PER ART LOAD, on four art
+        // threads at once, during launch. Now two hash lookups.
+        val albumId = trackAlbumId[trackId] ?: return true
+        return albumIdSingle[albumId] ?: true
     }
 
     /** Other tracks on the same album, nearest first, for borrowing an embedded picture. */
@@ -484,7 +518,9 @@ suspend fun loadArtThumb(ctx: Context, trackId: Long, trackPath: String = "", ke
         if (AlbumArtCache.isMiss("$trackId")) return@withContext null
         try {
             thumbFile(ctx, trackId).takeIf { it.exists() }?.let { f ->
-                BitmapFactory.decodeFile(f.absolutePath)?.let { b ->
+                BitmapFactory.decodeFile(f.absolutePath, thumbDecodeOptions())?.let { b ->
+                    // A fat legacy lossless thumb gets re-saved lossy so its next read is fast.
+                    if (f.length() > FAT_THUMB_BYTES) writeWebp(b, f)
                     val img = b.asImageBitmap()
                     if (keepInMemory) AlbumArtCache.put("$trackId", img)
                     return@withContext img
@@ -592,7 +628,7 @@ suspend fun loadArtHiRes(ctx: Context, trackId: Long, trackPath: String = ""): I
 
         val b = bmp
         if (b != null) {
-            writeWebp(b, hiresFile(ctx, trackId))
+            writeWebp(b, hiresFile(ctx, trackId), lossless = true)
             val img = b.asImageBitmap()
             AlbumArtCache.put("$trackId#hi", img)
             img

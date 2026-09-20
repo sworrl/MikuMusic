@@ -466,7 +466,20 @@ private fun canonicalArtistKeyUncached(artistName: String, ctx: android.content.
 // flips). Built the same way: artist half goes through the existing canonicalArtistKey, album half
 // gets the same accent-fold/punctuation-strip treatment, both guarded against the same
 // Normalizer-on-malformed-surrogates crash class already fixed once in canonicalArtistKeyUncached.
+private val canonicalAlbumKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
 fun canonicalAlbumKey(artist: String, album: String, ctx: android.content.Context? = null): String {
+    // Cached, because LikeStore.likeOrigin asks for this from every heart in every list row on
+    // every recomposition since album likes started inheriting to tracks (2026-09-17). Unicode
+    // normalization plus three regex passes per row per frame is not free on this SoC.
+    val cacheKey = artist + "\u0001" + album
+    canonicalAlbumKeyCache[cacheKey]?.let { return it }
+    val out = canonicalAlbumKeyUncached(artist, album, ctx)
+    if (canonicalAlbumKeyCache.size < 50_000) canonicalAlbumKeyCache[cacheKey] = out
+    return out
+}
+
+private fun canonicalAlbumKeyUncached(artist: String, album: String, ctx: android.content.Context?): String {
     var clean = album.trim().trim('.', '!', '?', '-', ',', '"', '\'', ' ')
     clean = runCatching { COMBINING_MARKS_RE.replace(java.text.Normalizer.normalize(clean, java.text.Normalizer.Form.NFD), "") }.getOrDefault(clean)
     clean = WHITESPACE_RUN_RE.replace(NON_LETTER_DIGIT_RE.replace(clean, " ").trim(), " ").lowercase()
