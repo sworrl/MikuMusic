@@ -22,6 +22,11 @@ static int                      s_lastPos  = -1;
 // nativeRender; when it reaches zero the playlist takes over. Only armed on a FRESH open, never on
 // a surface re-create (fullscreen toggle), so the logo does not reappear every time you toggle.
 static int                      s_splashFrames = 0;
+/** Count of preset load failures reported by projectM since init. Read by nativePresetFailures. */
+static int                      s_presetFailures = 0;
+/** Self-test hand-off (see nativeQueueLoadPresetPath): a path for the GL thread to load next frame. */
+static std::string              s_pendingLoad;
+static int                      s_pendingResult = 0;
 
 extern "C" {
 
@@ -70,6 +75,14 @@ Java_com_miku_player_ProjectMNative_nativeInit(JNIEnv* /*env*/, jobject /*thiz*/
     // over on the first advance, so the user is told which engine is rendering this. libprojectM is
     // LGPL and calling it out is the right thing to do as well as a nicer hand-off than a cold cut
     // straight into a preset.
+    // A preset that fails to parse or compile used to vanish silently: the playlist retried past
+    // it and nobody learned which one was broken. Log every failure by name. This is how the 80
+    // Miku presets get verified rather than assumed.
+    projectm_set_preset_switch_failed_event_callback(s_pm, [](const char* file, const char* msg, void*) {
+        LOGE("PRESET FAILED: %s :: %s", file ? file : "?", msg ? msg : "?");
+        s_presetFailures++;
+    }, nullptr);
+
     projectm_load_preset_file(s_pm, "idle://", false);
     s_splashFrames = (s_lastPos >= 0) ? 0 : 120;   // ~2 s at 60 fps on a fresh open only
 
@@ -108,6 +121,13 @@ Java_com_miku_player_ProjectMNative_nativeRender(JNIEnv* /*env*/, jobject /*thiz
                                                  jfloat /*bass*/, jfloat /*treble*/) {
     std::lock_guard<std::mutex> g(s_lock);
     if (!s_pm) return;
+    // Self-test: load a queued preset HERE, on the GL thread, and record whether projectM took it.
+    if (!s_pendingLoad.empty()) {
+        int before = s_presetFailures;
+        try { projectm_load_preset_file(s_pm, s_pendingLoad.c_str(), false); } catch (...) { s_presetFailures++; }
+        s_pendingResult = (s_presetFailures == before) ? 1 : 2;
+        s_pendingLoad.clear();
+    }
     // Hold the projectM logo for its few frames, then hand over to the playlist.
     if (s_splashFrames > 0 && --s_splashFrames == 0 && s_playlist) {
         try { projectm_playlist_play_next(s_playlist, true); } catch (...) { LOGE("splash handoff threw"); }
@@ -194,6 +214,31 @@ Java_com_miku_player_ProjectMNative_nativeVersion(JNIEnv* env, jobject) {
 }
 
 /** Git revision the vendored library was built from. Shown next to the version in the debug row. */
+JNIEXPORT jint JNICALL
+Java_com_miku_player_ProjectMNative_nativePresetFailures(JNIEnv*, jobject) { return s_presetFailures; }
+
+/**
+ * Self-test hand-off. Preset loading compiles shaders and MUST happen on the GL thread, so this
+ * only queues the path; nativeRender performs the load on its next frame and records the outcome.
+ * The caller polls nativePendingLoadResult: 0 = still pending, 1 = accepted, 2 = rejected.
+ */
+
+JNIEXPORT void JNICALL
+Java_com_miku_player_ProjectMNative_nativeQueueLoadPresetPath(JNIEnv* env, jobject, jstring jpath) {
+    std::lock_guard<std::mutex> g(s_lock);
+    if (!jpath) return;
+    const char* p = env->GetStringUTFChars(jpath, nullptr);
+    s_pendingLoad = p ? p : "";
+    s_pendingResult = 0;
+    env->ReleaseStringUTFChars(jpath, p);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_miku_player_ProjectMNative_nativePendingLoadResult(JNIEnv*, jobject) {
+    std::lock_guard<std::mutex> g(s_lock);
+    return s_pendingResult;
+}
+
 JNIEXPORT jstring JNICALL
 Java_com_miku_player_ProjectMNative_nativeVcsVersion(JNIEnv* env, jobject) {
     try {

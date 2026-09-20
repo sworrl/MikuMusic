@@ -18,6 +18,7 @@ class MikuPrefsReceiver : BroadcastReceiver() {
          *  MediaStore into the FastLibraryStore index AND walks the volumes for files MediaStore
          *  hasn't indexed yet. Never touches the network; works with the ingress engine OFF. */
         const val ACTION_PROFILE = "com.miku.player.action.PROFILE"
+        const val ACTION_PRESET_SELFTEST = "com.miku.player.action.PRESET_SELFTEST"
         const val ACTION_FORCE_LIBRARY_SCAN = "com.miku.player.action.FORCE_LIBRARY_SCAN"
         const val ACTION_RESCAN_LIBRARY = "com.miku.player.action.RESCAN_LIBRARY"
         /** Flip the ingress engine (Settings.Global miku_ingest_enabled) — extra "enabled". */
@@ -51,6 +52,11 @@ class MikuPrefsReceiver : BroadcastReceiver() {
             //   adb shell am broadcast -a com.miku.player.action.PROFILE --ei seconds 8
             //   adb shell run-as com.miku.player cat files/profile.trace > profile.trace
             // Debug builds only. A profiler trigger in a release build is a foot-gun.
+            // adb shell am broadcast -a com.miku.player.action.PRESET_SELFTEST -p com.miku.player
+            // Needs the visualiser open (projectM lives on its GL thread). Logs "PRESET SELFTEST".
+            ACTION_PRESET_SELFTEST -> Thread {
+                ProjectMNative.selfTest(context.applicationContext)
+            }.start()
             ACTION_PROFILE -> if (BuildConfig.DEBUG) {
                 val secs = intent.getIntExtra("seconds", 8).coerceIn(1, 60)
                 val f = java.io.File(context.filesDir, "profile.trace")

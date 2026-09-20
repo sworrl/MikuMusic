@@ -172,6 +172,34 @@ object ProjectMNative {
     private external fun nativeIsLocked(): Boolean
     private external fun nativePresetName(): String
     private external fun nativeVersion(): String
+    private external fun nativePresetFailures(): Int
+    private external fun nativeQueueLoadPresetPath(path: String)
+    private external fun nativePendingLoadResult(): Int
+
+    /** projectM-reported preset load failures since init (each is also logged by name). */
+    fun presetFailures(): Int = if (isLoaded) runCatching { nativePresetFailures() }.getOrDefault(0) else 0
+
+    /**
+     * Self-test: load every preset matching [prefix] one after another on the GL thread and report
+     * the ones projectM rejects. Runs only while the visualiser is up (projectM lives on its GL
+     * context). Results go to logcat as "PRESET SELFTEST".
+     */
+    fun selfTest(ctx: android.content.Context, prefix: String = "Miku - "): Pair<Int, List<String>> {
+        if (!isLoaded) return 0 to emptyList()
+        val dir = java.io.File(ctx.filesDir, "presets")
+        val files = dir.listFiles { f -> f.name.startsWith(prefix) && f.name.endsWith(".milk") }?.sortedBy { it.name } ?: emptyList()
+        val bad = ArrayList<String>()
+        for (f in files) {
+            // Queue for the GL thread, then wait for a frame to consume it (up to ~2s each).
+            runCatching { nativeQueueLoadPresetPath(f.absolutePath) }
+            var result = 0; var waited = 0
+            while (result == 0 && waited < 2000) { Thread.sleep(20); waited += 20; result = runCatching { nativePendingLoadResult() }.getOrDefault(2) }
+            if (result != 1) bad.add(f.name + (if (result == 0) " (no frame rendered; is the visualiser open?)" else ""))
+        }
+        android.util.Log.i("projectM", "PRESET SELFTEST: ${files.size} tried, ${bad.size} failed" +
+            (if (bad.isNotEmpty()) ": " + bad.joinToString() else ""))
+        return files.size to bad
+    }
     private external fun nativeVcsVersion(): String
     private external fun nativeSetBeatSensitivity(s: Float)
 }

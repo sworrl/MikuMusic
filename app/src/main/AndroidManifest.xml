@@ -366,6 +366,7 @@
                 <action android:name="com.miku.player.action.TOGGLE_LIKE" />
                 <action android:name="com.miku.player.action.SET_LIKE" />
                 <action android:name="com.miku.player.action.PROFILE" />
+                <action android:name="com.miku.player.action.PRESET_SELFTEST" />
                 <action android:name="com.miku.player.action.FORCE_LIBRARY_SCAN" />
                 <action android:name="com.miku.player.action.RESCAN_LIBRARY" />
                 <action android:name="com.miku.player.action.SET_INGEST_ENABLED" />

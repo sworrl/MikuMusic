@@ -541,14 +541,24 @@ class MainActivity : ComponentActivity() {
                         var refresh by remember { mutableStateOf(0) }
                         var lastSeenGen by remember { mutableStateOf(ScanProgress.generation.get()) }
                         LaunchedEffect(Unit) {
+                            // DEBOUNCED. A rescan bumps the generation once per scanner batch, and
+                            // each bump used to re-key produceState and queue another full walk:
+                            // FIVE back-to-back 7 to 20 second walks for one rescan (seen 2026-09-19).
+                            // Now a change only counts once the generation has held still for a
+                            // few seconds, i.e. the scan is actually done.
+                            var pendingGen: Int? = null
+                            var stableSince = 0L
                             while (true) {
                                 val g = ScanProgress.generation.get()
                                 if (g != lastSeenGen) {
-                                    lastSeenGen = g
-                                    AlbumArtCache.clearMisses() // a scan may have surfaced art for previously-missed tracks
-                                    refresh++
+                                    if (pendingGen != g) { pendingGen = g; stableSince = android.os.SystemClock.elapsedRealtime() }
+                                    else if (android.os.SystemClock.elapsedRealtime() - stableSince >= 4000L) {
+                                        lastSeenGen = g; pendingGen = null
+                                        AlbumArtCache.clearMisses() // a scan may have surfaced art for previously-missed tracks
+                                        refresh++
+                                    }
                                 }
-                                delay(2500L)
+                                delay(1500L)
                             }
                         }
                         // The binary cache load is NOT on the main thread any more. It was, inside
