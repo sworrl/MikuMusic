@@ -12,7 +12,7 @@ Corrections are welcome. If something here is wrong, or something is missing, op
 
 Everything written for this project is GPL-3.0-or-later. See [LICENSE](LICENSE).
 
-Copyright holder: sworrl (agent.jearl@gmail.com).
+Copyright holder: sworrl (github@falcontechnix.com).
 
 ---
 
@@ -67,7 +67,7 @@ owns, and the repos ship only art we made. That work is not done. Until it is, t
 statement is that these files are present and should not be.
 
 **Takedown:** if you are HiBy Digital or Crypton Future Media and want any of this removed, open an
-issue or email agent.jearl@gmail.com. It will be removed.
+issue or email github@falcontechnix.com. It will be removed.
 
 ### 3.3 Original
 
@@ -177,4 +177,4 @@ Open an issue or a pull request.
 ## 8. Reporting a problem with this file
 
 If a license here is wrong, an attribution is missing, or something is in this project that should
-not be, open an issue or email agent.jearl@gmail.com.
+not be, open an issue or email github@falcontechnix.com.

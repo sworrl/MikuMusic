@@ -339,7 +339,7 @@ depicting Crypton's character, and there is no license here to redistribute eith
 device covers the copy on the device. It does not cover handing copies to whoever clones the repo,
 and gating the app to M500 hardware does not change that. They should not be in here, and the plan
 is to read them from the stock firmware on the user's own device instead. If you are HiBy or Crypton
-and want something removed, open an issue or email agent.jearl@gmail.com and it comes out.
+and want something removed, open an issue or email github@falcontechnix.com and it comes out.
 
 HiBy Digital's firmware and applications are theirs and are not redistributed here. libprojectM and
 jaudiotagger are LGPL-2.1 and are used as libraries. Media3 and the AndroidX libraries are
