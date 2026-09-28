@@ -122,6 +122,13 @@ object MikuWeatherTileEngine {
                 loaded = true
             )
         }
+
+        // Apply the zone from the CACHED snapshot too, not only after a live fetch. Two reasons.
+        // On a cold boot there is a cached reading long before there is a network, and the clock
+        // being right is more urgent than the forecast being fresh. And a fetch is throttled, so
+        // an install or a restart would otherwise sit on a stale zone until the next refresh window
+        // came around, which is exactly the "it never changed" the user reported.
+        runCatching { MikuTimeZoneSync.apply(app, snap?.tzId, snap?.placeName) }
     }
 
     // ------------------------------------------------------------------ user settings
@@ -189,6 +196,16 @@ object MikuWeatherTileEngine {
             // 1. Open-Meteo baseline (throws → whole refresh fails; cached snapshot stays as-is).
             var snap = MikuWeatherTileSources.fetchOpenMeteo(loc.lat, loc.lon)
             val notes = mutableListOf<String>()
+
+            // 1b. Follow the clock to wherever we actually are. Open-Meteo is asked with
+            // timezone=auto and answers with the IANA zone for these coordinates, which we have
+            // been parsing into snap.tzId and ignoring. NITZ cannot do this job on a data-only SIM
+            // whose PS registration is denied, so this is the only thing that moves the zone when
+            // the device travels. See MikuTimeZoneSync for the guards; it is a no-op when the zone
+            // already matches, when the user pinned it, or when Android's own auto zone is off.
+            // Placed after the fetch succeeded on purpose: a position good enough to render weather
+            // for is the bar for being good enough to move the clock.
+            runCatching { MikuTimeZoneSync.apply(app, snap.tzId, loc.name) }
 
             // 2. Real AQI from Open-Meteo air quality (null → "—", never a placeholder).
             val air = MikuWeatherTileSources.fetchOpenMeteoAir(loc.lat, loc.lon)
