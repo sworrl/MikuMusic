@@ -772,6 +772,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun isSupportedDevice(): Boolean {
+        // DEVELOPER OVERRIDE. Miku Music is built for one device and the gate is deliberate: the
+        // audio path, the DAC controls and half the hardware readouts assume an M500 and would
+        // otherwise show nothing or lie. But running the UI on another phone is genuinely useful
+        // for development, so shell can lift the gate:
+        //
+        //   adb shell settings put global miku_allow_any_device 1
+        //
+        // Settings.Global is used because the SHELL holds WRITE_SECURE_SETTINGS on any device
+        // while the app does not, so this cannot be flipped by the app or by anything the user
+        // taps. Off the M500 the hardware pages will honestly report that there is no CS43198 and
+        // no vendor audio properties; the player, library and visualiser work normally.
+        val overridden = try {
+            android.provider.Settings.Global.getInt(contentResolver, "miku_allow_any_device", 0) == 1
+        } catch (_: Throwable) { false }
+        if (overridden) {
+            android.util.Log.w("MikuPlayer", "device gate lifted by miku_allow_any_device; " +
+                "hardware-specific readouts will report unavailable on ${android.os.Build.MODEL}")
+            return true
+        }
         val realHardware = android.os.Build.MANUFACTURER.equals("HiBy", ignoreCase = true) &&
             android.os.Build.MODEL.contains("M500", ignoreCase = true)
         // Emulator/VM screen — a different field set than PlayerHolder's own VM check on purpose.
