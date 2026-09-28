@@ -81,6 +81,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.media3.common.Player
@@ -707,18 +708,21 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
             Canvas(Modifier.fillMaxSize()) { drawCassetteOverlay(theme, "${fmt(pos)}/${fmt(dur)}", light, grade) }
         }
 
-        // Photorealistic Masking Tape Strip with torn deckled ends, crepe paper micro-ridges & grain
-        // Positioned securely in the cassette's label writing well (11.5mm offset = Y of 20.25mm),
-        // leaving a clean 12mm gap (0% overlap) below the top brand rail!
-        val stripX = mmDp * 11.5f
+        // Photorealistic Masking Tape Strip with torn deckled ends, crepe paper micro-ridges & grain.
+        //
+        // POSITION. Screen x maps to the cassette's mm-space Y (the shell is rotated for portrait),
+        // measured from the shell's mid-height: cassetteY = 31.75 - offsetMm. The printed label
+        // band is y 3.4..17.2 mm — that is exactly the span the moulded label-band ribbing covers
+        // in drawCassetteBaseMm (1b), so it is the real, drawn extent of the label, not a guess.
+        // The strip used to sit at 11.5 mm, i.e. cassetteY 20.25, which is BELOW y=17.2: the tape
+        // floated on the bare shell out over the reels and the window instead of on the label, and
+        // whatever the branding pass painted across the band sat above it. 18.55 mm puts it at
+        // cassetteY 13.2, so an ~8 mm strip spans roughly y 9.2..17.2 and lands in the lower half
+        // of the label well, bottom edge flush with the band, clear of the brand text that prints
+        // at y 8.25 (BespokeTapeBranding's 23.5 mm offset).
+        val stripX = mmDp * 18.55f
         val labelJitterY = remember(track.id) { kotlin.random.Random(track.id).nextFloat() * 8f - 4f }
         val labelJitterX = remember(track.id) { kotlin.random.Random(track.id + 1).nextFloat() * 1.5f - 0.75f }
-
-        PhotorealisticMaskingTapeLabel(
-            track = track,
-            modifier = Modifier.align(Alignment.Center)
-                .offset(x = stripX + labelJitterX.dp, y = labelJitterY.dp)
-        )
 
         // Bespoke authentic era brand typography & printing texture on the upper cassette rail
         BespokeTapeBranding(
@@ -729,6 +733,21 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                 .rotate(90f)
         )
 
+        // Masking tape draws LAST, and pins itself above its siblings with an explicit zIndex.
+        // A physical mixtape has the tape stuck ON TOP of whatever the shell already had printed
+        // on it, so anything the shell or the branding pass paints across the label band has to go
+        // UNDER the strip. This used to sit before BespokeTapeBranding, and the STUDIO-family
+        // layouts (which lay a cream paper strip across the whole label band, see
+        // brandStripBackground) painted straight over the strip and its handwriting. The zIndex is
+        // belt-and-braces: composition order alone already fixes it, but the order here is easy to
+        // disturb when something new gets added to this Box, and the failure is silent.
+        PhotorealisticMaskingTapeLabel(
+            track = track,
+            modifier = Modifier.align(Alignment.Center)
+                .zIndex(1f)
+                .offset(x = stripX + labelJitterX.dp, y = labelJitterY.dp)
+        )
+
         // The deck's own VOLUME fader. Persistent by design: this is the ONE place in the OS with
         // its own volume control, and the app-wide modal stands down while tape mode is up.
         // The app-wide volume modal stands down for as long as the cassette is up.
@@ -737,12 +756,23 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
             onDispose { com.miku.player.volume.MikuVolumeManager.setHudSuppressed(false) }
         }
 
+        // The fader sits on the cassette's END, which is the RIGHT-hand edge when the device is
+        // held sideways with the button rail up. Two earlier positions were wrong: 17.0 mm on the
+        // x axis put it across the middle of the label face on top of the masking tape, and
+        // 26.75 mm on the x axis moved it to the outer label edge, which reads as the TOP edge in
+        // the hand, not the right.
+        //
+        // Screen x is the cassette's short (height) axis and screen y is its long axis, because
+        // the shell is drawn rotated CW 90. So the end of the cassette is a y offset, and the
+        // control runs ACROSS the shell there, which is why it carries no rotation of its own:
+        // unrotated it spans the shell's width on screen, and that reads as a vertical fader down
+        // the right-hand edge once the device is turned. 38 mm of the 50.8 mm half-length leaves
+        // it 12.8 mm in from the shell end, clear of the corner rollers and screws.
         TapeDeckVolumeFader(
             theme = theme,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = mmDp * 17.0f)
-                .rotate(90f)
+                .offset(y = mmDp * 38f)
         )
 
         // Unified Tape Deck Controls Bar: Exit, Playlist, RW, Play/Pause, FF, Rainbow Heart
@@ -2326,6 +2356,31 @@ private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float,
  * adjust-only, raise-only, per-jack lock that silently swallows the step (see
  * MikuVolumeManager.triggerHud for the full trace).
  */
+/**
+ * The deck's volume fader has four bodies, because one slider cannot suit twenty cassettes. Each
+ * model is a real control off a period deck or Walkman rather than a generic Material slider:
+ *
+ *  LED_LADDER     12-segment level meter, last two segments red, over a thin slot and cap. The
+ *                 mid-80s component-separates look. Suits the NEON and MERCH shells.
+ *  KNURLED_SLIDER a recessed track with a printed 0..10 scale and a wide ridged plastic cap, the
+ *                 channel fader off a cassette deck's front panel. Suits STUDIO.
+ *  THUMBWHEEL     a ridged wheel sunk into a cutout, the way a Walkman's volume sits half inside
+ *                 the case. The ridges travel with the level. Suits CLEAR.
+ *  ENGRAVED_SCALE an engraved 0..10 rule with a pointer riding it, no backlight at all, which is
+ *                 what a budget major-label deck actually had. Suits MAJOR84.
+ *
+ * The model follows the loaded cassette unless the user pins one. Tapping the VOLUME legend cycles
+ * models and persists the choice; the first tap moves off "follow the cassette" onto a fixed model.
+ */
+private enum class FaderModel { LED_LADDER, KNURLED_SLIDER, THUMBWHEEL, ENGRAVED_SCALE }
+
+private fun defaultFaderFor(layout: TapeLayout): FaderModel = when (layout) {
+    TapeLayout.STUDIO -> FaderModel.KNURLED_SLIDER
+    TapeLayout.CLEAR -> FaderModel.THUMBWHEEL
+    TapeLayout.MAJOR84 -> FaderModel.ENGRAVED_SCALE
+    TapeLayout.NEON, TapeLayout.MERCH -> FaderModel.LED_LADDER
+}
+
 @Composable
 private fun TapeDeckVolumeFader(theme: TapeTheme, modifier: Modifier = Modifier) {
     val ctx = androidx.compose.ui.platform.LocalContext.current
@@ -2343,6 +2398,11 @@ private fun TapeDeckVolumeFader(theme: TapeTheme, modifier: Modifier = Modifier)
     }
     val frac = (vol.toFloat() / maxVol).coerceIn(0f, 1f)
 
+    // -1 is "follow the cassette". Anything else pins a model across every shell.
+    var faderPin by remember { mutableStateOf(PlayerPreferences.loadTapeFader(ctx)) }
+    val model = if (faderPin < 0) defaultFaderFor(theme.layout)
+                else FaderModel.entries[faderPin % FaderModel.entries.size]
+
     // Panel colours come from the shell so the fader belongs to whichever cassette is loaded.
     val dark = lum(theme.shellLo) < 0.5f
     val slotColor = if (dark) Color(0xFF0B0B0E) else Color(0xFF2A2A2E)
@@ -2350,8 +2410,31 @@ private fun TapeDeckVolumeFader(theme: TapeTheme, modifier: Modifier = Modifier)
     val capLo = if (dark) Color(0xFF6E6E76) else Color(0xFF1C1C22)
     val printInk = ensureContrastOn(if (dark) Color(0xFFD8D8D0) else Color(0xFF15151A), theme.shellHi, 0.35f)
 
+    // The control is not one flat colour. It runs the shell's own brand colour at the bottom of the
+    // range, warms through amber past two thirds, and goes red in the last fifth, which is the
+    // colour language every deck's level meter already used. `glow` rides the same curve, squared so
+    // the bloom stays almost off through normal listening levels and only really lights up near the
+    // top, instead of a linear haze that is always half on.
+    val hot = Color(0xFFFF3B30)
+    val warm = Color(0xFFFFB020)
+    val accent = when {
+        frac >= 0.80f -> lerp(warm, hot, ((frac - 0.80f) / 0.20f).coerceIn(0f, 1f))
+        frac >= 0.62f -> lerp(theme.brandColor, warm, ((frac - 0.62f) / 0.18f).coerceIn(0f, 1f))
+        else -> theme.brandColor
+    }
+    val glow = (frac * frac).coerceIn(0f, 1f)
+    // A slow breath so the lit part is never completely static while audio is playing. Amplitude is
+    // tied to the level, so at low volume it is imperceptible and at the top it pulses.
+    val breathe by rememberInfiniteTransition(label = "faderGlow").animateFloat(
+        initialValue = 0.85f,
+        targetValue = 1.15f,
+        animationSpec = infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Reverse),
+        label = "faderGlowPulse"
+    )
+    val bloom = (glow * breathe).coerceIn(0f, 1.2f)
+
     Row(
-        modifier.height(30.dp).width(210.dp),
+        modifier.height(26.dp).width(200.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -2360,13 +2443,29 @@ private fun TapeDeckVolumeFader(theme: TapeTheme, modifier: Modifier = Modifier)
             fontSize = 7.sp,
             fontWeight = FontWeight.Bold,
             letterSpacing = 1.6.sp,
-            maxLines = 1
+            maxLines = 1,
+            modifier = Modifier.pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    down.consume()
+                    val up = waitForUpOrCancellation()
+                    if (up != null) {
+                        up.consume()
+                        // From "follow the cassette", step onto the model the cassette was already
+                        // showing, so the first tap is a no-op visually and the second actually moves.
+                        val cur = if (faderPin < 0) defaultFaderFor(theme.layout).ordinal else faderPin
+                        faderPin = (cur + 1) % FaderModel.entries.size
+                        PlayerPreferences.saveTapeFader(ctx, faderPin)
+                        Haptics.tick(ctx)
+                    }
+                }
+            }
         )
         Spacer(Modifier.width(6.dp))
         Canvas(
             Modifier
                 .weight(1f)
-                .height(26.dp)
+                .height(22.dp)
                 .pointerInput(maxVol) {
                     fun apply(xPx: Float, widthPx: Float) {
                         val f = (xPx / widthPx.coerceAtLeast(1f)).coerceIn(0f, 1f)
@@ -2398,81 +2497,205 @@ private fun TapeDeckVolumeFader(theme: TapeTheme, modifier: Modifier = Modifier)
         ) {
             val h = size.height
             val w = size.width
-            val ladderH = h * 0.38f
-            val slotY = h * 0.72f
-            val slotH = h * 0.16f
 
-            // ---- 12-segment LED ladder, the last two red ----
-            val segs = 12
-            val gap = w * 0.012f
-            val segW = (w - gap * (segs - 1)) / segs
-            val litUpTo = (frac * segs)
-            for (i in 0 until segs) {
-                val on = i < litUpTo
-                val red = i >= segs - 2
-                val base = if (red) Color(0xFFFF3B30) else Color(0xFF39C5BB)
-                val c = if (on) base else base.copy(alpha = 0.13f)
-                val x = i * (segW + gap)
+            /** The printed 0..10 rule every one of these panels carries, tall ticks on the fives. */
+            fun scale(baseY: Float, tallH: Float, shortH: Float, alpha: Float) {
+                for (i in 0..10) {
+                    val x = w * (i / 10f)
+                    val tall = i % 5 == 0
+                    drawLine(
+                        color = printInk.copy(alpha = if (tall) alpha else alpha * 0.55f),
+                        start = Offset(x, baseY - (if (tall) tallH else shortH)),
+                        end = Offset(x, baseY),
+                        strokeWidth = if (tall) 1.6f else 1f
+                    )
+                }
+            }
+
+            /** A recessed moulded track with a lit lower lip, shared by the slider-shaped models. */
+            fun slot(y: Float, height: Float) {
                 drawRoundRect(
-                    color = c,
-                    topLeft = Offset(x, 0f),
-                    size = Size(segW, ladderH),
-                    cornerRadius = CornerRadius(segW * 0.18f)
+                    color = slotColor,
+                    topLeft = Offset(0f, y),
+                    size = Size(w, height),
+                    cornerRadius = CornerRadius(height / 2f)
                 )
-                if (on) drawRoundRect(   // the glow a real LED throws onto the panel around it
-                    color = base.copy(alpha = 0.25f),
-                    topLeft = Offset(x - gap, -gap),
-                    size = Size(segW + gap * 2, ladderH + gap * 2),
-                    cornerRadius = CornerRadius(segW * 0.3f)
-                )
-            }
-
-            // ---- printed scale ticks, 0 .. 10 ----
-            for (i in 0..10) {
-                val x = w * (i / 10f)
-                val tall = i % 5 == 0
-                drawLine(
-                    color = printInk.copy(alpha = if (tall) 0.75f else 0.4f),
-                    start = Offset(x, slotY - h * (if (tall) 0.15f else 0.09f)),
-                    end = Offset(x, slotY - h * 0.03f),
-                    strokeWidth = if (tall) 1.6f else 1f
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.10f),
+                    topLeft = Offset(0f, y + height * 0.55f),
+                    size = Size(w, height * 0.45f),
+                    cornerRadius = CornerRadius(height / 2f)
                 )
             }
 
-            // ---- the recessed slot ----
-            drawRoundRect(
-                color = slotColor,
-                topLeft = Offset(0f, slotY),
-                size = Size(w, slotH),
-                cornerRadius = CornerRadius(slotH / 2f)
-            )
-            drawRoundRect(   // moulded highlight along the slot's lower lip
-                color = Color.White.copy(alpha = 0.10f),
-                topLeft = Offset(0f, slotY + slotH * 0.55f),
-                size = Size(w, slotH * 0.45f),
-                cornerRadius = CornerRadius(slotH / 2f)
-            )
-
-            // ---- the knurled cap ----
-            val capW = w * 0.075f
-            val capH = h * 0.42f
-            val capX = (frac * (w - capW)).coerceIn(0f, w - capW)
-            val capY = slotY + slotH / 2f - capH / 2f
-            drawRoundRect(
-                brush = Brush.verticalGradient(listOf(capHi, capLo)),
-                topLeft = Offset(capX, capY),
-                size = Size(capW, capH),
-                cornerRadius = CornerRadius(capW * 0.22f)
-            )
-            val knurls = 4
-            for (i in 1..knurls) {
-                val kx = capX + capW * (i / (knurls + 1f))
-                drawLine(
-                    color = Color.Black.copy(alpha = 0.35f),
-                    start = Offset(kx, capY + capH * 0.18f),
-                    end = Offset(kx, capY + capH * 0.82f),
-                    strokeWidth = 1f
+            /** The ridged plastic cap. `ridges` is how many moulded grip lines it carries. */
+            fun cap(cx: Float, cy: Float, cw: Float, ch: Float, ridges: Int) {
+                val x = (cx - cw / 2f).coerceIn(0f, w - cw)
+                val y = cy - ch / 2f
+                drawRoundRect(
+                    brush = Brush.verticalGradient(listOf(capHi, capLo)),
+                    topLeft = Offset(x, y),
+                    size = Size(cw, ch),
+                    cornerRadius = CornerRadius(cw * 0.22f)
                 )
+                for (i in 1..ridges) {
+                    val kx = x + cw * (i / (ridges + 1f))
+                    drawLine(
+                        color = Color.Black.copy(alpha = 0.35f),
+                        start = Offset(kx, y + ch * 0.18f),
+                        end = Offset(kx, y + ch * 0.82f),
+                        strokeWidth = 1f
+                    )
+                }
+            }
+
+            when (model) {
+                FaderModel.LED_LADDER -> {
+                    val ladderH = h * 0.44f
+                    val segs = 12
+                    val gap = w * 0.012f
+                    val segW = (w - gap * (segs - 1)) / segs
+                    val litUpTo = frac * segs
+                    for (i in 0 until segs) {
+                        val on = i < litUpTo
+                        val red = i >= segs - 2
+                        val base = if (red) Color(0xFFFF3B30) else accent
+                        val c = if (on) base else base.copy(alpha = 0.13f)
+                        val x = i * (segW + gap)
+                        drawRoundRect(
+                            color = c,
+                            topLeft = Offset(x, 0f),
+                            size = Size(segW, ladderH),
+                            cornerRadius = CornerRadius(segW * 0.18f)
+                        )
+                        if (on) {
+                            // Segments near the top of the lit run bloom hardest, the way the last
+                            // few LEDs on a real meter wash into each other when you drive it.
+                            val nearTop = 1f - ((litUpTo - i) / segs.toFloat()).coerceIn(0f, 1f)
+                            val a = (0.18f + 0.45f * bloom * nearTop).coerceIn(0f, 0.75f)
+                            val spread = gap * (1f + 2.5f * bloom * nearTop)
+                            drawRoundRect(   // the glow a real LED throws onto the panel around it
+                                color = base.copy(alpha = a),
+                                topLeft = Offset(x - spread, -spread),
+                                size = Size(segW + spread * 2, ladderH + spread * 2),
+                                cornerRadius = CornerRadius(segW * 0.3f)
+                            )
+                        }
+                    }
+                    val slotY = h * 0.74f
+                    val slotH = h * 0.16f
+                    scale(slotY - h * 0.03f, h * 0.13f, h * 0.07f, 0.7f)
+                    slot(slotY, slotH)
+                    cap(frac * w, slotY + slotH / 2f, w * 0.075f, h * 0.42f, 4)
+                }
+
+                FaderModel.KNURLED_SLIDER -> {
+                    // No lights at all. A wide travel slot, a printed rule above it, and a cap big
+                    // enough to actually be a thumb rest, which is what a channel fader looks like.
+                    val slotY = h * 0.52f
+                    val slotH = h * 0.20f
+                    scale(slotY - h * 0.10f, h * 0.30f, h * 0.17f, 0.8f)
+                    slot(slotY, slotH)
+                    // Travelled part of the track picks up the shell's brand colour, the way a
+                    // deck's fader leaves a coloured trail behind the cap.
+                    val litW = (frac * w).coerceAtLeast(0f)
+                    if (bloom > 0.02f) drawRoundRect(   // bloom spilling off the lit track
+                        color = accent.copy(alpha = 0.30f * bloom),
+                        topLeft = Offset(-slotH * 0.25f, slotY + slotH * 0.28f - slotH * 0.35f),
+                        size = Size(litW + slotH * 0.5f, slotH * 0.44f + slotH * 0.7f),
+                        cornerRadius = CornerRadius(slotH * 0.6f)
+                    )
+                    drawRoundRect(
+                        color = accent.copy(alpha = 0.55f + 0.40f * glow),
+                        topLeft = Offset(0f, slotY + slotH * 0.28f),
+                        size = Size(litW, slotH * 0.44f),
+                        cornerRadius = CornerRadius(slotH * 0.22f)
+                    )
+                    cap(frac * w, slotY + slotH / 2f, w * 0.115f, h * 0.74f, 6)
+                }
+
+                FaderModel.THUMBWHEEL -> {
+                    // A wheel sunk into the shell: a dark cutout, ridges that travel with the
+                    // level so the wheel reads as turning, and a fixed index mark at the centre.
+                    val cutTop = h * 0.20f
+                    val cutH = h * 0.62f
+                    drawRoundRect(
+                        color = slotColor,
+                        topLeft = Offset(0f, cutTop),
+                        size = Size(w, cutH),
+                        cornerRadius = CornerRadius(cutH * 0.30f)
+                    )
+                    // Ridge pitch is fixed; the phase moves with the level. Ridges near the middle
+                    // of the cutout catch the most light, which is what sells it as a cylinder.
+                    val pitch = w * 0.045f
+                    val phase = (frac * pitch * 6f) % pitch
+                    var x = -pitch + phase
+                    while (x < w + pitch) {
+                        if (x >= 0f && x <= w) {
+                            val d = kotlin.math.abs(x - w / 2f) / (w / 2f)
+                            val lit = (1f - d * d).coerceIn(0f, 1f)
+                            drawLine(
+                                color = capHi.copy(alpha = 0.18f + 0.55f * lit),
+                                start = Offset(x, cutTop + cutH * 0.14f),
+                                end = Offset(x, cutTop + cutH * 0.86f),
+                                strokeWidth = 1.4f
+                            )
+                        }
+                        x += pitch
+                    }
+                    // Cylinder shading: dark at both lips, bright across the crown.
+                    drawRect(
+                        brush = Brush.verticalGradient(
+                            listOf(Color.Black.copy(alpha = 0.45f), Color.Transparent, Color.Black.copy(alpha = 0.45f))
+                        ),
+                        topLeft = Offset(0f, cutTop),
+                        size = Size(w, cutH)
+                    )
+                    // Fixed index mark, and a small brand-coloured pip that rides the level so the
+                    // wheel still reports an absolute position, not just motion.
+                    drawLine(
+                        color = printInk.copy(alpha = 0.9f),
+                        start = Offset(w / 2f, cutTop - h * 0.14f),
+                        end = Offset(w / 2f, cutTop + h * 0.04f),
+                        strokeWidth = 1.8f
+                    )
+                    val pip = Offset(frac * w, cutTop + cutH + h * 0.10f)
+                    if (bloom > 0.02f) drawCircle(accent.copy(alpha = 0.35f * bloom), radius = h * 0.075f * (1.8f + 1.6f * bloom), center = pip)
+                    drawCircle(accent, radius = h * 0.075f, center = pip)
+                }
+
+                FaderModel.ENGRAVED_SCALE -> {
+                    // Engraved, unlit, printed rule with a pointer. The cheap deck look.
+                    val ruleY = h * 0.64f
+                    drawLine(
+                        color = printInk.copy(alpha = 0.55f),
+                        start = Offset(0f, ruleY),
+                        end = Offset(w, ruleY),
+                        strokeWidth = 1.2f
+                    )
+                    scale(ruleY, h * 0.26f, h * 0.15f, 0.85f)
+                    // Pointer: a small filled triangle sitting on the rule, plus its cast shadow.
+                    val px = frac * w
+                    val pw = h * 0.20f
+                    val ph = h * 0.26f
+                    // Drawn twice at a 1px offset: the lower copy is the pointer's cast shadow on
+                    // the printed rule, the upper one is the pointer itself. drawPath fills by
+                    // default, so neither needs an explicit style.
+                    fun pointer(ox: Float, oy: Float, c: Color) {
+                        drawPath(
+                            Path().apply {
+                                moveTo(px + ox, ruleY + oy - ph * 0.10f)
+                                lineTo(px + ox - pw, ruleY + oy + ph)
+                                lineTo(px + ox + pw, ruleY + oy + ph)
+                                close()
+                            },
+                            c
+                        )
+                    }
+                    pointer(0f, 0f, Color.Black.copy(alpha = 0.30f))
+                    if (bloom > 0.02f) drawCircle(accent.copy(alpha = 0.28f * bloom), radius = ph * (1.2f + 1.4f * bloom), center = Offset(px, ruleY + ph * 0.4f))
+                    pointer(-1f, -1.5f, accent)
+                }
             }
         }
     }

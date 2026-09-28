@@ -403,6 +403,11 @@ object PlayerPreferences {
     fun saveTapeTheme(context: Context, idx: Int) { prefs(context).edit().putInt("tape_theme", idx).apply() }
     fun loadTapeTheme(context: Context): Int = prefs(context).getInt("tape_theme", 0)
 
+    // Tape deck volume fader model. -1 means "follow the cassette", i.e. pick the fader that suits
+    // the loaded shell's layout; 0..n-1 pin one model regardless of which cassette is in.
+    fun saveTapeFader(context: Context, idx: Int) { prefs(context).edit().putInt("tape_fader", idx).apply() }
+    fun loadTapeFader(context: Context): Int = prefs(context).getInt("tape_fader", -1)
+
     // Last view ("tape" | "np" | "list") — restored on relaunch.
     fun saveLastView(context: Context, v: String) { prefs(context).edit().putString("last_view", v).apply() }
     fun loadLastView(context: Context): String = prefs(context).getString("last_view", "list") ?: "list"
