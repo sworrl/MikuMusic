@@ -162,6 +162,12 @@ object MikuBluetoothController {
                         handleDeviceFound(dev, rssi)
                     }
                 }
+                BluetoothDevice.ACTION_PAIRING_REQUEST -> {
+                    val dev: BluetoothDevice? =
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    val variant = intent.getIntExtra(BluetoothDevice.EXTRA_PAIRING_VARIANT, -1)
+                    handlePairingRequest(dev, variant)
+                }
                 BluetoothDevice.ACTION_BOND_STATE_CHANGED -> {
                     val dev: BluetoothDevice? = try {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -229,6 +235,12 @@ object MikuBluetoothController {
             addAction(BluetoothAdapter.ACTION_DISCOVERY_FINISHED)
             addAction(BluetoothDevice.ACTION_FOUND)
             addAction(BluetoothDevice.ACTION_BOND_STATE_CHANGED)
+            // WITHOUT THIS, PAIRING SILENTLY FAILS. createBond() starts the bond and the stack
+            // then asks somebody to confirm it. AOSP Settings has a receiver for that; we did not,
+            // so the request went out, nobody answered, and it timed out with no error anywhere.
+            // Reported 2026-09-27: Bose Ultra Open would not pair from our page or the fast-pair
+            // popup, but paired fine from the AOSP Settings page. This is why.
+            addAction(BluetoothDevice.ACTION_PAIRING_REQUEST)
             addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
             addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
             addAction("android.bluetooth.a2dp.profile.action.CONNECTION_STATE_CHANGED")
@@ -351,6 +363,44 @@ object MikuBluetoothController {
             } catch (t: Throwable) {
                 Log.e(TAG, "pairDevice failed: ${t.message}")
                 _connectingAddress.value = null
+            }
+        }
+    }
+
+    /**
+     * Answer the stack's pairing request.
+     *
+     * Headphones and earbuds almost always use "Just Works" (PAIRING_VARIANT_CONSENT) or numeric
+     * comparison, and both need an explicit confirmation before the bond completes. We are
+     * platform-signed and hold BLUETOOTH_PRIVILEGED, so we can confirm directly rather than
+     * throwing up a dialog for a device the user has just asked us to pair with.
+     *
+     * Variants that need the user to READ something (a passkey on the peer's screen, or type a
+     * PIN) are deliberately NOT auto-confirmed: there is nothing honest to confirm without the
+     * user, and silently guessing would be worse than the timeout it replaces. Those are left for
+     * the system dialog, which still fires.
+     */
+    private fun handlePairingRequest(device: BluetoothDevice?, variant: Int) {
+        if (device == null) return
+        // Values from BluetoothDevice; several are @hide so they are written out literally.
+        val consent = 3                 // PAIRING_VARIANT_CONSENT
+        val passkeyConfirmation = 2     // PAIRING_VARIANT_PASSKEY_CONFIRMATION
+        val displayPasskey = 4          // PAIRING_VARIANT_DISPLAY_PASSKEY
+        val displayPin = 5              // PAIRING_VARIANT_DISPLAY_PIN
+        Log.i(TAG, "pairing request from ${device.address} variant=$variant")
+        when (variant) {
+            consent, passkeyConfirmation -> {
+                val ok = runCatching { device.setPairingConfirmation(true) }.getOrDefault(false)
+                Log.i(TAG, "auto-confirmed pairing with ${device.address}: $ok")
+                // The system dialog receives the same ordered broadcast. It is harmless if it
+                // also appears: the bond is already confirmed by the time it does.
+            }
+            displayPasskey, displayPin -> {
+                Log.i(TAG, "pairing needs the user to read a code off the device; leaving it to the system dialog")
+            }
+            else -> {
+                // PIN entry and anything unrecognised: the system dialog is the right owner.
+                Log.i(TAG, "pairing variant $variant not auto-confirmable; leaving it to the system dialog")
             }
         }
     }

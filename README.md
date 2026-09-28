@@ -11,6 +11,10 @@
   <img alt="Visualizer" src="https://img.shields.io/badge/visualizer-libprojectM%204.2.0-B388FF">
 </p>
 
+> **Work in progress, and help is wanted.** This is one person and one device. Issues and pull
+> requests are welcome. The [What is verified](#what-is-verified) table is the honest line between
+> what has been confirmed on hardware and what has not.
+
 Miku Music is the music player for [MikuOS](https://github.com/sworrl/MikuOS), a platform-signed
 Android 14 replacement for the HiBy Digital M500 x Hatsune Miku DAP. It plays local files straight
 to the device's dual Cirrus Logic CS43198 DACs with no resampling and no mixer in the path, draws
@@ -28,6 +32,12 @@ hardware is capable of exact playback. Nothing in the stock stack lets you have 
 sample rate that is the mixer's and not the file's, a "BPM" invented from the title, an EQ curve that
 is not connected to anything. Every reading in this app comes from the file or the hardware or it is
 not shown at all. There is a dash where other players guess.
+
+<p align="center">
+  <img src="docs/screenshots/01-now-playing-hires.png" width="30%" alt="Now Playing during a 24-bit 96kHz FLAC: FLAC / 24-BIT / 96KHZ / HI-RES badges">
+  <img src="docs/screenshots/03-tape-mode.png" width="30%" alt="Tape mode grading itself TYPE IV from the real 24-bit 96kHz stream">
+  <img src="docs/screenshots/02-fullscreen-visualizer.png" width="30%" alt="Fullscreen libprojectM 4.2.0 visualizer">
+</p>
 
 ---
 
@@ -91,6 +101,21 @@ minimum if AudioTrack refuses the small buffer, because a silent failure here me
 the threshold, so the `max` always won, the buffer was always over the line, and every track was
 deep-buffered onto a 192kHz mixer while the app cheerfully reported bit-perfect. Fixed 2026-09-17.
 If you are writing a direct-output sink for any Android device, that is the trap.
+
+**The proof, from the running device** (`docs/screenshots/bitperfect-audioflinger.txt`, captured
+while the Now Playing screenshot above was on screen):
+
+```
+Output thread 0xb400007846c31840, name AudioOut_14D, type 1 (DIRECT):
+  Sample rate: 96000 Hz
+  HAL format: 0x6 (AUDIO_FORMAT_PCM_24_BIT_PACKED)
+  Processing format: 0x6 (AUDIO_FORMAT_PCM_24_BIT_PACKED)
+  AudioStreamOut: flags 0x1 (AUDIO_OUTPUT_FLAG_DIRECT)
+```
+
+The thread is DIRECT and not MIXER, the rate is the FILE's and not the mixer's, and the processing
+format is 24-bit packed integer end to end, so nothing converts to float and nothing dithers
+between the file and the DAC.
 
 **Integer PCM passthrough.** 16, 24 and 32-bit integer PCM reach the DAC in their own format.
 No float conversion, no dither, no volume attenuation applied in software on the DIRECT path, which

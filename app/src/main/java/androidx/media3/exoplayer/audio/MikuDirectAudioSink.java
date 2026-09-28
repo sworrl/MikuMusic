@@ -762,7 +762,17 @@ public final class MikuDirectAudioSink implements AudioSink {
     // opens a DIRECT thread at the file's native rate — the client buffer on a DIRECT output is
     // negotiated up to the HAL's own size anyway, and ~99ms is ample on the mixer fallback
     // (BT/A2DP), where DIRECT is refused and this track mixes normally.
-    if (outputMode == OUTPUT_MODE_PCM) {
+    // NOT OVER BLUETOOTH. The comment above says ~99ms is "ample on the mixer fallback (BT/A2DP)".
+    // That was an assumption and it is wrong: an A2DP output has to feed an encoder and a radio
+    // link on top of the mixer, and a 99ms client buffer underruns on it constantly. Reported
+    // 2026-09-27 as Bose Ultra Open earbuds sounding, in the owner's words, really bad. DIRECT is
+    // refused on an A2DP route anyway, so shrinking the buffer there buys nothing and costs the
+    // whole point of the device. On Bluetooth, Media3's own buffer stands.
+    boolean btRoute = isBluetoothRoute();
+    if (outputMode == OUTPUT_MODE_PCM && btRoute && audioDebugLoggingEnabled()) {
+      android.util.Log.i(TAG, "BITPERFECT cfg: Bluetooth route - keeping Media3's buffer (" + bufferSize + " B)");
+    }
+    if (outputMode == OUTPUT_MODE_PCM && !btRoute) {
       long deepBufferPromotionBytes = (long) outputPcmFrameSize * outputSampleRate / 10;
       if (bufferSize >= deepBufferPromotionBytes) {
         // Ask for JUST under the promotion threshold. The old code clamped this with
@@ -787,7 +797,7 @@ public final class MikuDirectAudioSink implements AudioSink {
               + " deepBufferThreshold=" + deepBufferPromotionBytes
               + " minBuf=" + getAudioTrackMinBufferSize(outputSampleRate, outputChannelConfig, outputEncoding)
               + " underThreshold=" + (bufferSize < deepBufferPromotionBytes));
-    } else if (audioDebugLoggingEnabled()) {
+    } else if (audioDebugLoggingEnabled() && outputMode != OUTPUT_MODE_PCM) {
       android.util.Log.i(TAG, "BITPERFECT cfg: mode=" + outputMode + " (NOT PCM - buffer trick skipped)");
     }
     offloadDisabledUntilNextConfiguration = false;
@@ -1055,6 +1065,44 @@ public final class MikuDirectAudioSink implements AudioSink {
    * Prints the buffer-size decision that determines whether playback is bit-perfect:
    * requested bufferSize vs the deep-buffer promotion threshold vs the platform minimum.
    */
+  /**
+   * Is audio currently going out over Bluetooth?
+   *
+   * Asked at configure time, from the devices the platform reports as OUTPUTS, so it covers
+   * classic A2DP and LE Audio both. Failing closed (returning false) would re-introduce the short
+   * buffer on a BT route, so anything unexpected here answers "treat it as Bluetooth" instead:
+   * the cost of being wrong that way is one track that is merely not bit-perfect on a wired
+   * route, against garbled audio on a wireless one.
+   */
+  private boolean isBluetoothRoute() {
+    if (context == null) return false;
+    try {
+      android.media.AudioManager am =
+          (android.media.AudioManager) context.getSystemService(android.content.Context.AUDIO_SERVICE);
+      if (am == null) return false;
+      android.media.AudioDeviceInfo[] outs = am.getDevices(android.media.AudioManager.GET_DEVICES_OUTPUTS);
+      if (outs == null) return false;
+      for (android.media.AudioDeviceInfo d : outs) {
+        int t = d.getType();
+        if (t == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP
+            || t == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+            || (android.os.Build.VERSION.SDK_INT >= 31
+                && (t == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET
+                    || t == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER))
+            || (android.os.Build.VERSION.SDK_INT >= 33
+                && t == android.media.AudioDeviceInfo.TYPE_BLE_BROADCAST)) {
+          // A connected BT output does not prove it is the ACTIVE one, but on this device a
+          // connected pair of buds is always the route the user means, and the wired jack and BT
+          // are not used at the same time.
+          return true;
+        }
+      }
+      return false;
+    } catch (Throwable t) {
+      return false;
+    }
+  }
+
   private boolean audioDebugLoggingEnabled() {
     if (context == null) return false;   // the sink can be built without a Context
     try {

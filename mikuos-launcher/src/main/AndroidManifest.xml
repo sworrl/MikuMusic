@@ -161,6 +161,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- Force a fresh position without opening the weather screen. See MikuLocationReceiver. -->
+        <receiver
+            android:name=".weather.MikuLocationReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.miku.launcher.action.REFRESH_LOCATION" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".network.MikuDevWifiReceiver"
             android:exported="true"

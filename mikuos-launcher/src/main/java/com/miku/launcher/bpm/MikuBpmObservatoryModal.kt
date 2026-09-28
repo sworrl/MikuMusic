@@ -1189,6 +1189,8 @@ private fun BpmHeroRhythmMatchCard(
                     Text("▶ LATE", color = KawaiiSoftTeal, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.height(3.dp))
+                // The highway moved DOWN to the beat node (see the node's call site): notes have to
+                // arrive under the thumb that taps them, not in a strip the eye has to leave.
                 // Horizontal Target Bar with Deviation Pointer
                 KawaiiTimingDeviationBar(offsetMs = timingOffsetMs, windows = windows)
                 Spacer(Modifier.height(2.dp))
@@ -1964,6 +1966,30 @@ private fun ColumnScope.BpmBeatNodeStage(
             }
         }
 
+        // THE PLAYFIELD. Notes travel the lane and land ON the beat node, so the moment you are
+        // aiming at and the thing you are touching are the same place. The lane, the notes, the
+        // timing windows and the hit line all take their colour from the album that is playing
+        // (Settings.Global miku_np_accent, published by Miku Music), so the game looks like the
+        // record rather than like a fixed theme.
+        val npAccents by com.miku.launcher.ui.MikuNowPlayingAccent.colors.collectAsState()
+        val laneAccent = if (npAccents.first != 0) Color(npAccents.first) else Color(skin.primaryColor)
+        val laneAccent2 = if (npAccents.second != 0) Color(npAccents.second) else Color(skin.accentColor)
+        MikuNoteHighway(
+            lastPulseEpochMs = MikuBpmEngine.state.value.lastPulseEpochMs,
+            beatIntervalMs = beatIntervalMs,
+            calibrationMs = MikuRhythmCalibration.offsetMs.value,
+            windows = MikuRhythmTiming.windowsFor(
+                beatPeriodMs = beatIntervalMs,
+                leniency = MikuBeatClickerEngine.rhythmTier.value.leniency * MikuStagePerformance.windowScale(),
+                bonusMs = MikuBeatClickerEngine.timingWindowBonusMs
+            ),
+            lastTapMs = lastTapTimeMs,
+            lastOffsetMs = timingOffsetMsState.intValue,
+            accent = laneAccent,
+            accent2 = laneAccent2,
+            laneHeight = 150.dp,
+            hitFraction = 0.5f
+        ) {
         // Interactive Kawaii Project DIVA Beat Node (with Approach Rings, Ripple & Shockwaves)
         KawaiiProjectDivaBeatNode(
             approachRadius = approachRadius,
@@ -2096,6 +2122,7 @@ private fun ColumnScope.BpmBeatNodeStage(
                 }
             }
         )
+        }
 
         // Floating Numbers / Floating Texts
         floatingTexts.forEach { ft ->

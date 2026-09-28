@@ -288,6 +288,8 @@ object MikuWeatherService {
             val loc = oneShotFix(app) ?: run { Log.i(TAG, "one-shot fix: no location available"); return@launch }
             val before = _state.value.gps
             val movedKm = if (before.isLocked) haversineKm(before.latitude, before.longitude, loc.latitude, loc.longitude) else Double.MAX_VALUE
+            Log.i(TAG, "fix from ${loc.provider} (±${loc.accuracy.toInt()}m) at ${"%.4f".format(loc.latitude)},${"%.4f".format(loc.longitude)}" +
+                if (before.isLocked) " — moved ${"%.1f".format(movedKm)} km" else " — first fix")
             updateLocation(app, loc)
             if (movedKm > 2.0) {
                 // The NWS station/grid URLs are resolved FOR A POSITION. Keeping them after a move
@@ -323,6 +325,25 @@ object MikuWeatherService {
             val gps = currentLocation(lm, LocationManager.GPS_PROVIDER, GPS_FIX_TIMEOUT_MS)
             if (gps != null && (best == null || gps.accuracy < best.accuracy)) best = gps
         }
+        // WI-FI POSITIONING. On this device the network provider is `enabled=false allowed=false`
+        // (Google's is switched off on this build) and GPS indoors never fixes, so both branches
+        // above return nothing and the old code fell through to a cached fix from the last town.
+        // BeaconDB and Apple place us from the beacons we can hear, with no GPS and no Play
+        // services. See MikuWifiLocator. Tried BEFORE last-known, because a stale last-known is
+        // exactly the bug.
+        if (best == null || best.accuracy > NETWORK_FIX_GOOD_ACCURACY_M) {
+            val w = runCatching { MikuWifiLocator.locate(ctx) }.getOrNull()
+            if (w != null && (best == null || w.accuracyM < best.accuracy)) {
+                best = Location(w.provider).apply {
+                    latitude = w.lat; longitude = w.lon
+                    accuracy = w.accuracyM.toFloat()
+                    time = System.currentTimeMillis()
+                    elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+                }
+                Log.i(TAG, "Wi-Fi fix from ${w.provider}: ${w.apsUsed}/${w.apsHeard} APs, ±${w.accuracyM.toInt()}m")
+            }
+        }
+
         // Last resort: whatever the system already had. Better than dropping the tick entirely.
         if (best == null) {
             listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER).forEach { p ->
@@ -383,6 +404,25 @@ object MikuWeatherService {
                             bestLoc = l
                         }
                     } catch (_: Throwable) {}
+                }
+
+                // A cached fix from getLastKnownLocation can be days old and a thousand miles
+                // wrong (it was, on 2026-09-27, after a flight). Anything older than this gets
+                // checked against the Wi-Fi we can hear before it is believed.
+                val staleMs = 6 * 60 * 60 * 1000L
+                val cachedIsStale = bestLoc == null ||
+                    (System.currentTimeMillis() - (bestLoc?.time ?: 0L)) > staleMs
+                if (cachedIsStale) {
+                    val w = runCatching { MikuWifiLocator.locate(ctx) }.getOrNull()
+                    if (w != null) {
+                        bestLoc = Location(w.provider).apply {
+                            latitude = w.lat; longitude = w.lon
+                            accuracy = w.accuracyM.toFloat()
+                            time = System.currentTimeMillis()
+                            elapsedRealtimeNanos = android.os.SystemClock.elapsedRealtimeNanos()
+                        }
+                        Log.i(TAG, "cold start: Wi-Fi fix from ${w.provider} (±${w.accuracyM.toInt()}m) replaced a stale cached fix")
+                    }
                 }
 
                 if (bestLoc != null) {
@@ -448,6 +488,14 @@ object MikuWeatherService {
     private fun updateLocation(ctx: Context, loc: Location) {
         val speedMph = loc.speed * 2.23694f
         val currentGps = _state.value.gps
+        // The NWS station and grid URLs are resolved FOR A POSITION. Every path that moves us has
+        // to drop them, not just refreshLocationNow, or a correct new fix still returns the old
+        // town's forecast — which is what "the location is not updating" looks like from outside.
+        if (currentGps.isLocked &&
+            haversineKm(currentGps.latitude, currentGps.longitude, loc.latitude, loc.longitude) > 2.0) {
+            cachedStationId = null; cachedForecastUrl = null; cachedHourlyForecastUrl = null
+            Log.i(TAG, "moved more than 2 km; dropped cached NWS routes")
+        }
 
         _state.value = _state.value.copy(
             gps = currentGps.copy(

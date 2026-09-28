@@ -1,0 +1,17 @@
+Output thread 0xb400007846c31840, name AudioOut_14D, tid 25861, type 1 (DIRECT):
+  I/O handle: 333
+  Standby: no
+  Sample rate: 96000 Hz
+  HAL frame count: 7680
+  HAL format: 0x6 (AUDIO_FORMAT_PCM_24_BIT_PACKED)
+  HAL buffer size: 46080 bytes
+  Channel count: 2
+  Channel mask: 0x00000003 (front-left, front-right)
+  Processing format: 0x6 (AUDIO_FORMAT_PCM_24_BIT_PACKED)
+  Processing frame size: 6 bytes
+  Pending config events: none
+  Output devices: 0x8 (AUDIO_DEVICE_OUT_WIRED_HEADPHONE)
+  Input device: 0 (AUDIO_DEVICE_NONE)
+  Audio source: 0 (AUDIO_SOURCE_DEFAULT)
+  AudioPlaybackConfiguration piid:455 deviceId:40 type:android.media.AudioTrack u/pid:10050/5422 state:started attr:AudioAttributes: usage=USAGE_MEDIA content=CONTENT_TYPE_MUSIC flags=0x800 tags= bundle=null sessionId:113 mutedState:none  FormatInfo{isSpatialized=false, channelMask=0x3, sampleRate=96000}
+
