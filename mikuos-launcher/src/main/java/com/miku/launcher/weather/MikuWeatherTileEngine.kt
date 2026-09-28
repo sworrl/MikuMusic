@@ -260,8 +260,20 @@ object MikuWeatherTileEngine {
     }
 
     /**
-     * Manual override → the Observatory's manual city (shared UX) → LocationManager last-known
-     * (no update requests) → the Observatory's already-resolved fix → null (honest "no location").
+     * Manual override → the Observatory's manual city (shared UX) → a real GPS fix → LocationManager
+     * last-known → the Observatory's already-resolved fix → null (honest "no location").
+     *
+     * GPS sits above last-known deliberately. The M500 has real GNSS hardware and it was going
+     * entirely unused: this code only ever read `getLastKnownLocation`, which is a passive read of
+     * a cache something else has to fill, and nothing on this device fills it. `dumpsys location`
+     * showed `locations = 0` on every provider across ten hours. So position always fell through to
+     * Wi-Fi scanning, which is the source that can be a whole timezone wrong when the access points
+     * it hears travel with the owner.
+     *
+     * Asking the satellites is bounded, not subscribed: see MikuGpsFix for why that distinction is
+     * the whole point, given GPS was pulled out of this launcher once already for flattening the
+     * battery. Wi-Fi stays underneath it because a pocket player is indoors most of the time and a
+     * fix needs sky.
      */
     @SuppressLint("MissingPermission")
     private suspend fun resolveLocation(app: Context): WxLocation? {
@@ -280,6 +292,13 @@ object MikuWeatherTileEngine {
                     return WxLocation(lat, lon, name.ifBlank { String.format(Locale.US, "%.3f, %.3f", lat, lon) }, "Observatory manual")
                 }
             }
+        }
+
+        // A real fix, from the satellites, if one can be had inside the timeout. Cached for two
+        // hours so a device sitting on a desk never powers the GNSS a second time.
+        runCatching { MikuGpsFix.acquire(app) }.getOrNull()?.let { l ->
+            val name = placeNameFor(app, l.latitude, l.longitude)
+            return WxLocation(l.latitude, l.longitude, name, "GPS")
         }
 
         // One-shot last-known read. Newest fix wins; no provider is asked for updates.
