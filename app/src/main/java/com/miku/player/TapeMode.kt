@@ -711,17 +711,33 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
         // Photorealistic Masking Tape Strip with torn deckled ends, crepe paper micro-ridges & grain.
         //
         // POSITION. Screen x maps to the cassette's mm-space Y (the shell is rotated for portrait),
-        // measured from the shell's mid-height: cassetteY = 31.75 - offsetMm. The printed label
-        // band is y 3.4..17.2 mm — that is exactly the span the moulded label-band ribbing covers
-        // in drawCassetteBaseMm (1b), so it is the real, drawn extent of the label, not a guess.
-        // The strip used to sit at 11.5 mm, i.e. cassetteY 20.25, which is BELOW y=17.2: the tape
-        // floated on the bare shell out over the reels and the window instead of on the label, and
-        // whatever the branding pass painted across the band sat above it. 18.55 mm puts it at
-        // cassetteY 13.2, so an ~8 mm strip spans roughly y 9.2..17.2 and lands in the lower half
-        // of the label well, bottom edge flush with the band, clear of the brand text that prints
-        // at y 8.25 (BespokeTapeBranding's 23.5 mm offset).
-        val stripX = mmDp * 18.55f
-        val labelJitterY = remember(track.id) { kotlin.random.Random(track.id).nextFloat() * 8f - 4f }
+        // measured from the shell's mid-height: cassetteY = 31.75 - offsetMm. Screen y runs along
+        // the shell's length. The printed label band is y 3.4..17.2 mm, which is the exact span the
+        // moulded ribbing covers in drawCassetteBaseMm (1b).
+        //
+        // The placement is rolled per track rather than fixed, because one hard-coded spot makes
+        // every cassette in the deck look stamped by a machine. A person tearing a strip off a roll
+        // puts it roughly where the writing should go and does not measure: usually on the label
+        // well, often low enough to run across the window, sometimes off to one end. So the roll is
+        // weighted rather than uniform, and it is seeded on track.id so a given track always gets
+        // the same tape back.
+        //
+        // The two things it must NOT do: cover the brand text every single time (y 8.25, which is
+        // why the label-well band starts at 9 rather than at the top of the band), and collide with
+        // the volume fader, which owns +38 mm along the length.
+        val place = remember(track.id) {
+            val r = kotlin.random.Random(track.id + 700)
+            val cassetteY = when {
+                r.nextFloat() < 0.58f -> 9f + r.nextFloat() * 8.5f    // label well, the usual spot
+                r.nextFloat() < 0.75f -> 18f + r.nextFloat() * 7f     // straddling the band's edge
+                else -> 25f + r.nextFloat() * 8f                      // down over the window/reels
+            }
+            val alongMm = -17f + r.nextFloat() * 31f                  // clear of the fader at +38
+            Pair(31.75f - cassetteY, alongMm)
+        }
+        val stripX = mmDp * place.first
+        val stripAlong = mmDp * place.second
+        val labelJitterY = remember(track.id) { kotlin.random.Random(track.id).nextFloat() * 4f - 2f }
         val labelJitterX = remember(track.id) { kotlin.random.Random(track.id + 1).nextFloat() * 1.5f - 0.75f }
 
         // Bespoke authentic era brand typography & printing texture on the upper cassette rail
@@ -745,8 +761,12 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
             track = track,
             modifier = Modifier.align(Alignment.Center)
                 .zIndex(1f)
-                .offset(x = stripX + labelJitterX.dp, y = labelJitterY.dp)
+                .offset(x = stripX + labelJitterX.dp, y = stripAlong + labelJitterY.dp)
         )
+
+        // The drive openings go back on LAST, above the masking tape's zIndex(1f). See
+        // drawSpindleOpenings: they are holes through the shell, so nothing sticks over them.
+        Canvas(Modifier.fillMaxSize().zIndex(2f)) { withCassetteTransform { drawSpindleOpenings(theme) } }
 
         // The deck's own VOLUME fader. Persistent by design: this is the ONE place in the OS with
         // its own volume control, and the app-wide modal stands down while tape mode is up.
@@ -2331,6 +2351,31 @@ private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float,
 }
 
 /**
+ * The two splined drive openings, drawn on their own so they can be laid over the top of anything
+ * that has been stuck to the cassette face.
+ *
+ * These are holes straight through the shell, not printing. Nothing can sit on them: a strip of
+ * masking tape laid across one would be bridging a gap, and you would still be looking through it
+ * at the deck underneath. The tape's placement is rolled per track and is allowed to land anywhere
+ * on the face, so rather than fence its position off around two fixed circles, the openings are
+ * simply redrawn last and punch back through whatever landed on them.
+ */
+private fun DrawScope.drawSpindleOpenings(t: TapeTheme) {
+    for (hubX in listOf(HUB_L_X, HUB_R_X)) {
+        val c = Offset(hubX, HUB_Y)
+        drawCircle(Color(0xFF0D0A08), SPINDLE_R + 1.2f, c)
+        drawCircle(Color(0xFFE8E5DC), SPINDLE_R, c)
+        drawCircle(Color(0x40000000), SPINDLE_R, c, style = Stroke(0.3f))
+        for (tooth in 0 until 6) {
+            val a = Math.toRadians((tooth * 60).toDouble())
+            val dir = Offset(cos(a).toFloat(), sin(a).toFloat())
+            drawLine(Color(0xFF0D0A08), c + dir * (SPINDLE_R - 1.6f), c + dir * SPINDLE_R, strokeWidth = 1.6f)
+            drawLine(Color(0x44FFFFFF), c + dir * (SPINDLE_R - 1.4f) + Offset(0.1f, 0.1f), c + dir * (SPINDLE_R - 0.2f), strokeWidth = 0.6f)
+        }
+    }
+}
+
+/**
  * A small, honest portrait of one cassette theme, for the picker.
  *
  * It is drawn in the same millimetre space as the real shell (so proportions are the true
@@ -3311,7 +3356,15 @@ private fun PhotorealisticMaskingTapeLabel(
         val r = kotlin.random.Random(track.id + 500)
         List(6) { FiberWisp(side = r.nextInt(2), yFrac = r.nextFloat(), lenPx = 0.5f + r.nextFloat() * 1.1f, angleDeg = r.nextFloat() * 50f - 25f) }
     }
-    val rotation = remember(track.id) { seed.nextFloat() * 5f - 2.5f }
+    // Tilt. A strip torn off a roll and pressed down by hand is rarely within 2 degrees of
+    // square, which is what the old +/-2.5 range looked like: tidy, and therefore fake. Most go on
+    // a few degrees out, and every so often somebody slaps one on properly crooked, so the
+    // distribution is a small base tilt plus an occasional larger one rather than one flat range.
+    val rotation = remember(track.id) {
+        val crooked = seed.nextFloat() < 0.22f
+        val mag = if (crooked) 6f + seed.nextFloat() * 7f else seed.nextFloat() * 5f
+        if (seed.nextFloat() < 0.5f) -mag else mag
+    }
 
     // Not every tape is fresh — real masking tape picks up thumb grease, dust, rub marks from
     // sliding in and out of a case, and an ink smear where someone's hand dragged across the
