@@ -64,8 +64,11 @@ object CirrusLogicManager {
         val kernelTurbo: String? = null,
         val kernelOutput: String? = null,
         val kernelBalance: String? = null,
-        val isSysfsReadable: Boolean = false
+        val isSysfsReadable: Boolean = false,
+        /** Where the values above actually came from, so the UI can say so instead of guessing. */
+        val source: Source = Source.NONE
     ) {
+        enum class Source { NONE, SYSFS, VENDOR_SETTINGS }
         val kernelFilterText: String get() = kernelFilter ?: "—"
         val kernelGainText: String get() = kernelGain ?: "—"
         val kernelHighPowerText: String get() = kernelHighPower ?: "—"
@@ -343,12 +346,30 @@ object CirrusLogicManager {
             .trim().takeIf { it.isNotEmpty() }
     }.getOrNull()
 
+    /** Read one `vendor.audio.hiby.*` value out of Settings.Global. */
+    private fun vendorSetting(ctx: Context, key: String): String? = runCatching {
+        Settings.Global.getString(ctx.contentResolver, "vendor.audio.hiby.$key")?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }.getOrNull()
+
     /**
      * Reads whatever the DAC actually exposes right now. Nodes that cannot be read come back null
      * (rendered "—"); nothing is substituted. The turbo property is read through SystemProperties
      * rather than a `getprop` shell-out, which needed su and therefore always failed on MikuOS.
+     *
+     * TWO SOURCES, in order. The sysfs nodes under sa_sound_setting are the closest thing to
+     * ground truth, but SELinux denies them to platform_app on this device (avc: denied { read }
+     * ... scontext=platform_app tcontext=sysfs) and no amount of signing changes that, because the
+     * policy keys on the domain. That is why this panel showed nothing but dashes.
+     *
+     * The same state is mirrored into `Settings.Global` under `vendor.audio.hiby.*`, and that is
+     * not a consolation prize: it is the namespace HiBy's own audio HAL reads and writes, so it is
+     * what the hardware is actually being told to do. Falling back to it is a real measurement of
+     * a real value, not a substituted "typical" one, which is the thing the no-fake-data rule
+     * forbids. [source] records which one answered so the UI never claims to be reading the kernel
+     * when it is reading settings.
      */
-    fun getLiveHardwareAudit(): HardwareAuditState {
+    fun getLiveHardwareAudit(ctx: Context? = null): HardwareAuditState {
         val filter = readSysfs("digital_filter")
         val gain = readSysfs("gain")
         val hp = readSysfs("high_power_mode")
@@ -356,15 +377,27 @@ object CirrusLogicManager {
         val turbo = sysProp("vendor.audio.hiby.hw.audio_turbo")
         val out = readSysfs("out_mode")
         val bal = readSysfs("lr_balance")
+        val sysfsOk = listOf(filter, gain, hp, dre, out, bal).any { it != null }
+        if (sysfsOk || ctx == null) {
+            return HardwareAuditState(
+                kernelFilter = filter, kernelGain = gain, kernelHighPower = hp, kernelDre = dre,
+                kernelTurbo = turbo, kernelOutput = out, kernelBalance = bal,
+                isSysfsReadable = sysfsOk,
+                source = if (sysfsOk) HardwareAuditState.Source.SYSFS else HardwareAuditState.Source.NONE
+            )
+        }
+        val sFilter = vendorSetting(ctx, "digital_filter") ?: vendorSetting(ctx, "hw.digital_filter")
+        val sGain = vendorSetting(ctx, "gain") ?: vendorSetting(ctx, "hw.gain")
+        val sHp = vendorSetting(ctx, "high_power_mode") ?: vendorSetting(ctx, "high_power")
+        val sDre = vendorSetting(ctx, "dre_mode")
+        val sOut = vendorSetting(ctx, "hw.bal_po_lo_switch")
+        val sBal = vendorSetting(ctx, "hw.balance")
+        val any = listOf(sFilter, sGain, sHp, sDre, sOut, sBal).any { it != null }
         return HardwareAuditState(
-            kernelFilter = filter,
-            kernelGain = gain,
-            kernelHighPower = hp,
-            kernelDre = dre,
-            kernelTurbo = turbo,
-            kernelOutput = out,
-            kernelBalance = bal,
-            isSysfsReadable = listOf(filter, gain, hp, dre, out, bal).any { it != null }
+            kernelFilter = sFilter, kernelGain = sGain, kernelHighPower = sHp, kernelDre = sDre,
+            kernelTurbo = turbo, kernelOutput = sOut, kernelBalance = sBal,
+            isSysfsReadable = false,
+            source = if (any) HardwareAuditState.Source.VENDOR_SETTINGS else HardwareAuditState.Source.NONE
         )
     }
 }

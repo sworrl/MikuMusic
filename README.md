@@ -34,9 +34,21 @@ is not connected to anything. Every reading in this app comes from the file or t
 not shown at all. There is a dash where other players guess.
 
 <p align="center">
-  <img src="docs/screenshots/01-now-playing-hires.png" width="30%" alt="Now Playing during a 24-bit 96kHz FLAC: FLAC / 24-BIT / 96KHZ / HI-RES badges">
-  <img src="docs/screenshots/03-tape-mode.png" width="30%" alt="Tape mode grading itself TYPE IV from the real 24-bit 96kHz stream">
+  <img src="docs/screenshots/03-tape-mode.png" width="30%" alt="Tape mode grading itself TYPE IV from the real 24-bit 96kHz stream, with a handwritten masking tape label">
+  <img src="docs/screenshots/04-tape-mode-alt.png" width="30%" alt="The same screen on another track: the tape lands elsewhere, at a different angle, on a different shell">
   <img src="docs/screenshots/02-fullscreen-visualizer.png" width="30%" alt="Fullscreen libprojectM 4.2.0 visualizer">
+</p>
+
+Those first two are the same screen on two different tracks. The masking tape's position, angle,
+paper, torn edges and grime are rolled per track from the track id, so the strip lands somewhere a
+person might actually have stuck it rather than in the same spot every time. The two drive holes
+are drawn last, over the top of it, because they are holes through the shell and nothing can sit on
+them.
+
+<p align="center">
+  <img src="docs/screenshots/01-now-playing-hires.png" width="30%" alt="Now Playing during a 24-bit 96kHz FLAC: FLAC / 24-BIT / 96KHZ / HI-RES badges">
+  <img src="docs/screenshots/05-library-stats.png" width="30%" alt="Library stats: 17048 tracks, 415 artists, 1777 albums, 98 percent FLAC, 51 days of listening">
+  <img src="docs/screenshots/06-dac-controls.png" width="30%" alt="DAC controls reading live vendor HAL state: NOS filter, high gain, DRE enabled">
 </p>
 
 ---
