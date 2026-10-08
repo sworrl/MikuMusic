@@ -14,8 +14,7 @@ import android.util.Log
  * `RootShell.execFast`. MikuOS has no root and never will, so every launch produced
  * `Cannot run program "su": error=2, No such file or directory`, RootShell backed off for 120
  * seconds, and NOT ONE of those nineteen settings was ever applied. That included
- * `adb_wifi_enabled`, which the ingest relay depends on to reach the device at all, so the sync
- * could not work even once the server side existed.
+ * every setting in it, so none of them were ever applied.
  *
  * Every one of those commands has a first-class API behind it, and a platform-signed app holds the
  * permissions they need: WRITE_SECURE_SETTINGS for the `settings put` lines,
@@ -79,19 +78,17 @@ object MikuSystemTuning {
         // convenience here, they are load-bearing for sync.
         "adb_enabled" to 1,
         "development_settings_enabled" to 1,
-        // adb_wifi_enabled is deliberately forced to 0, which is the opposite of what the old
-        // root string asked for.
+        // adb_wifi_enabled is deliberately NOT set, in either direction.
         //
-        // That flag is Android 11's wireless debugging: adbd takes a second TLS port (38853 on
-        // this device) and expects a pairing code. Measured on-device 2026-10-08: with it at 1,
-        // adbd still binds legacy 5555 and the socket is still listed, but a connection from the
-        // host times out. Setting it to 0 and re-running `adb tcpip 5555` made the host connect
-        // immediately. Port 8787 on the same interface stayed reachable throughout, so this is
-        // adbd's behaviour and not the network.
+        // An earlier version of this file forced it to 0 and claimed, in a comment and a commit
+        // message, that 1 blocked legacy port 5555. That was wrong. Re-tested properly on
+        // 2026-10-08: wireless adb works with the flag at 0 AND at 1. The thing that had actually
+        // been broken was the Wi-Fi lock below never being held, so the radio slept and every
+        // command timed out; the flag changed in the same step and got the credit.
         //
-        // The old string asked for 1 and never applied, so the harm was invisible. Now that the
-        // tuning works, asking for 1 would actively break the transport the relay depends on.
-        "adb_wifi_enabled" to 0,
+        // With no measurement justifying either value, the honest thing is to leave the user's
+        // setting alone. Android 11 wireless debugging is a real feature and this is not the place
+        // to have an opinion about it.
         // Never drop Wi-Fi when the screen goes off, or a sync dies halfway through a library.
         "wifi_sleep_policy" to 2,
         // Stay awake on any charger while ingesting.
