@@ -773,6 +773,21 @@ public final class MikuDirectAudioSink implements AudioSink {
       android.util.Log.i(TAG, "BITPERFECT cfg: Bluetooth route - keeping Media3's buffer (" + bufferSize + " B)");
     }
     if (outputMode == OUTPUT_MODE_PCM && !btRoute) {
+      // Tell the tap what the TV should configure its own AudioTrack as. Done here rather than
+      // at write time so the format is known before the first buffer arrives.
+      // outputFormat is scoped to a narrower block above, so derive the channel count from what
+      // is in scope here. getPcmFrameSize(encoding, 1) is the bytes one sample of one channel
+      // occupies, and the frame size is that times the channel count, so the division recovers
+      // the channels exactly without assuming stereo.
+      int castBytesPerSample = Util.getPcmFrameSize(outputEncoding, 1);
+      if (outputPcmFrameSize != C.LENGTH_UNSET && castBytesPerSample > 0) {
+        int castChannels = outputPcmFrameSize / castBytesPerSample;
+        if (castChannels > 0) {
+          com.miku.player.cast.MikuCastTap.onFormat(
+              outputSampleRate, castBytesPerSample, castChannels, outputEncoding);
+        }
+      }
+
       long deepBufferPromotionBytes = (long) outputPcmFrameSize * outputSampleRate / 10;
       if (bufferSize >= deepBufferPromotionBytes) {
         // Ask for JUST under the promotion threshold. The old code clamped this with
@@ -1295,6 +1310,29 @@ public final class MikuDirectAudioSink implements AudioSink {
               audioTrack, buffer, bytesRemaining, avSyncPresentationTimeUs);
     } else {
       bytesWrittenOrError = writeNonBlockingV21(audioTrack, buffer, bytesRemaining);
+    }
+
+    // Tee the PCM to the TV, if one is listening. This is deliberately the LAST point before the
+    // samples reach AudioTrack: they are the file's own samples at its own rate, having bypassed
+    // the mixer via the DIRECT path, so what the TV receives is bit-perfect. Capturing with
+    // AudioPlaybackCapture instead would tap after the mixer and hand the TV 48kHz of resampled
+    // audio. MikuCastTap.offer is a no-op when nothing is connected and never blocks; it also
+    // restores the buffer position, because AudioTrack has already consumed from it above and the
+    // caller still inspects it.
+    //
+    // Position arithmetic matters here. AudioTrack.write CONSUMES from the buffer, so by this
+    // line the position has already advanced past the bytes it took. Reading from the current
+    // position would tee the NEXT, unwritten audio instead of what was just played. Rewind by
+    // exactly the number of bytes written, tee that span, then restore the position the caller
+    // expects to find.
+    if (com.miku.player.cast.MikuCastTap.isEnabled() && bytesWrittenOrError > 0) {
+      int afterWrite = buffer.position();
+      int teeFrom = afterWrite - bytesWrittenOrError;
+      if (teeFrom >= 0) {
+        buffer.position(teeFrom);
+        com.miku.player.cast.MikuCastTap.offer(buffer, bytesWrittenOrError);
+        buffer.position(afterWrite);
+      }
     }
 
     lastFeedElapsedRealtimeMs = SystemClock.elapsedRealtime();
