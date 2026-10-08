@@ -245,12 +245,9 @@ class MikuLauncherActivity : ComponentActivity() {
                 android.provider.Settings.Global.putInt(contentResolver, "adb_wifi_enabled", 1)
             } catch (_: Throwable) {}
 
-            // Acquire high performance WiFi Lock so Ingress and Wireless ADB never drop when USB is disconnected
-            try {
-                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
-                val wifiLock = wm?.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "MikuIngressLock")
-                wifiLock?.acquire()
-            } catch (_: Throwable) {}
+            // The high-perf Wi-Fi lock moved into MikuSystemTuning. It used to be acquired here
+            // into a local val that went straight out of scope, and WifiLock releases on finalize,
+            // so the lock was dropped by the next GC and dumpsys showed none held.
 
             // Startup tuning, via platform APIs rather than a root shell. This was a 19-command
             // string handed to RootShell.execFast, and since MikuOS has no root it failed on every

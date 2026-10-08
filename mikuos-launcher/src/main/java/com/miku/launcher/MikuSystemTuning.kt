@@ -34,12 +34,64 @@ object MikuSystemTuning {
 
     private const val TAG = "MikuSystemTuning"
 
+    /**
+     * Reflection wraps whatever the target threw in an InvocationTargetException, whose own
+     * message is null. Logging that verbatim produces "InvocationTargetException: null", which
+     * says nothing; the useful part is always the cause.
+     */
+    private fun why(t: Throwable): String {
+        val real = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+        return "${real.javaClass.simpleName}: ${real.message ?: "no detail"}"
+    }
+
+    /**
+     * The high-performance Wi-Fi lock, held for the life of the process.
+     *
+     * This used to be a local `val` in MikuLauncherActivity.onCreate: created, acquired, and then
+     * immediately out of scope. WifiLock releases itself on finalize, so the lock the launcher
+     * thought it was holding was dropped by the next GC and the radio went back to aggressive
+     * power save. Measured consequence on 2026-10-08: `dumpsys wifi` listed no held locks at all,
+     * and wireless adb would complete a TCP handshake and then stall with no data flowing, which
+     * is what a sleeping radio looks like from the other end.
+     *
+     * A strong reference on an object that outlives the activity is the whole fix. Kept here
+     * rather than in the activity because the activity is destroyed and recreated.
+     */
+    @Volatile private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
+    /** Acquire the high-perf Wi-Fi lock once, and keep a reference so it is not finalized away. */
+    private fun holdWifiLock(ctx: Context) {
+        if (wifiLock?.isHeld == true) return
+        runCatching {
+            val wm = ctx.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+            val lock = wm?.createWifiLock(
+                android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF, "MikuIngressLock"
+            ) ?: return
+            lock.setReferenceCounted(false)
+            lock.acquire()
+            wifiLock = lock
+            Log.i(TAG, "high-perf Wi-Fi lock acquired and retained (held=${lock.isHeld})")
+        }.onFailure { Log.w(TAG, "Wi-Fi lock failed: ${why(it)}") }
+    }
+
     private val GLOBAL_INTS = listOf(
-        // adb, including over Wi-Fi. The ingest relay reaches the device this way, so these are
-        // not a developer convenience here, they are load-bearing for sync.
+        // adb. The ingest relay reaches the device this way, so these are not a developer
+        // convenience here, they are load-bearing for sync.
         "adb_enabled" to 1,
         "development_settings_enabled" to 1,
-        "adb_wifi_enabled" to 1,
+        // adb_wifi_enabled is deliberately forced to 0, which is the opposite of what the old
+        // root string asked for.
+        //
+        // That flag is Android 11's wireless debugging: adbd takes a second TLS port (38853 on
+        // this device) and expects a pairing code. Measured on-device 2026-10-08: with it at 1,
+        // adbd still binds legacy 5555 and the socket is still listed, but a connection from the
+        // host times out. Setting it to 0 and re-running `adb tcpip 5555` made the host connect
+        // immediately. Port 8787 on the same interface stayed reachable throughout, so this is
+        // adbd's behaviour and not the network.
+        //
+        // The old string asked for 1 and never applied, so the harm was invisible. Now that the
+        // tuning works, asking for 1 would actively break the transport the relay depends on.
+        "adb_wifi_enabled" to 0,
         // Never drop Wi-Fi when the screen goes off, or a sync dies halfway through a library.
         "wifi_sleep_policy" to 2,
         // Stay awake on any charger while ingesting.
@@ -66,6 +118,7 @@ object MikuSystemTuning {
      * shell string that silently did nothing for months.
      */
     fun apply(ctx: Context) {
+        holdWifiLock(ctx)
         val cr = ctx.contentResolver
         var ok = 0
         var failed = 0
@@ -94,7 +147,7 @@ object MikuSystemTuning {
                     .getField("OP_SYSTEM_ALERT_WINDOW").getInt(null)
                 m.invoke(appOps, opCode, uid, pkg, AppOpsManager.MODE_ALLOWED)
             }.onSuccess { ok++; Log.i(TAG, "appops SYSTEM_ALERT_WINDOW allowed for $pkg") }
-             .onFailure { failed++; Log.w(TAG, "appops for $pkg failed: ${it.javaClass.simpleName}: ${it.message}") }
+             .onFailure { failed++; Log.w(TAG, "appops for $pkg failed: ${why(it)}") }
         }
 
         for ((pkg, perm) in RUNTIME_GRANTS) {
@@ -110,7 +163,7 @@ object MikuSystemTuning {
                 )
                 m.invoke(ctx.packageManager, pkg, perm, android.os.Process.myUserHandle())
             }.onSuccess { ok++; Log.i(TAG, "granted $perm to $pkg") }
-             .onFailure { failed++; Log.w(TAG, "grant $perm to $pkg failed: ${it.javaClass.simpleName}: ${it.message}") }
+             .onFailure { failed++; Log.w(TAG, "grant $perm to $pkg failed: ${why(it)}") }
         }
 
         // The original string also pinned the default IME to

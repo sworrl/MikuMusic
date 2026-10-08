@@ -6,6 +6,15 @@
          weather fix instead. See MikuTimeZoneSync. Signature|privileged, held because
          the launcher is platform-signed. -->
     <uses-permission android:name="android.permission.SET_TIME_ZONE" />
+
+    <!-- Startup tuning does what a root shell used to: set an app op and grant a runtime
+         permission. Both are signature|privileged and are held because the launcher is
+         platform-signed. Without these declared the reflective calls in MikuSystemTuning throw
+         SecurityException, which is exactly what they did before they were added. -->
+    <!-- WIFI_MODE_FULL_HIGH_PERF wifi locks need this; see MikuSystemTuning.holdWifiLock. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.MANAGE_APP_OPS_MODES" />
+    <uses-permission android:name="android.permission.GRANT_RUNTIME_PERMISSIONS" />
     <uses-permission android:name="android.permission.INJECT_EVENTS" />
     <uses-permission android:name="android.permission.STATUS_BAR" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
