@@ -156,13 +156,16 @@
 
         <!-- Bench/dev WiFi provisioning over adb (see MikuDevWifiReceiver). Gated behind
              WRITE_SECURE_SETTINGS: only shell/system can send it. -->
-        <!-- OS-level owner of the front Pulsar indicator. Miku Music broadcasts here instead of
-             driving the diode itself; exported so the (platform-signed) player can reach it. -->
+
+
+        <!-- Index what the ingress relay just pushed. The relay fires this as its last step,
+             because adb push writes straight to the card and MediaStore never hears about it.
+             See MikuIngestScanReceiver and tools/ingress-relay/relay.py. -->
         <receiver
-            android:name=".PulsarReceiver"
+            android:name=".ingest.MikuIngestScanReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.miku.launcher.action.PULSAR" />
+                <action android:name="com.miku.launcher.action.INGEST_SCAN" />
             </intent-filter>
         </receiver>
 

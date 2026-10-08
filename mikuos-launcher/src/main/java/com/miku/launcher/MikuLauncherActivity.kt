@@ -252,23 +252,13 @@ class MikuLauncherActivity : ComponentActivity() {
                 wifiLock?.acquire()
             } catch (_: Throwable) {}
 
-            RootShell.execFast(
-                "settings put global adb_enabled 1; " +
-                "settings put global development_settings_enabled 1; " +
-                "settings put global adb_wifi_enabled 1; " +
-                "settings put global wifi_sleep_policy 2; " +
-                "settings put global stay_on_while_plugged_in 3; " +
-                "setprop persist.adb.tcp.port 5555; " +
-                "setprop service.adb.tcp.port 5555; " +
-                "setprop persist.sys.usb.config mtp,adb; " +
-                "setprop persist.service.adb.enable 1; " +
-                "appops set com.miku.launcher SYSTEM_ALERT_WINDOW allow; " +
-                "appops set com.miku.player SYSTEM_ALERT_WINDOW allow; " +
-                "appops set com.miku.systemui SYSTEM_ALERT_WINDOW allow; " +
-                "settings put secure default_input_method com.android.inputmethod.latin/.LatinIME; " +
-                "settings put secure enabled_input_methods com.android.inputmethod.latin/.LatinIME; " +
-                "stop adbd 2>/dev/null; start adbd 2>/dev/null"
-            )
+            // Startup tuning, via platform APIs rather than a root shell. This was a 19-command
+            // string handed to RootShell.execFast, and since MikuOS has no root it failed on every
+            // single launch and applied none of it. adb_wifi_enabled was in there, which is how the
+            // ingest relay reaches this device, so the sync could never have worked. See
+            // MikuSystemTuning for what carried over and what cannot (the setprop lines and the
+            // adbd restart are not ours to make, and are dropped rather than faked).
+            MikuSystemTuning.apply(applicationContext)
 
             // Initialize Real-Time Network Telemetry & Auto-Rejoin Daemon (Protected)
             try {
@@ -305,9 +295,8 @@ class MikuLauncherActivity : ComponentActivity() {
                     }
                 }
                 com.miku.launcher.bpm.MikuBpmEngine.startListening(applicationContext)
-                com.miku.launcher.PulsarLight.startBpmSync(applicationContext)
             } catch (t: Throwable) {
-                android.util.Log.e("MikuLauncher", "BPM Pulsar engine start failed", t)
+                android.util.Log.e("MikuLauncher", "BPM engine start failed", t)
             }
 
             // Play MikuOS Welcome Jingle (once per boot, gate-controlled by user toggle)
@@ -322,10 +311,7 @@ class MikuLauncherActivity : ComponentActivity() {
                 android.util.Log.e("MikuLauncher", "Library engine start failed", t)
             }
 
-            // Auto-provision Google Fi / T-Mobile APNs for 4G LTE Auto-Connect
-            try {
-                com.miku.launcher.network.GoogleFiApnManager.autoProvisionIfGoogleFi(applicationContext)
-            } catch (_: Throwable) {}
+
 
             // Start System-Level USB Audio & Host Controller Service
             try {
@@ -1105,12 +1091,7 @@ fun MikuLauncherScreen() {
                             }
                             if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
                         },
-                        onOpenPulsarSettings = {
-                            val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            if (intent != null) ctx.startActivity(intent, MikuCompositing.optionsFor(ctx, MikuTransitionEvent.SETTINGS))
-                        },
+
                         onOpenFnSettings = {
                             val intent = ctx.packageManager.getLaunchIntentForPackage("com.miku.settings")?.apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1288,7 +1269,6 @@ fun MainDesktopPage(
 @Composable
 fun HardwareWidgetsPage(
     onOpenAudioSettings: () -> Unit,
-    onOpenPulsarSettings: () -> Unit,
     onOpenFnSettings: () -> Unit,
     onOpenMonitor: () -> Unit
 ) {
@@ -1297,15 +1277,6 @@ fun HardwareWidgetsPage(
     // be read renders "—" / "unavailable". Nothing here is a literal pretending to be measured.
     val hwFilter = remember { runCatching { CirrusLogicManager.getDigitalFilterOrNull(hwCtx) }.getOrNull() }
     val hwGain = remember { runCatching { CirrusLogicManager.getGainModeOrNull(hwCtx) }.getOrNull() }
-    // "—" when no pattern was ever chosen (getMode() would report its AUDIOPHILE_AUTO fallback).
-    val pulsarModeLabel = remember { runCatching { PulsarLight.getModeOrNull(hwCtx)?.label }.getOrNull() ?: "— (none chosen)" }
-    val pulsarSysfsVisible = remember {
-        listOf("/sys/class/leds/sgm31324-leds", "/sys/class/leds/red", "/sys/class/leds/blue")
-            .any { p -> runCatching { java.io.File(p).let { it.exists() && it.canRead() } }.getOrDefault(false) }
-    }
-    // The RGB indicator is confirmed non-functional on this unit (SELinux-locked nodes, no consumer
-    // LED service), so say that outright rather than only that we cannot read it back.
-    val pulsarReadback = if (pulsarSysfsVisible) "sysfs visible" else "No LED on this unit (nodes not visible)"
     val fnLockLabel = remember {
         try {
             val raw = android.provider.Settings.Global.getString(hwCtx.contentResolver, "button_lock")
@@ -1380,40 +1351,6 @@ fun HardwareWidgetsPage(
                             "${hwFilter?.label ?: "—"} / ${hwGain?.label ?: "—"}",
                             color = MikuCyan, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis
                         )
-                    }
-                }
-            }
-
-            // 2. SGM31324 Pulsar RGB Lighting Card
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(CyberGlassCard)
-                    .border(1.dp, CyberGlassBorder, RoundedCornerShape(16.dp))
-                    .clickable { onOpenPulsarSettings() }
-                    .padding(14.dp)
-            ) {
-                Column {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("SGM31324 PULSAR RGB LIGHTING", color = MikuNeonPink, fontSize = 11.5.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-                        Icon(Icons.Default.Lightbulb, contentDescription = null, tint = MikuNeonPink, modifier = Modifier.size(18.dp))
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("Configured Pattern", color = MikuTextSecondary, fontSize = 11.sp)
-                        // The saved preference — a setting, not a readback of the LED driver.
-                        Text(pulsarModeLabel, color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    Spacer(Modifier.height(3.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text("LED Driver Readback", color = MikuTextSecondary, fontSize = 11.sp)
-                        // No sysfs node is readable from this process on the M500 → honest "unavailable".
-                        Text(pulsarReadback, color = if (pulsarSysfsVisible) MikuNeonPink else MikuTextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -5057,9 +4994,7 @@ private fun CyberShadeSoundboardSection(
         CirrusLogicManager.Source.USER_REQUEST -> "  (requested, unverified)"
         null -> ""
     }
-    // Real saved Pulsar mode, not an assumed "on". The M500's RGB indicator is non-functional on
-    // this unit (SELinux-locked, no consumer LED service), so this is only the stored preference.
-    var pulsarMode by remember { mutableStateOf(runCatching { PulsarLight.getMode(ctx) }.getOrDefault(PulsarLight.Mode.OFF)) }
+
 
     // 8 Cyber Quick Hardware Tiles (2x4 Grid)
     Text(
@@ -5127,35 +5062,9 @@ private fun CyberShadeSoundboardSection(
             )
         }
 
-        // Row 2: Pulsar RGB + Direct ALSA Bypass
+        // Row 2: Direct ALSA Bypass + DRE
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            CyberQuickTile(
-                modifier = Modifier.weight(1f),
-                title = "PULSAR RGB",
-                // The M500's RGB indicator is confirmed NON-FUNCTIONAL on this unit: the
-                // LED sysfs nodes are SELinux-locked and there is no consumer LED service,
-                // so nothing here can light up. The tile used to claim "BPM SYNC (ON)"
-                // from a hardcoded `true`. It now only reports the stored preference and
-                // says plainly that the hardware does not respond.
-                subtitle = if (pulsarMode == PulsarLight.Mode.OFF)
-                    "OFF · NO LED ON THIS UNIT" else "SET: ${pulsarMode.label} · NO LED ON THIS UNIT",
-                icon = Icons.Default.Lightbulb,
-                accentColor = MikuTextSecondary,
-                isActive = false,
-                onClick = {
-                    val next = if (pulsarMode == PulsarLight.Mode.OFF)
-                        PulsarLight.Mode.AUDIOPHILE_AUTO else PulsarLight.Mode.OFF
-                    pulsarMode = next
-                    scope.launch(Dispatchers.IO) {
-                        PulsarLight.setMode(ctx, next)
-                    }
-                    android.widget.Toast.makeText(
-                        ctx,
-                        "Pulsar preference saved — the M500's RGB indicator is not driveable on this unit",
-                        android.widget.Toast.LENGTH_SHORT
-                    ).show()
-                }
-            )
+            Spacer(modifier = Modifier.weight(1f))
 
             CyberQuickTile(
                 modifier = Modifier.weight(1f),

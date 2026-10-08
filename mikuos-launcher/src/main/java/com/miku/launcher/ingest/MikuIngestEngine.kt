@@ -549,9 +549,18 @@ object MikuIngestEngine {
                 }
             }
 
-            try {
-                RootShell.execFast("am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file:///storage/emulated/0/Music 2>/dev/null")
-            } catch (_: Throwable) {}
+            // A final sweep of the whole Music tree, on top of the per-file submissions above.
+            // This was an `am broadcast` through RootShell, which on a rootless device threw every
+            // time and then blocked RootShell for 120 seconds. We can send the broadcast
+            // ourselves: a platform-signed app does not need a shell to do it.
+            runCatching {
+                appContext.sendBroadcast(
+                    android.content.Intent(
+                        android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE,
+                        android.net.Uri.parse("file:///storage/emulated/0/Music")
+                    )
+                )
+            }.onFailure { log("Final media-scan sweep failed: ${it.javaClass.simpleName}") }
 
             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             log("Completed ingestion scan: ${audioFiles.size} files indexed")
@@ -613,20 +622,36 @@ object MikuIngestEngine {
             // NO FAKE SYNC. This used to fire `rsync --version`, discard the result, log "Rsync sync
             // broadcast transmitted" (no broadcast was ever sent), sleep 1.5 s and then report
             // "Rsync sync completed" with a 100 % progress bar — while nothing had been transferred.
-            // Report exactly what is actually known: whether an rsync binary exists at all and
-            // whether the configured server answers.
-            val rsyncVersion = try {
-                RootShell.execOut("rsync --version 2>/dev/null")
-                    ?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
-            } catch (_: Throwable) { null }
-
+            // Report exactly what is actually known: whether the configured server answers.
+            //
+            // The `rsync --version` probe that used to sit here is gone. It ran through RootShell
+            // on a device with no root, so it threw every time, cost a 120 second RootShell
+            // backoff, and its result was assigned to a local that nothing ever read. It told us
+            // nothing and it delayed the next attempt at something that might have worked.
             val status = when {
                 syncHost.isBlank() ->
                     "No sync host configured — set one before an ingest sync can run"
-                rsyncVersion.isNullOrBlank() ->
-                    "rsync not available on this device — no sync performed"
-                else ->
-                    "rsync present ($rsyncVersion) · transfer not implemented in this build — no files were synced"
+                else -> {
+                    try {
+                        val url = java.net.URL("http://$syncHost:8787/api/sync")
+                        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+                            connectTimeout = 3000
+                            readTimeout = 3000
+                            requestMethod = "POST"
+                            doOutput = true
+                            setRequestProperty("Content-Type", "application/json")
+                        }
+                        val payload = org.json.JSONObject().put("action", "start").toString()
+                        conn.outputStream.use { it.write(payload.toByteArray()) }
+                        if (conn.responseCode in 200..299) {
+                            "Sync triggered on Host Daemon ($syncHost). It will push via ADB."
+                        } else {
+                            "Host Daemon returned HTTP ${conn.responseCode}"
+                        }
+                    } catch (t: Throwable) {
+                        "Failed to trigger host daemon: ${t.localizedMessage}"
+                    }
+                }
             }
             log(status)
 
