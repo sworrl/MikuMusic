@@ -63,7 +63,12 @@ data class MikuIngestState(
     val logMessages: List<String> = emptyList(),
     val isInitialized: Boolean = false,
     /** Network (rsync) ingest engine switch — OFF by default; local SD scans always work. */
-    val engineEnabled: Boolean = false
+    val engineEnabled: Boolean = false,
+    /**
+     * Live picture of what the host relay is doing, or null when we are not watching it.
+     * Polled only while the ingest observatory is open; see MikuRelayPoller.
+     */
+    val relay: MikuRelayStatus? = null
 )
 
 object MikuIngestEngine {
@@ -421,23 +426,55 @@ object MikuIngestEngine {
                 var sdTotalBytes = 0L
                 var isSdMounted = false
 
-                val storageDir = File("/storage")
-                if (storageDir.exists() && storageDir.isDirectory) {
-                    val subDirs = storageDir.listFiles()
-                    subDirs?.forEach { file ->
-                        if (file.isDirectory && file.name != "emulated" && file.name != "self" && file.canRead()) {
-                            try {
+                // Ask the platform which volumes exist instead of listing /storage ourselves.
+                //
+                // The old code did `File("/storage").listFiles()` and required `canRead()` on each
+                // entry. That cannot work on this device and was reporting "No external TF/MicroSD
+                // card mounted" while a 16,000-track card was mounted and playing. On-device:
+                // /storage is `drwx--x---  shell everybody`, so an app may traverse it but not
+                // LIST it, and /storage/EAFF-98FE is `drwxrwx--- root media_rw`, a group we are
+                // not in. MANAGE_EXTERNAL_STORAGE is granted as a permission but its APP OP sits
+                // at `default`, and that op has to be `allow` for the raw path to open. So both
+                // the listing and the canRead() gate fail, and the panel confidently said there
+                // was no card.
+                //
+                // StorageManager.getStorageVolumes() is the supported route and answers from the
+                // platform's own mount table, independent of filesystem permissions.
+                runCatching {
+                    val sm = context.getSystemService(Context.STORAGE_SERVICE) as android.os.storage.StorageManager
+                    for (vol in sm.storageVolumes) {
+                        if (!vol.isRemovable) continue
+                        if (vol.state != android.os.Environment.MEDIA_MOUNTED) continue
+                        val dir = vol.directory ?: continue
+                        val stat = StatFs(dir.absolutePath)
+                        val totalB = stat.blockCountLong * stat.blockSizeLong
+                        val availB = stat.availableBlocksLong * stat.blockSizeLong
+                        if (totalB <= 0L) continue
+                        sdPath = dir.absolutePath
+                        sdTotalBytes = totalB
+                        sdUsedBytes = (totalB - availB).coerceAtLeast(0L)
+                        isSdMounted = true
+                        break
+                    }
+                }.onFailure { log("Storage volume query failed: ${it.javaClass.simpleName}") }
+
+                // Fallback for anything StorageManager did not surface. Same shape as before, but
+                // without the canRead() gate that was the thing actually rejecting the card.
+                if (!isSdMounted) {
+                    val storageDir = File("/storage")
+                    storageDir.listFiles()?.forEach { file ->
+                        if (file.isDirectory && file.name != "emulated" && file.name != "self") {
+                            runCatching {
                                 val stat = StatFs(file.absolutePath)
-                                val bSize = stat.blockSizeLong
-                                val totalB = stat.blockCountLong * bSize
-                                val availB = stat.availableBlocksLong * bSize
-                                if (totalB > 1024 * 1024 * 500) { // > 500MB is valid external card
+                                val totalB = stat.blockCountLong * stat.blockSizeLong
+                                val availB = stat.availableBlocksLong * stat.blockSizeLong
+                                if (totalB > 1024 * 1024 * 500) {
                                     sdPath = file.absolutePath
                                     sdTotalBytes = totalB
                                     sdUsedBytes = (totalB - availB).coerceAtLeast(0L)
                                     isSdMounted = true
                                 }
-                            } catch (_: Throwable) {}
+                            }
                         }
                     }
                 }
@@ -599,6 +636,24 @@ object MikuIngestEngine {
                     .putExtra("source", "launcher_force_scan")
             )
         } catch (_: Throwable) {}
+    }
+
+    /**
+     * Start watching the host relay. Called when the ingest observatory opens.
+     *
+     * The tile used to fire a sync and then say nothing further, so a running transfer and a
+     * dead one looked identical from the device. This keeps the relay's own view on screen.
+     */
+    fun startRelayWatch(context: Context) {
+        val app = context.applicationContext
+        MikuRelayPoller.start(app) { status ->
+            _state.value = _state.value.copy(relay = status)
+        }
+    }
+
+    /** Stop watching. Called when the observatory closes, so nothing polls in the background. */
+    fun stopRelayWatch() {
+        MikuRelayPoller.stop()
     }
 
     fun triggerRsyncSync(context: Context) {

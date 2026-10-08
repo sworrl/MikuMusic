@@ -95,6 +95,21 @@ object MikuSystemTuning {
         "stay_on_while_plugged_in" to 3,
     )
 
+    /**
+     * App ops to force to ALLOW, as (op name, packages).
+     *
+     * MANAGE_EXTERNAL_STORAGE is here because the permission being granted is only half of it:
+     * the op has to be `allow` as well, and on this device it sat at `default` with a recent
+     * reject. The visible consequence was the ingest observatory reporting "No external TF/MicroSD
+     * card mounted" while a 16,000-track card was mounted and playing, because /storage is
+     * `drwx--x---` (traverse, not list) and the card is `root:media_rw`, so without the op the raw
+     * path is simply closed to us.
+     */
+    private val APP_OPS = listOf(
+        "android:system_alert_window" to listOf("com.miku.launcher", "com.miku.player", "com.miku.systemui"),
+        "android:manage_external_storage" to listOf("com.miku.launcher", "com.miku.player"),
+    )
+
     /** SYSTEM_ALERT_WINDOW for our own overlays: the nav pill, the shade, the volume modal. */
     private val OVERLAY_PACKAGES = listOf(
         "com.miku.launcher",
@@ -129,22 +144,22 @@ object MikuSystemTuning {
         }
 
         val appOps = ctx.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager
-        for (pkg in OVERLAY_PACKAGES) {
-            val uid = runCatching { ctx.packageManager.getPackageUid(pkg, 0) }.getOrNull()
-            if (uid == null) { Log.d(TAG, "appops: $pkg not installed, skipping"); continue }
-            runCatching {
-                // setMode is @SystemApi and needs MANAGE_APP_OPS_MODES, which a platform-signed
-                // app holds. Reflection rather than a direct call because the constant and the
-                // overload are hidden; a direct reference would not compile against the SDK.
-                val m = AppOpsManager::class.java.getMethod(
-                    "setMode", Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
-                    String::class.java, Int::class.javaPrimitiveType
-                )
-                val opCode = AppOpsManager::class.java
-                    .getField("OP_SYSTEM_ALERT_WINDOW").getInt(null)
-                m.invoke(appOps, opCode, uid, pkg, AppOpsManager.MODE_ALLOWED)
-            }.onSuccess { ok++; Log.i(TAG, "appops SYSTEM_ALERT_WINDOW allowed for $pkg") }
-             .onFailure { failed++; Log.w(TAG, "appops for $pkg failed: ${why(it)}") }
+        for ((opName, packages) in APP_OPS) {
+            for (pkg in packages) {
+                val uid = runCatching { ctx.packageManager.getPackageUid(pkg, 0) }.getOrNull()
+                if (uid == null) { Log.d(TAG, "appops: $pkg not installed, skipping"); continue }
+                runCatching {
+                    // setMode(String, int, String, int) is @SystemApi behind MANAGE_APP_OPS_MODES.
+                    // The String overload is used so ops can be named directly; the int constants
+                    // for several of these are hidden and differ across releases.
+                    val m = AppOpsManager::class.java.getMethod(
+                        "setMode", String::class.java, Int::class.javaPrimitiveType,
+                        String::class.java, Int::class.javaPrimitiveType
+                    )
+                    m.invoke(appOps, opName, uid, pkg, AppOpsManager.MODE_ALLOWED)
+                }.onSuccess { ok++; Log.i(TAG, "appop $opName allowed for $pkg") }
+                 .onFailure { failed++; Log.w(TAG, "appop $opName for $pkg failed: ${why(it)}") }
+            }
         }
 
         for ((pkg, perm) in RUNTIME_GRANTS) {

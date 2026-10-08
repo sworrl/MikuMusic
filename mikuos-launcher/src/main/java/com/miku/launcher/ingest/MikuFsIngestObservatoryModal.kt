@@ -50,6 +50,14 @@ fun MikuFsIngestObservatoryModal(
     val scope = rememberCoroutineScope()
     LaunchedEffect(Unit) { MikuIngestEngine.init(ctx) }
 
+    // Watch the host relay for as long as this sheet is open, and no longer. The relay publishes
+    // a full picture every second; polling it only while someone is looking keeps that off the
+    // battery. DisposableEffect rather than LaunchedEffect so the stop actually runs on dismiss.
+    DisposableEffect(Unit) {
+        MikuIngestEngine.startRelayWatch(ctx)
+        onDispose { MikuIngestEngine.stopRelayWatch() }
+    }
+
     val ingestState by MikuIngestEngine.state.collectAsState()
 
     BackHandler { onClose() }
@@ -219,6 +227,134 @@ fun MikuFsIngestObservatoryModal(
                                 fontSize = 12.5.sp,
                                 lineHeight = 16.sp
                             )
+
+                            // ---- Host relay, verbose ----------------------------------------
+                            // Everything here is read from m500d. Where it has not told us
+                            // something we show a dash rather than a zero, because during a
+                            // working transfer a confident 0 is worse than an honest blank.
+                            ingestState.relay?.let { r ->
+                                Spacer(Modifier.height(10.dp))
+                                Column(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0x14000000))
+                                        .padding(10.dp)
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            Modifier
+                                                .size(8.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    when {
+                                                        !r.reachable -> Color(0xFF6B7A80)
+                                                        r.running -> Color(0xFF00FF88)
+                                                        else -> Color(0xFF7FE3FF)
+                                                    }
+                                                )
+                                        )
+                                        Spacer(Modifier.width(7.dp))
+                                        Text(
+                                            when {
+                                                !r.reachable -> "RELAY UNREACHABLE"
+                                                r.running -> "RELAY · ${r.stage.uppercase().ifBlank { "RUNNING" }}"
+                                                else -> "RELAY IDLE"
+                                            },
+                                            color = MikuCyan,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = AudiowideFont
+                                        )
+                                    }
+
+                                    if (!r.reachable) {
+                                        Spacer(Modifier.height(5.dp))
+                                        Text(r.error, color = Color(0xFFFF8A80), fontSize = 11.sp, lineHeight = 14.sp)
+                                    } else {
+                                        Spacer(Modifier.height(6.dp))
+                                        Text(
+                                            if (r.deviceOnline) "device seen by relay via ${r.deviceVia}"
+                                            else "relay cannot see this device over adb",
+                                            color = if (r.deviceOnline) MikuMuted else Color(0xFFFFB020),
+                                            fontSize = 10.5.sp
+                                        )
+
+                                        if (r.running) {
+                                            if (r.currentArtist.isNotBlank() || r.currentAlbum.isNotBlank()) {
+                                                Spacer(Modifier.height(5.dp))
+                                                Text(
+                                                    listOf(r.currentArtist, r.currentAlbum)
+                                                        .filter { it.isNotBlank() }.joinToString(" · "),
+                                                    color = Color.White, fontSize = 12.sp,
+                                                    maxLines = 1, softWrap = false
+                                                )
+                                            }
+                                            if (r.currentFile.isNotBlank()) {
+                                                Text(
+                                                    r.currentFile, color = MikuMuted, fontSize = 10.sp,
+                                                    maxLines = 1, softWrap = false
+                                                )
+                                            }
+
+                                            Spacer(Modifier.height(7.dp))
+                                            LinearProgressIndicator(
+                                                progress = { r.progress },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(6.dp)
+                                                    .clip(RoundedCornerShape(3.dp)),
+                                                color = Color(0xFF00FF88),
+                                                trackColor = Color(0x3300FF88)
+                                            )
+
+                                            Spacer(Modifier.height(6.dp))
+                                            val rate = r.measuredRateBps
+                                                ?.let { MikuIngestEngine.formatBytes(it) + "/s" } ?: "—"
+                                            val eta = r.etaSeconds?.let { sec ->
+                                                val m = sec / 60; val h = m / 60
+                                                if (h > 0) "${h}h ${m % 60}m" else if (m > 0) "${m}m" else "${sec}s"
+                                            } ?: "—"
+                                            Text(
+                                                "album ${r.albumIndex}/${r.albumTotal} · " +
+                                                    "files ${r.filesDone}/${r.filesTotal} · " +
+                                                    "${MikuIngestEngine.formatBytes(r.bytesSent)} of " +
+                                                    MikuIngestEngine.formatBytes(r.bytesTotal),
+                                                color = MikuMuted, fontSize = 10.5.sp
+                                            )
+                                            Text(
+                                                "$rate · eta $eta · fetch ${r.fetchActive} push ${r.pushActive} · " +
+                                                    "cached ${MikuIngestEngine.formatBytes(r.cacheBytes)}",
+                                                color = MikuMuted, fontSize = 10.5.sp
+                                            )
+
+                                            r.workers.take(3).forEach { w ->
+                                                Text(
+                                                    "· $w", color = Color(0xFF7FE3FF), fontSize = 10.sp,
+                                                    maxLines = 1, softWrap = false
+                                                )
+                                            }
+                                        }
+
+                                        if (r.lastEvent.isNotBlank()) {
+                                            Spacer(Modifier.height(5.dp))
+                                            Text(r.lastEvent, color = MikuMuted, fontSize = 10.5.sp, lineHeight = 13.sp)
+                                        }
+                                        if (r.albumsDone > 0 || r.albumsFailed > 0) {
+                                            Text(
+                                                "albums done ${r.albumsDone}" +
+                                                    if (r.albumsFailed > 0) " · failed ${r.albumsFailed}" else "",
+                                                color = if (r.albumsFailed > 0) Color(0xFFFFB020) else MikuMuted,
+                                                fontSize = 10.5.sp
+                                            )
+                                        }
+                                        r.failures.take(3).forEach { f ->
+                                            Text("! $f", color = Color(0xFFFF8A80), fontSize = 10.sp,
+                                                maxLines = 1, softWrap = false)
+                                        }
+                                    }
+                                }
+                            }
 
                             if (ingestState.isScanning) {
                                 Spacer(Modifier.height(10.dp))
