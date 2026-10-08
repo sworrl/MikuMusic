@@ -1,4 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is permitted because the ingest relay is plain HTTP on the local network.
+
+  The launcher POSTs to http://<syncHost>:8787/api/sync to start a library sync. Without this,
+  Android 9+ blocks the call outright and the ingest tile reports
+  "Failed to trigger host daemon: Cleartext HTTP traffic to <host> not permitted", which is
+  exactly what it was doing: the file existed in this module's res/xml but the manifest never
+  referenced it, so it had no effect at all.
+
+  This is deliberately a blanket permit rather than a domain allowlist, and that is a real
+  tradeoff worth stating. Android's network security config matches on hostnames and cannot
+  express "any RFC1918 address", and the sync host is entered by the user at runtime, so the one
+  host that actually needs cleartext is precisely the one that cannot be enumerated here.
+
+  What this does NOT do is downgrade anything that is already HTTPS. Open-Meteo, BeaconDB, Apple
+  WPS and Wikidata are all requested over https:// in code and stay encrypted; permitting
+  cleartext only means a plain-http URL is allowed to connect, not that an https one is weakened.
+  The trust anchors below keep the normal system CAs and additionally honour user-installed ones,
+  which is what lets a self-hosted relay be put behind a private CA later if that is ever wanted.
+-->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
