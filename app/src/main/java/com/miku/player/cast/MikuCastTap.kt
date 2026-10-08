@@ -62,12 +62,22 @@ object MikuCastTap {
         val byteRate: Int get() = frameSize * sampleRate
     }
 
+    /**
+     * Notified when casting starts or stops, so the sink can re-apply its gain immediately.
+     * Without this the local output would stay audible until the next configure().
+     */
+    @Volatile private var stateListener: Runnable? = null
+
+    @JvmStatic
+    fun setStateListener(r: Runnable?) { stateListener = r }
+
     /** Turned on only while a TV is actually connected, so the tap costs nothing when unused. */
     @JvmStatic
     fun setEnabled(on: Boolean) {
         if (enabled == on) return
         enabled = on
-        Log.i(TAG, if (on) "tap enabled" else "tap disabled")
+        Log.i(TAG, if (on) "tap enabled, local output muted" else "tap disabled, local output restored")
+        runCatching { stateListener?.run() }
     }
 
     @JvmStatic

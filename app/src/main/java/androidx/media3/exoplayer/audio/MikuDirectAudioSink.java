@@ -1578,13 +1578,44 @@ public final class MikuDirectAudioSink implements AudioSink {
   }
 
   private void setVolumeInternal() {
+    registerCastMute();
+    // While a TV is mirroring, the local output is silenced but DECODING CONTINUES. That
+    // distinction is the whole trick: pausing would stop the decoder and there would be nothing
+    // left to send, so the local AudioTrack is simply run at zero gain instead.
+    //
+    // This is also why the tee is unaffected. AudioTrack gain is applied downstream of the write,
+    // so the buffer handed to write() is still full-scale, and the TV receives the file's own
+    // samples rather than a silenced copy. Muting here costs the TV nothing.
+    float effective = com.miku.player.cast.MikuCastTap.isEnabled() ? 0f : volume;
     if (!isAudioTrackInitialized()) {
       // Do nothing.
     } else if (Util.SDK_INT >= 21) {
-      setVolumeInternalV21(audioTrack, volume);
+      setVolumeInternalV21(audioTrack, effective);
     } else {
-      setVolumeInternalV3(audioTrack, volume);
+      setVolumeInternalV3(audioTrack, effective);
     }
+  }
+
+  /**
+   * Re-apply the gain after the cast state changes, so muting and unmuting take effect on a track
+   * that is already running rather than only on the next configure().
+   */
+  public void onCastStateChanged() {
+    setVolumeInternal();
+  }
+
+  private boolean castMuteRegistered;
+
+  /**
+   * Register for cast start/stop so the mute lands on a track that is already playing. Guarded
+   * because setVolumeInternal runs on every volume change and a method reference allocates.
+   */
+  private void registerCastMute() {
+    if (castMuteRegistered) {
+      return;
+    }
+    castMuteRegistered = true;
+    com.miku.player.cast.MikuCastTap.setStateListener(this::onCastStateChanged);
   }
 
   @Override

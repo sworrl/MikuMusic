@@ -42,6 +42,18 @@ class PlaybackService : MediaLibraryService() {
         } catch (e: Throwable) {
             android.util.Log.e("PlaybackService", "Failed to start MikuApiServer", e)
         }
+
+        // Listen for a TV companion. Starting the listener costs a socket and nothing else: the
+        // PCM tap stays switched off, and therefore free, until a TV actually connects. Started
+        // here rather than from an Activity so a cast survives the UI being swiped away.
+        try {
+            com.miku.player.cast.MikuCastServer.start(this)
+        } catch (e: Throwable) {
+            android.util.Log.e("PlaybackService", "Failed to start MikuCastServer", e)
+        }
+
+        // Feed the TV now-playing metadata and act on the transport it sends back.
+        com.miku.player.cast.MikuCastBridge.attach(this)
     }
 
     /**
