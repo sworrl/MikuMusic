@@ -18,8 +18,8 @@ android {
         applicationId = "com.caf.fmradio"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1000
-        versionName = "1.0.0-mikuos"
+        versionCode = 1001
+        versionName = "1.0.1-mikuos"
     }
 
     // Platform signing (seinfo=platform is required alongside the package name).
