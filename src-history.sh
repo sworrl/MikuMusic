@@ -18,6 +18,15 @@ export GIT_WORK_TREE="$PWD"
 
 stage_source() {
   # Curated source set. -print0/-z keeps paths with spaces/emoji safe.
+  #
+  # The list is extension-driven, which quietly missed three classes of file for months. Added
+  # 2026-10-09 after the blanket '*' in .gitignore was moved into .git/info/exclude and `status`
+  # started listing untracked files again:
+  #   gradlew / gradlew.bat   no extension at all, so no -name pattern matched them
+  #   gradle-wrapper.jar      *.jar is deliberately not swept (vendored jars), so name it
+  #   *.example               the committed template beside each gitignored secret
+  # Without the wrapper the history cannot be built from a fresh clone, which is most of the
+  # point of having it.
   find . \
     -type d \( -name build -o -name .gradle -o -name .cxx -o -name .gitsrc -o -name .idea -o -name captures \) -prune -o \
     -type f \( \
@@ -29,6 +38,8 @@ stage_source() {
         -o -name '*.sh' -o -name '*.milk' -o -name '*.cpp' -o -name '*.h' \
         -o -name '*.hpp' -o -name '*.c' -o -name '*.cmake' -o -name 'CMakeLists.txt' \
         -o -name '*.glsl' -o -name '*.frag' -o -name '*.vert' -o -name '*.pro' \
+        -o -name '*.example' -o -name '.gitignore' -o -name '.gitattributes' \
+        -o -name 'gradlew' -o -name 'gradlew.bat' -o -name 'gradle-wrapper.jar' \
      \) \
     ! -name '*.apk' ! -name '*.aab' ! -name '*.keystore' ! -name '*.jks' \
     ! -name 'local.properties' ! -name 'arco.properties' \
