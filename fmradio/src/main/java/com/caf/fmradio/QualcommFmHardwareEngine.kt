@@ -80,6 +80,18 @@ data class FmDiagnostics(
     val slimbusStatus: Int? = null,
     val driverMuted: Boolean? = null,
     val driverFreqKHz: Int? = null,
+    /**
+     * The two FM paths read separately, because this board has two and they are not the same
+     * part. [rssiSi4705] comes from FmReceiverJNI.getV4L2RadioFmSignal(), i.e. /dev/radio0,
+     * which is the Si4705 at i2c-2 0x63. [rssiQualcomm] and [sinrQualcomm] come from
+     * FmReceiver.getRssi()/getSINR(), which speak HCI to the Qualcomm WCN FM core.
+     *
+     * If only one of them moves as the frequency changes, only one of them has an antenna, and
+     * that settles whether the second path is usable for anything.
+     */
+    val rssiSi4705: Int? = null,
+    val rssiQualcomm: Int? = null,
+    val sinrQualcomm: Int? = null,
 )
 
 /**
@@ -438,6 +450,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
                     runCatching { rx.disable(context) }
                     rx = FmReceiver(FM_DEVICE_PATH, callbacks).also { receiver = it }
                 }
+                // Is HiBy's own driver control surface reachable from this domain? Logged once
+                // per power-on so a session log answers it without opening the UI.
+                FmDriverSysfs.logProbe()
                 val soc = runCatching { rx.socName }.getOrNull()
                 Log.i(TAG, "FmReceiver created; soc=$soc smd=${runCatching { rx.isSmdTransportLayer }.getOrNull()} " +
                     "state=${runCatching { rx.fmState }.getOrNull()}")
@@ -897,15 +912,22 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     private fun refreshSignal() {
         if (!hardwareOnline.value) return
+        // Read BOTH paths, not one with the other as a fallback. They are different parts and
+        // the interesting question is whether they disagree.
         val s = FmV4L2.signal()
+        val hciRssi = runCatching { receiver?.rssi }.getOrNull()?.takeIf { it >= 0 }
+        val hciSinr = runCatching { receiver?.getSINR() }.getOrNull()
         if (s != null) {
             signal.value = s
             s.rssi?.let { rssi.value = it }
         } else {
-            // No V4L2 hook on this build: fall back to the HCI read, which costs an HCI
-            // round trip and is why it is not the default.
-            runCatching { receiver?.rssi }.getOrNull()?.let { if (it >= 0) rssi.value = it }
+            hciRssi?.let { rssi.value = it }
         }
+        diagnostics.value = diagnostics.value.copy(
+            rssiSi4705 = s?.rssi,
+            rssiQualcomm = hciRssi,
+            sinrQualcomm = hciSinr,
+        )
     }
 
     private fun startPolling() {
@@ -1144,6 +1166,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
                         "vol" -> setVolumeIndex(intent.getIntExtra("index", volumeIndex.value))
                         // Sweep the tuner part's own volume to find both the working range and
                         // whether it is the thing standing between a correct route and silence.
+                        "sysfs" -> FmDriverSysfs.logProbe()
                         "v4l2vol" -> {
                             val v = intent.getIntExtra("v", 63)
                             val ok = FmV4L2.setRadioVolume(v)
@@ -1173,7 +1196,8 @@ class QualcommFmHardwareEngine(private val context: Context) {
             "muted=${isMuted.value} driverMuted=${d.driverMuted} " +
             "route=${d.routeLabel}(${d.routeCode}) handle_fm=${d.handleFmWritten} " +
             "halLoopback=${d.halLoopback} fmVolume=${d.fmVolumeLinear} slimbus=${d.slimbusStatus} " +
-            "rssi=${s.rssi} snr=${s.snr} multipath=${s.multipath} valid=${s.valid} " +
+            "si4705[rssi=${s.rssi} snr=${s.snr} mpath=${s.multipath} valid=${s.valid}] " +
+            "qcom[rssi=${d.rssiQualcomm} sinr=${d.sinrQualcomm}] " +
             "audioLevel=${audioLevel.value} framing=${captureFraming.value} " +
             "stereo=${isStereo.value} rds=${rdsAvailable.value} " +
             "name='${stationName.value}' rt='${radioText.value}' err=${hardwareError.value}")

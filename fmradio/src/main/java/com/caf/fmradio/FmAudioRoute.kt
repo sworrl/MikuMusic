@@ -127,21 +127,32 @@ object FmAudioRoute {
      * it is what the diagnostics panel reports instead of an assumption.
      */
     fun loopbackActive(am: AudioManager): Boolean? = runCatching {
+        // The HAL answers with the whole pair, e.g. "fm_status=1", not a bare "1".
         val v = am.getParameters("fm_status") ?: return@runCatching null
-        if (v.isBlank()) null else v.contains("1")
+        if (v.isBlank()) null else v.trim().endsWith("1")
     }.getOrNull()
 
-    /** Start the HAL's FM session on [code]. Returns the value written, for the diagnostics panel. */
+    /**
+     * Start the HAL's FM session on [code], in stock FM2's exact order.
+     *
+     * Captured from a stock session on this hardware 2026-10-09:
+     *
+     *     setParameters fm_routing=1048579   -> HAL does fm_stop then fm_start
+     *     setParameters fm_volume=0.052481   -> HAL applies it to the running session
+     *     setParameters handle_fm=1048579    -> already running, so the HAL just notes it
+     *
+     * `fm_routing` is what actually brings the session up; `handle_fm` arrives last and is a
+     * no-op by then. Doing it the other way round works too, but the HAL then starts the
+     * backend before it has a volume, and matching stock removes a variable rather than
+     * leaving one in.
+     */
     fun start(am: AudioManager, code: Int): Int {
         val withFm = code or AUDIO_DEVICE_OUT_FM
-        // Stock re-routes first if a loopback is somehow already up, so the HAL tears the old
-        // backend down instead of leaving FM wired to the previous device.
-        if (loopbackActive(am) == true) {
-            am.setParameters("fm_routing=$withFm")
-            Log.i(TAG, "loopback already active, re-routed: fm_routing=$withFm")
-        }
+        am.setParameters("fm_routing=$withFm")
+        Log.i(TAG, "fm_routing=$withFm (${describe(code)}) [start]")
+        val gain = applyVolume(am, code)
         am.setParameters("handle_fm=$withFm")
-        Log.i(TAG, "handle_fm=$withFm (${describe(code)})")
+        Log.i(TAG, "handle_fm=$withFm, fm_volume=$gain")
         return withFm
     }
 

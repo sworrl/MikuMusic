@@ -271,7 +271,11 @@ fun FmDiagnosticsPanel(st: FmState) {
         })
         DiagRow("Spectrum range", "60 Hz to ${st.spectrumTopHz} Hz")
         Spacer(Modifier.height(8.dp))
-        DiagRow("RSSI", s.rssi?.toString() ?: st.rssi?.toString() ?: "—")
+        // Two tuners, read separately. Only the one with an antenna will move with frequency.
+        DiagRow("RSSI · Si4705 (radio0)", d.rssiSi4705?.toString() ?: "—")
+        DiagRow("RSSI · Qualcomm (HCI)", d.rssiQualcomm?.toString() ?: "—")
+        DiagRow("SINR · Qualcomm (HCI)", d.sinrQualcomm?.toString() ?: "—")
+        DiagRow("RSSI in use", s.rssi?.toString() ?: st.rssi?.toString() ?: "—")
         DiagRow("SNR", s.snr?.toString() ?: "—")
         DiagRow("Multipath", s.multipath?.toString() ?: "—")
         DiagRow("Frequency offset", s.freqOffset?.toString() ?: "—")
