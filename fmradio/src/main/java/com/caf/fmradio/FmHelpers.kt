@@ -19,22 +19,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * Minimal helpers so the FM app (com.caf.fmradio) is self-contained — it can't
- * depend on the com.miku.player app module, so the few utilities it used are
- * reproduced here (RootShell, CrashSentinel, MikuBackButton).
+ * Minimal helpers so the FM app (com.caf.fmradio) is self-contained — it can't depend on the
+ * com.miku.player app module, so the few utilities it used are reproduced here.
+ *
+ * There used to be a RootShell here. Nothing called it, and nothing should: everything this app
+ * needs from the platform it gets from being platform-signed, and shelling out would only have
+ * produced results nobody checked.
  */
-
-/** Runs short shell commands. As a platform-signed system app com.caf.fmradio has
- *  the SELinux domain to poke vendor props directly — no `su` needed; if a call is
- *  denied it's harmless (the tuner path doesn't require it). */
-object RootShell {
-    fun execFast(cmd: String): String = try {
-        val p = ProcessBuilder("/system/bin/sh", "-c", cmd).redirectErrorStream(true).start()
-        val out = p.inputStream.bufferedReader().readText()
-        p.waitFor()
-        out
-    } catch (_: Throwable) { "" }
-}
 
 /** Installs a last-resort uncaught-exception guard so a tuner glitch closes cleanly
  *  instead of hard-crashing the process. */

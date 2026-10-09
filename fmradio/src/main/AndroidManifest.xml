@@ -30,7 +30,18 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!--
+      The tuner keeps running when the activity goes away (MikuFmService). On Android 14 a
+      foreground service that holds audio must declare the media-playback type here as well as
+      in the service element, and must hold the matching typed permission; the untyped
+      FOREGROUND_SERVICE permission on its own is no longer enough.
+      POST_NOTIFICATIONS is what the ongoing notification needs; a platform-signed system app is
+      granted it without a prompt, and without the notification the service cannot stay up.
+    -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
@@ -53,5 +64,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Not exported: only this app and its own notification actions talk to it. -->
+        <service
+            android:name="com.caf.fmradio.MikuFmService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 </manifest>

@@ -2,6 +2,83 @@
 
 Native Kotlin/Compose player for the HiBy M500 MIKU (`com.miku.player`).
 
+## 2026-10-09 — the FM tuner makes sound, and gets a control surface
+
+MikuOS 0.1.2, Miku FM 1.0.2.
+
+### The tuner is audible for the first time
+
+It had been tuning since 0.1.1 and producing silence. Three separate causes, all in the audio
+path rather than the tuner:
+
+- **`handle_fm=1` was telling the HAL to stop FM.** That parameter carries an output-device
+  bitmask, and the HAL starts its FM session only when `AUDIO_DEVICE_OUT_FM` (`0x100000`) is
+  set in it. The correct value is the HiBy device code OR'd with that bit: `0x100003` for the
+  4.4 mm balanced output, `0x100004` for the 3.5 mm jack, `0x100008` for Bluetooth, `0x100002`
+  for the speaker. The balanced output is only distinguishable from the 3.5 mm one by its
+  `productName`, which is the literal string `balance`.
+- **`FmReceiver.EnableSlimbus(1)` was never called.** SLIMbus is what carries the FM core's
+  audio to the codec.
+- **The driver's own mute was never cleared.** It lives in HiBy's V4L2 layer, and
+  `FmReceiver.setMuteMode()` does not touch it; `FmReceiverJNI.setV4L2RadioFmMute(0)` does.
+  It is now cleared 300 ms after the route is built, which is also what removes the power-on pop.
+- **And tuning was going to the wrong layer.** `FmReceiver.setStation()` returns true and fires
+  a tune callback, and after it the V4L2 read-back still showed the bottom of the band. Stock
+  tunes with `FmReceiverJNI.setV4L2RadioFrequency(kHz * 16)` and synthesises the callback
+  itself. Both calls are issued now, and the V4L2 read-back is reported in diagnostics so the
+  two can be compared rather than assumed equal.
+
+`fm_status` turns out to be a *get* key, not a set key. The old code wrote it, which did
+nothing. Read back, it is the only root-free confirmation that the FM session really started,
+and it is now what the diagnostics panel reports. `fm_active`, `fm_route` and
+`vendor.audio.hw.fm.mode` were invented keys and are gone.
+
+The `AudioRecord(RADIO_TUNER)` to `AudioTrack` bridge is now Bluetooth-only, which is what the
+hardware wants: on every other output the ADSP loops FM straight to the DAC, and a second
+software copy would have been an echo one capture buffer behind. The capture still runs for the
+live spectrum and the recorder.
+
+### Controls that were not there
+
+- **Power, mute and stereo** as real buttons. The tuner no longer switches itself on when you
+  open the app, because doing so takes audio focus and would stop whatever you were listening to.
+- **Background playback.** A foreground service owns the tuner now, with seek, mute and off in
+  the notification. Leaving the screen used to power the radio down.
+- **Volume**, following `STREAM_MUSIC` and pushed to the HAL as the real linear gain the volume
+  curve assigns to that index on that output.
+- **Band scan** over the whole band, built from repeated hardware seeks because the vendor jar
+  gives no way to read a station list back out. Results list with the signal measured at each
+  stop, tap to tune, star to keep.
+- **Direct frequency entry** on a keypad.
+- **Region**: US/Canada, Europe, Japan and Japan wide, each setting band limits, channel
+  spacing, de-emphasis and RDS standard. Changing it power-cycles the tuner, because the chip
+  only reads those at enable time.
+- **Seek sensitivity**, **soft mute** and **RDS alternative-frequency following** as switches.
+- **Presets** are a row you can tap to tune and long-press to remove, and they appear as ticks
+  on the band strip alongside scan hits.
+- **RDS** now shows the programme type as well as the station name, from the correct table for
+  the region (RBDS and RDS assign the same codes to different genres).
+
+### Readouts that are measurements
+
+The signal strip is RSSI, SNR, multipath and the live PCM level, read from
+`FmReceiverJNI.getV4L2RadioFmSignal()` rather than the HCI round trip the old 2-second poll was
+making. A diagnostics sheet reports the JNI load state, SoC name, chip state, antenna, the
+audio route and the exact `handle_fm` value written, the HAL's own `fm_status`, the SLIMbus
+acknowledgement, both mutes, and the RDS PI and PTY. Every one of those is a read; a dash means
+the question was asked and nothing came back, not that the value is zero.
+
+The antenna chip says `INTERNAL ANTENNA` only when `getInternalAntenna()` says so, and otherwise
+reflects whether a cable is actually plugged in, because on this board the cable is the antenna.
+
+### Also
+
+- The tuner is documented correctly at last: it is the Qualcomm WCN SoC FM core over the shared
+  Bluetooth HCI transport (`getSocName()` = `cherokee`), not the Si4705 the comments claimed.
+- Recording moved out of `AudioTrackHelper` into its own WAV writer, so it works on the wired
+  outputs where no AudioTrack exists.
+- The FM module's unused `RootShell` is gone.
+
 ## A gap you should know about
 
 Every entry below is from 2026-08-15 and stops at 0.9.17. The player is on

@@ -98,4 +98,11 @@ desktop.ini
 
 # Qualcomm's FM JNI library, pulled off the device. Theirs, not ours, and the FM
 # path does not work anyway (SELinux denies /dev/radio0 to a platform_app).
-fmradio/src/main/jniLibs/
+# The vendor FM JNI binary is not redistributed here, so the whole directory is ignored.
+# The README inside it is the exception: it is what tells a cloner to adb pull their own copy,
+# and ignoring that too leaves the gap unexplained.
+# Note the trailing /** rather than /: git cannot re-include anything inside an excluded
+# DIRECTORY, so excluding the contents is what makes the negation below possible at all.
+fmradio/src/main/jniLibs/**
+!fmradio/src/main/jniLibs/**/
+!fmradio/src/main/jniLibs/**/README.md

@@ -1,186 +1,249 @@
 package com.caf.fmradio
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioRecord
-import android.media.AudioTrack
 import android.os.Bundle
-import android.os.IBinder
-import android.os.Process
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import com.caf.fmradio.IFMRadioService
-import com.caf.fmradio.IFMRadioServiceCallbacks
-import com.caf.fmradio.RootShell
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.*
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.CutCornerShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.caf.fmradio.AudiowideFont
-import com.caf.fmradio.CrashSentinel
-import com.caf.fmradio.R
-import com.caf.fmradio.*
-import dalvik.system.PathClassLoader
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.io.File
-import java.util.*
-import kotlin.math.*
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 
 /**
  * UI state mirrored from [QualcommFmHardwareEngine]. Nothing here is pre-filled with a plausible
- * value: stereo and RSSI are null until the chip reports them, the station name is blank until
- * RDS decodes one, presets are the user's own, and the spectrum is the real FM PCM.
+ * value: stereo, RSSI and SNR are null until the chip reports them, the station name is blank
+ * until RDS decodes one, presets are the user's own, and the spectrum is the real FM PCM.
  */
 data class FmState(
     val isPowerOn: Boolean = false,
     /** True only after the tuner chip acknowledged enable. */
     val isHardwareOnline: Boolean = false,
     val hardwareError: String? = null,
+    val band: FmBandPlan = FmBandPlan.US,
     val frequencyKHz: Int = 101100,
+    /** What the chip reports. null = it has not said. */
     val isStereo: Boolean? = null,
+    /** What the user asked for, which the chip may not be able to deliver. */
+    val stereoRequested: Boolean = true,
     val isMuted: Boolean = false,
     val isRecording: Boolean = false,
+    val recordedBytes: Long = 0L,
     val rssi: Int? = null,
+    val signal: FmV4L2.Reading = FmV4L2.Reading.EMPTY,
     val stationName: String = "",
     val radioText: String = "",
+    val programmeType: Int? = null,
+    val programmeId: Int? = null,
+    val rdsAvailable: Boolean? = null,
     val isHeadsetPlugged: Boolean = false,
     val favorites: List<Int> = emptyList(),
-    val spectrum: FloatArray = FloatArray(0)
-)
+    val isScanning: Boolean = false,
+    val scanProgress: Float = 0f,
+    val scanResults: List<FmScanHit> = emptyList(),
+    val volumeIndex: Int = 0,
+    val volumeMax: Int = 15,
+    val afJump: Boolean = false,
+    val softMute: Boolean = true,
+    val seekSensitivity: Int = 1,
+    val audioLevel: Float = 0f,
+    val diagnostics: FmDiagnostics = FmDiagnostics(),
+    val spectrum: FloatArray = FloatArray(0),
+) {
+    /**
+     * Compose and equals(): the FloatArray makes the generated equals reference-compare, which
+     * is actually what we want here (the engine hands out a fresh array per update), but the
+     * generated hashCode would then disagree with it. Spelled out so the pair is consistent.
+     */
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is FmState) return false
+        return isPowerOn == other.isPowerOn && isHardwareOnline == other.isHardwareOnline &&
+            hardwareError == other.hardwareError && band == other.band &&
+            frequencyKHz == other.frequencyKHz && isStereo == other.isStereo &&
+            stereoRequested == other.stereoRequested && isMuted == other.isMuted &&
+            isRecording == other.isRecording && recordedBytes == other.recordedBytes &&
+            rssi == other.rssi && signal == other.signal && stationName == other.stationName &&
+            radioText == other.radioText && programmeType == other.programmeType &&
+            programmeId == other.programmeId && rdsAvailable == other.rdsAvailable &&
+            isHeadsetPlugged == other.isHeadsetPlugged && favorites == other.favorites &&
+            isScanning == other.isScanning && scanProgress == other.scanProgress &&
+            scanResults == other.scanResults && volumeIndex == other.volumeIndex &&
+            volumeMax == other.volumeMax && afJump == other.afJump && softMute == other.softMute &&
+            seekSensitivity == other.seekSensitivity && audioLevel == other.audioLevel &&
+            diagnostics == other.diagnostics && spectrum === other.spectrum
+    }
+
+    override fun hashCode(): Int {
+        var r = isPowerOn.hashCode()
+        r = 31 * r + frequencyKHz
+        r = 31 * r + band.hashCode()
+        r = 31 * r + (rssi ?: 0)
+        r = 31 * r + stationName.hashCode()
+        r = 31 * r + radioText.hashCode()
+        r = 31 * r + System.identityHashCode(spectrum)
+        return r
+    }
+}
 
 /**
- * Direct Qualcomm Snapdragon Hardware FM Radio Manager.
- * Uses QualcommFmHardwareEngine (Si4705 tuner via the QTI FM library) and bridges its PCM to the
- * audio HAL / dual CS43198 DAC.
+ * Process-wide owner of the tuner.
+ *
+ * It is a singleton rather than something the activity holds because [MikuFmService] keeps the
+ * radio running while no activity exists. Both talk to the same engine; the activity is one
+ * view onto it, the notification is another.
  */
 object FmRadioManager {
     private const val TAG = "MikuDirectFmEngine"
+
     private var engine: QualcommFmHardwareEngine? = null
     private val _state = MutableStateFlow(FmState())
     val state: StateFlow<FmState> = _state
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    fun initAndPowerOn(ctx: Context) {
-        if (engine == null) {
-            engine = QualcommFmHardwareEngine(ctx.applicationContext).also { eng ->
-                scope.launch {
-                    launch { eng.isPoweredOn.collect { on -> _state.value = _state.value.copy(isPowerOn = on) } }
-                    launch { eng.hardwareOnline.collect { on -> _state.value = _state.value.copy(isHardwareOnline = on) } }
-                    launch { eng.hardwareError.collect { e -> _state.value = _state.value.copy(hardwareError = e) } }
-                    launch { eng.spectrum.collect { s -> _state.value = _state.value.copy(spectrum = s) } }
-                    launch { eng.currentFrequencyKHz.collect { freq -> _state.value = _state.value.copy(frequencyKHz = freq) } }
-                    launch { eng.isStereo.collect { stereo -> _state.value = _state.value.copy(isStereo = stereo) } }
-                    launch { eng.isMuted.collect { muted -> _state.value = _state.value.copy(isMuted = muted) } }
-                    launch { eng.rssi.collect { r -> _state.value = _state.value.copy(rssi = r) } }
-                    launch { eng.stationName.collect { name -> _state.value = _state.value.copy(stationName = name) } }
-                    launch { eng.radioText.collect { rt -> _state.value = _state.value.copy(radioText = rt) } }
-                    launch { eng.presets.collect { favs -> _state.value = _state.value.copy(favorites = favs) } }
-                    // Real antenna/headset state — the headphone cable IS the FM antenna, so
-                    // "ANTENNA OK" must reflect an actually-plugged headset (was hardcoded true).
-                    launch {
-                        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-                        while (true) {
-                            val plugged = try {
-                                @Suppress("DEPRECATION")
-                                am?.isWiredHeadsetOn == true ||
-                                am?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.any {
-                                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
-                                    it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
-                                } == true
-                            } catch (_: Throwable) { false }
-                            if (plugged != _state.value.isHeadsetPlugged) _state.value = _state.value.copy(isHeadsetPlugged = plugged)
-                            kotlinx.coroutines.delay(1500)
-                        }
+    /** Programme-type names. Two tables, because RBDS and RDS assign the same codes differently. */
+    private val PTY_RDS = listOf(
+        "None", "News", "Current Affairs", "Information", "Sport", "Education", "Drama",
+        "Culture", "Science", "Varied", "Pop Music", "Rock Music", "Easy Listening",
+        "Light Classical", "Serious Classical", "Other Music", "Weather", "Finance",
+        "Children's Programmes", "Social Affairs", "Religion", "Phone In", "Travel", "Leisure",
+        "Jazz Music", "Country Music", "National Music", "Oldies Music", "Folk Music",
+        "Documentary", "Alarm Test", "Alarm"
+    )
+    private val PTY_RBDS = listOf(
+        "None", "News", "Information", "Sports", "Talk", "Rock", "Classic Rock", "Adult Hits",
+        "Soft Rock", "Top 40", "Country", "Oldies", "Soft", "Nostalgia", "Jazz", "Classical",
+        "Rhythm and Blues", "Soft R&B", "Foreign Language", "Religious Music", "Religious Talk",
+        "Personality", "Public", "College", "Spanish Talk", "Spanish Music", "Hip Hop",
+        "", "", "Weather", "Emergency Test", "Emergency"
+    )
+
+    /** Null when the code is out of range or that slot is unassigned in this standard. */
+    fun programmeTypeName(code: Int?, band: FmBandPlan): String? {
+        if (code == null || code <= 0) return null
+        val table = if (band.rdsStd == qcom.fmradio.FmConfig.FM_RDS_STD_RBDS) PTY_RBDS else PTY_RDS
+        return table.getOrNull(code)?.takeIf { it.isNotEmpty() }
+    }
+
+    fun ensure(ctx: Context): QualcommFmHardwareEngine {
+        engine?.let { return it }
+        val eng = QualcommFmHardwareEngine(ctx.applicationContext)
+        engine = eng
+        val app = ctx.applicationContext
+        scope.launch {
+            launch { eng.isPoweredOn.collect { v -> _state.update { it.copy(isPowerOn = v) } } }
+            launch { eng.hardwareOnline.collect { v -> _state.update { it.copy(isHardwareOnline = v) } } }
+            launch { eng.hardwareError.collect { v -> _state.update { it.copy(hardwareError = v) } } }
+            launch { eng.band.collect { v -> _state.update { it.copy(band = v) } } }
+            launch { eng.spectrum.collect { v -> _state.update { it.copy(spectrum = v) } } }
+            launch { eng.audioLevel.collect { v -> _state.update { it.copy(audioLevel = v) } } }
+            launch { eng.currentFrequencyKHz.collect { v -> _state.update { it.copy(frequencyKHz = v) } } }
+            launch { eng.isStereo.collect { v -> _state.update { it.copy(isStereo = v) } } }
+            launch { eng.stereoRequested.collect { v -> _state.update { it.copy(stereoRequested = v) } } }
+            launch { eng.isMuted.collect { v -> _state.update { it.copy(isMuted = v) } } }
+            launch { eng.rssi.collect { v -> _state.update { it.copy(rssi = v) } } }
+            launch { eng.signal.collect { v -> _state.update { it.copy(signal = v) } } }
+            launch { eng.stationName.collect { v -> _state.update { it.copy(stationName = v) } } }
+            launch { eng.radioText.collect { v -> _state.update { it.copy(radioText = v) } } }
+            launch { eng.programmeType.collect { v -> _state.update { it.copy(programmeType = v) } } }
+            launch { eng.programmeId.collect { v -> _state.update { it.copy(programmeId = v) } } }
+            launch { eng.rdsAvailable.collect { v -> _state.update { it.copy(rdsAvailable = v) } } }
+            launch { eng.presets.collect { v -> _state.update { it.copy(favorites = v) } } }
+            launch { eng.isScanning.collect { v -> _state.update { it.copy(isScanning = v) } } }
+            launch { eng.scanProgress.collect { v -> _state.update { it.copy(scanProgress = v) } } }
+            launch { eng.scanResults.collect { v -> _state.update { it.copy(scanResults = v) } } }
+            launch { eng.volumeIndex.collect { v -> _state.update { it.copy(volumeIndex = v) } } }
+            launch { eng.volumeMax.collect { v -> _state.update { it.copy(volumeMax = v) } } }
+            launch { eng.afJumpEnabled.collect { v -> _state.update { it.copy(afJump = v) } } }
+            launch { eng.softMuteEnabled.collect { v -> _state.update { it.copy(softMute = v) } } }
+            launch { eng.seekSensitivity.collect { v -> _state.update { it.copy(seekSensitivity = v) } } }
+            launch { eng.diagnostics.collect { v -> _state.update { it.copy(diagnostics = v) } } }
+
+            // The headphone cable is the FM antenna on a board with no internal one, so this is
+            // a real reading of what is plugged in, not a decoration.
+            launch {
+                val am = app.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                while (true) {
+                    val plugged = runCatching {
+                        am?.getDevices(AudioManager.GET_DEVICES_OUTPUTS)?.any {
+                            it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+                                it.type == android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET
+                        } == true
+                    }.getOrDefault(false)
+                    _state.update { if (it.isHeadsetPlugged == plugged) it else it.copy(isHeadsetPlugged = plugged) }
+                    delay(1500)
+                }
+            }
+
+            // Recording length comes from the bytes actually written to the WAV.
+            launch {
+                while (true) {
+                    val rec = engine?.isRecording() == true
+                    val bytes = engine?.recordedBytes() ?: 0L
+                    _state.update {
+                        if (it.isRecording == rec && it.recordedBytes == bytes) it
+                        else it.copy(isRecording = rec, recordedBytes = bytes)
                     }
+                    delay(500)
                 }
             }
         }
-        engine?.powerOn()
+        return eng
     }
 
-    fun tune(ctx: Context, newFreqKHz: Int) {
-        engine?.tune(newFreqKHz)
-    }
+    fun initAndPowerOn(ctx: Context) { ensure(ctx).powerOn() }
 
-    fun seek(next: Boolean) {
-        engine?.seek(next)
-    }
+    fun powerOff() { engine?.powerOff() }
+    fun togglePower(ctx: Context) { ensure(ctx).togglePower() }
+    fun tune(freqKHz: Int) { engine?.tune(freqKHz) }
+    fun step(up: Boolean) { engine?.step(up) }
+    fun seek(up: Boolean) { engine?.seek(up) }
+    fun cancelSeek() { engine?.cancelSeek() }
+    fun scanBand() { engine?.scanBand() }
+    fun toggleMute() { engine?.toggleMute() }
+    fun setStereo(on: Boolean) { engine?.setStereo(on) }
+    fun setBand(plan: FmBandPlan) { engine?.setBand(plan) }
+    fun setVolumeIndex(i: Int) { engine?.setVolumeIndex(i) }
+    fun setAfJump(on: Boolean) { engine?.setAfJump(on) }
+    fun setSoftMute(on: Boolean) { engine?.setSoftMute(on) }
+    fun setSeekSensitivity(level: Int) { engine?.setSeekSensitivity(level) }
+    fun togglePreset(freqKHz: Int) { engine?.togglePreset(freqKHz) }
 
-    fun toggleFavorite(freqKHz: Int) {
-        val favs = _state.value.favorites.toMutableList()
-        if (favs.contains(freqKHz)) {
-            favs.remove(freqKHz)
-        } else {
-            favs.add(freqKHz)
-            favs.sort()
+    /**
+     * The tuner screen being in front of the user is what decides whether the RADIO_TUNER
+     * capture is held open on a wired route: the spectrum needs it, and nothing else does while
+     * the radio plays through the hardware loopback in the background.
+     */
+    fun setUiVisible(visible: Boolean) { engine?.setUiVisible(visible) }
+
+    /**
+     * Start or stop a real WAV capture of the live FM PCM.
+     *
+     * Returns the message to show. It can fail honestly: with no audio bridge running there is
+     * nothing to tee, and the caller is told that rather than shown a red dot over silence.
+     */
+    fun toggleRecording(ctx: Context): String {
+        val eng = engine ?: return "Tuner is not running"
+        if (eng.isRecording()) {
+            val f = eng.stopRecording()
+            return if (f != null) "Saved ${f.name}" else "Recording stopped"
         }
-        _state.value = _state.value.copy(favorites = favs)
-        engine?.savePresets(favs)     // persisted; survives restarts (was in-memory only)
-    }
-
-    fun toggleRecording(ctx: Context) {
-        if (_state.value.isRecording) {
-            engine?.stopRecording()
-            _state.value = _state.value.copy(isRecording = false)
-        } else {
-            // Real WAV capture of the live FM PCM into Music/FM Recordings/.
-            val dir = java.io.File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC), "FM Recordings")
-            val f = java.io.File(dir, "FM_%.1f_%s.wav".format(_state.value.frequencyKHz / 1000f,
-                java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())))
-            val ok = engine?.startRecording(f) ?: false
-            _state.value = _state.value.copy(isRecording = ok)
-            if (!ok) android.widget.Toast.makeText(ctx, "Recording failed (needs storage + FM playing)", android.widget.Toast.LENGTH_SHORT).show()
-            else android.widget.Toast.makeText(ctx, "Recording ${f.name}", android.widget.Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun toggleMute() {
-        if (_state.value.isMuted) engine?.unmute() else engine?.mute()
-    }
-
-    fun toggleStereo() {
-        engine?.toggleStereo()
-    }
-
-    fun stop(ctx: Context? = null) {
-        engine?.powerOff()
-        _state.value = _state.value.copy(isPowerOn = false)
+        if (!_state.value.isHardwareOnline) return "Turn the tuner on first"
+        val dir = java.io.File(
+            android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_MUSIC),
+            "FM Recordings"
+        )
+        val name = "FM_%.1f_%s.wav".format(
+            _state.value.frequencyKHz / 1000f,
+            java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(java.util.Date())
+        )
+        val f = java.io.File(dir, name)
+        return if (eng.startRecording(f)) "Recording ${f.name}" else "Recording failed (no FM audio to capture)"
     }
 }
 
@@ -188,17 +251,18 @@ class MikuFMRadioActivity : ComponentActivity() {
 
     private fun hideSystemBars() {
         try {
+            @Suppress("DEPRECATION")
             window.decorView.systemUiVisibility = (
                 android.view.View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
-            val insetsController = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
-            insetsController.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            insetsController.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                    or android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    or android.view.View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                    or android.view.View.SYSTEM_UI_FLAG_FULLSCREEN
+                )
+            val c = androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)
+            c.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            c.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars() or androidx.core.view.WindowInsetsCompat.Type.navigationBars())
         } catch (_: Throwable) {}
     }
 
@@ -210,18 +274,30 @@ class MikuFMRadioActivity : ComponentActivity() {
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.addFlags(
             android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN or
-            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
         )
         hideSystemBars()
-        FmRadioManager.initAndPowerOn(this)
-        setContent {
-            MikuFMRadioScreen(onBack = { finish() })
-        }
+
+        // Hardware volume keys should move the radio, so route them at STREAM_MUSIC — which is
+        // also the stream the engine's fm_volume tracks.
+        volumeControlStream = AudioManager.STREAM_MUSIC
+
+        // Build the engine but do not switch the tuner on behind the user's back: the power
+        // button in the UI does that, and the service keeps it on afterwards.
+        FmRadioManager.ensure(this)
+
+        setContent { MikuFMRadioScreen(onBack = { finish() }) }
     }
 
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        FmRadioManager.setUiVisible(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        FmRadioManager.setUiVisible(false)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -229,634 +305,13 @@ class MikuFMRadioActivity : ComponentActivity() {
         if (hasFocus) hideSystemBars()
     }
 
+    /**
+     * Leaving the screen no longer kills the radio. It used to call powerOff() here, which meant
+     * the tuner could not survive a trip to the home screen; [MikuFmService] owns the lifetime
+     * now and stops itself when the engine powers down.
+     */
     override fun onDestroy() {
         super.onDestroy()
-        FmRadioManager.stop(this)
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun MikuFMRadioScreen(onBack: () -> Unit) {
-    val ctx = LocalContext.current
-    val fmState by FmRadioManager.state.collectAsState()
-    var chibiReaction by remember { mutableStateOf("📻") }
-
-    val mhzDisplay = String.format(Locale.US, "%.1f", fmState.frequencyKHz / 1000.0)
-    val isFav = fmState.favorites.contains(fmState.frequencyKHz)
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(CyberDarkBg)
-    ) {
-        Image(
-            painter = painterResource(id = R.drawable.miku_bg_fm),
-            contentDescription = "Miku FM Tuner Artwork",
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop
-        )
-
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color(0xCC040D12),
-                            Color(0x77000000),
-                            Color(0xF5040D12)
-                        )
-                    )
-                )
-        )
-
-        Column(
-            Modifier
-                .fillMaxSize()
-                .systemBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Header Bar
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                MikuBackButton(onClick = onBack)
-
-                Text(
-                    "MIKU CYBER FM TUNER",
-                    color = MikuCyan,
-                    fontSize = 12.5.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = AudiowideFont,
-                    letterSpacing = 1.sp
-                )
-
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(if (fmState.isHeadsetPlugged) Color(0x3300E5FF) else Color(0x33FF4081))
-                        .border(1.dp, if (fmState.isHeadsetPlugged) MikuCyan else MikuNeonPink, RoundedCornerShape(10.dp))
-                        .padding(horizontal = 7.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        if (fmState.isHeadsetPlugged) "ANTENNA OK" else "PLUG HEADSET",
-                        color = if (fmState.isHeadsetPlugged) MikuCyan else MikuNeonPink,
-                        fontSize = 7.5.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = AudiowideFont
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // Holographic Frequency Banner Card
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xDD0A1E26))
-                    .border(1.2.dp, if (fmState.isPowerOn) MikuCyan else Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
-            ) {
-                Column(
-                    Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Status only from real chip state: online (acked enable), starting,
-                            // error, or standby. Stereo/RSSI print "—" until the chip reports them.
-                            val online = fmState.isHardwareOnline
-                            val err = fmState.hardwareError
-                            val statusColor = when {
-                                online -> MikuCyan
-                                err != null -> MikuNeonPink
-                                fmState.isPowerOn -> Color(0xFFFFD54F)
-                                else -> Color.Gray
-                            }
-                            Box(
-                                Modifier
-                                    .size(7.dp)
-                                    .clip(CircleShape)
-                                    .background(statusColor)
-                            )
-                            Spacer(Modifier.width(5.dp))
-                            Text(
-                                when {
-                                    online -> {
-                                        val mode = when (fmState.isStereo) { true -> "FM STEREO"; false -> "FM MONO"; null -> "FM" }
-                                        "$mode • RSSI ${fmState.rssi?.toString() ?: "—"}"
-                                    }
-                                    err != null -> "TUNER ERROR"
-                                    fmState.isPowerOn -> "STARTING TUNER…"
-                                    else -> "STANDBY"
-                                },
-                                color = statusColor,
-                                fontSize = 8.5.sp,
-                                fontWeight = FontWeight.Bold,
-                                fontFamily = AudiowideFont
-                            )
-                        }
-
-                        IconButton(
-                            onClick = { FmRadioManager.toggleFavorite(fmState.frequencyKHz) },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                if (isFav) Icons.Default.Star else Icons.Default.StarBorder,
-                                contentDescription = "Favorite",
-                                tint = if (isFav) MikuNeonPink else Color.Gray,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = mhzDisplay,
-                            color = if (fmState.isPowerOn) Color.White else Color.Gray,
-                            fontSize = 38.sp,
-                            fontWeight = FontWeight.Black,
-                            fontFamily = AudiowideFont,
-                            letterSpacing = 1.sp
-                        )
-                        Spacer(Modifier.width(5.dp))
-                        Text(
-                            text = "MHz",
-                            color = MikuCyan,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = AudiowideFont,
-                            modifier = Modifier.padding(bottom = 5.dp)
-                        )
-                    }
-
-                    Text(
-                        // RDS name when decoded; otherwise the engine's real status/RDS text, or
-                        // "No RDS name" — never an invented station or a wrong chip name.
-                        text = when {
-                            fmState.stationName.isNotEmpty() -> fmState.stationName
-                            fmState.radioText.isNotBlank() -> fmState.radioText
-                            fmState.isHardwareOnline -> "No RDS name"
-                            else -> "—"
-                        },
-                        color = MikuTextSecondary,
-                        fontSize = 9.5.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Box(
-                    Modifier
-                        .align(Alignment.TopEnd)
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(Color(0x3300E5FF))
-                        .border(1.dp, MikuCyan, CircleShape)
-                        .clickable {
-                            val reactions = listOf("📻", "🎶", "💙", "⚡", "✨", "🎤", "🎧")
-                            chibiReaction = reactions.random()
-                        },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Image(
-                        painter = painterResource(id = R.drawable.ic_search_head_miku),
-                        contentDescription = "Chibi DJ",
-                        modifier = Modifier.size(26.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // ============================================================
-            // LIVE AUDIO SPECTRUM + WATERFALL (real FM PCM) over a band tuning strip
-            // ============================================================
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                RadioWaterfallSpectrum(
-                    currentFreqKHz = fmState.frequencyKHz,
-                    isPowerOn = fmState.isPowerOn,
-                    isHardwareOnline = fmState.isHardwareOnline,
-                    hardwareError = fmState.hardwareError,
-                    spectrum = fmState.spectrum,
-                    favorites = fmState.favorites,
-                    onTuneFreq = { newFreq -> FmRadioManager.tune(ctx, newFreq) }
-                )
-            }
-
-            Spacer(Modifier.height(6.dp))
-
-            // ============================================================
-            // BOTTOM TUNING GLYPHS & RECORD BUTTON
-            // Left & Right: Clean Cyber Glowing Vector Glyphs (Tap: 0.1 step, Hold: Auto-Seek)
-            // ============================================================
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // LEFT GLYPH: Step Down on Tap, Auto-Seek Down on Long Press
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(Color(0x3300E5FF), Color(0x0004141E))
-                            )
-                        )
-                        .combinedClickable(
-                            onClick = { FmRadioManager.tune(ctx, fmState.frequencyKHz - 100) },
-                            onLongClick = { FmRadioManager.seek(false) }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "‹",
-                        color = MikuCyan,
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Light,
-                        fontFamily = AudiowideFont,
-                        textAlign = TextAlign.Center
-                    )
-                }
-
-                // CENTER RECORD BUTTON
-                FmRecordButton(
-                    isRecording = fmState.isRecording,
-                    onClick = { FmRadioManager.toggleRecording(ctx) }
-                )
-
-                // RIGHT GLYPH: Step Up on Tap, Auto-Seek Up on Long Press
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(Color(0x3300E5FF), Color(0x0004141E))
-                            )
-                        )
-                        .combinedClickable(
-                            onClick = { FmRadioManager.tune(ctx, fmState.frequencyKHz + 100) },
-                            onLongClick = { FmRadioManager.seek(true) }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "›",
-                        color = MikuCyan,
-                        fontSize = 32.sp,
-                        fontWeight = FontWeight.Light,
-                        fontFamily = AudiowideFont,
-                        textAlign = TextAlign.Center
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // Preset Favorite Stations (the user's own; empty until a station is starred)
-            if (fmState.favorites.isEmpty()) {
-                Text(
-                    "No presets yet — tap ☆ to save the current station",
-                    color = MikuTextSecondary,
-                    fontSize = 9.sp,
-                    fontFamily = AudiowideFont,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                )
-            }
-            LazyRow(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(fmState.favorites) { freq ->
-                    val isCurrent = fmState.frequencyKHz == freq
-                    val freqText = String.format(Locale.US, "%.1f", freq / 1000.0)
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (isCurrent) MikuCyan else Color(0xDD0A1E26))
-                            .border(1.dp, if (isCurrent) MikuCyan else CyberGlassBorder, RoundedCornerShape(10.dp))
-                            .clickable { FmRadioManager.tune(ctx, freq) }
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = "$freqText MHz",
-                            color = if (isCurrent) Color.Black else Color.White,
-                            fontSize = 9.5.sp,
-                            fontWeight = FontWeight.Bold,
-                            fontFamily = AudiowideFont
-                        )
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(4.dp))
-
-            // Pixel-Style Hatsune Miku Gesture Navigation Pill Bar (Flush to bottom edge)
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(14.dp)
-                    .padding(bottom = 1.dp)
-                    .pointerInput(Unit) {
-                        var startTime = 0L
-                        var totalY = 0f
-                        detectDragGestures(
-                            onDragStart = {
-                                startTime = android.os.SystemClock.elapsedRealtime()
-                                totalY = 0f
-                            },
-                            onDragEnd = {
-                                val duration = android.os.SystemClock.elapsedRealtime() - startTime
-                                val finalY = totalY
-                                if (finalY < -30f) {
-                                    if (duration >= 250L || finalY < -100f) {
-                                        // Swipe up & hold: Open Recents Switcher in Launcher
-                                        val recentsIntent = ctx.packageManager.getLaunchIntentForPackage("com.miku.launcher")?.apply {
-                                            putExtra("open_recents", true)
-                                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
-                                        }
-                                        if (recentsIntent != null) try { ctx.startActivity(recentsIntent) } catch (_: Throwable) {}
-                                    } else {
-                                        // Quick swipe up: Home
-                                        val launcherIntent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-                                            addCategory(android.content.Intent.CATEGORY_HOME)
-                                            flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
-                                        }
-                                        try { ctx.startActivity(launcherIntent) } catch (_: Throwable) {}
-                                    }
-                                }
-                            },
-                            onDrag = { change, dragAmount ->
-                                change.consume()
-                                totalY += dragAmount.y
-                            }
-                        )
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Box(
-                    Modifier
-                        .width(64.dp)
-                        .height(3.5.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(MikuCyan.copy(alpha = 0.9f))
-                )
-            }
-        }
-    }
-}
-
-/**
- * Top 40 %: live audio spectrum of the FM PCM (log-spaced 60 Hz–15 kHz bins from the engine).
- * Bottom 60 %: waterfall = history of that spectrum. The pink marker + bottom scale are the FM
- * band (87.5–108 MHz) tuning strip; tap/drag anywhere to tune. Nothing is synthesised: with the
- * tuner off, starting, or silent the plot is flat.
- */
-@Composable
-fun RadioWaterfallSpectrum(
-    currentFreqKHz: Int,
-    isPowerOn: Boolean,
-    isHardwareOnline: Boolean,
-    hardwareError: String?,
-    spectrum: FloatArray,
-    favorites: List<Int>,
-    onTuneFreq: (Int) -> Unit
-) {
-    val binCount = QualcommFmHardwareEngine.SPECTRUM_BINS
-    val rowCount = 20
-    // Waterfall history: newest row first. Each engine update (a new FloatArray) pushes one row.
-    var rows by remember { mutableStateOf(List(rowCount) { FloatArray(binCount) }) }
-    LaunchedEffect(spectrum) {
-        rows = if (spectrum.size == binCount) (listOf(spectrum) + rows).take(rowCount)
-        else List(rowCount) { FloatArray(binCount) }
-    }
-    val live = if (spectrum.size == binCount) spectrum else FloatArray(binCount)
-
-    Box(
-        Modifier
-            .fillMaxSize()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF040D12))
-            .border(1.2.dp, CyberGlassBorder, RoundedCornerShape(14.dp))
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val frac = (offset.x / size.width).coerceIn(0f, 1f)
-                    val targetKHz = (87500 + frac * (108000 - 87500)).roundToInt()
-                    val roundedKHz = ((targetKHz + 50) / 100) * 100
-                    onTuneFreq(roundedKHz)
-                }
-            }
-            .pointerInput(Unit) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    val frac = (change.position.x / size.width).coerceIn(0f, 1f)
-                    val targetKHz = (87500 + frac * (108000 - 87500)).roundToInt()
-                    val roundedKHz = ((targetKHz + 50) / 100) * 100
-                    onTuneFreq(roundedKHz)
-                }
-            }
-    ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
-            val fftHeight = h * 0.40f
-            val scaleHeight = 10.dp.toPx()
-            val waterfallHeight = h * 0.60f - scaleHeight
-            val rowHeight = waterfallHeight / rowCount
-            val binWidth = w / binCount
-
-            // Tuned position on the band strip (87.5–108 MHz across the width)
-            val tunedFrac = ((currentFreqKHz - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f)
-
-            // 1. Waterfall = history of the REAL spectrum (row 0 newest)
-            for (r in 0 until rowCount) {
-                val y = fftHeight + r * rowHeight
-                val row = rows.getOrNull(r)
-                for (b in 0 until binCount) {
-                    val mag = row?.getOrNull(b) ?: 0f
-                    val color = when {
-                        mag < 0.20f -> Color(0xFF031622)
-                        mag < 0.45f -> Color(0xFF004D5A)
-                        mag < 0.70f -> Color(0xFF00B4D8)
-                        mag < 0.85f -> Color(0xFF00E5FF)
-                        else -> Color(0xFFFF4081)
-                    }
-                    drawRect(
-                        color = color,
-                        topLeft = Offset(b * binWidth, y),
-                        size = Size(binWidth + 0.5f, rowHeight + 0.5f)
-                    )
-                }
-            }
-
-            // 1b. Band scale strip under the waterfall: favourites as ticks, tuned marker below.
-            val scaleTop = fftHeight + waterfallHeight
-            drawRect(Color(0xFF020A0F), topLeft = Offset(0f, scaleTop), size = Size(w, scaleHeight))
-            favorites.forEach { f ->
-                val fx = ((f - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f) * w
-                drawLine(MikuPink.copy(alpha = 0.8f), Offset(fx, scaleTop), Offset(fx, scaleTop + scaleHeight), strokeWidth = 1.5.dp.toPx())
-            }
-            for (mhz in 88..108 step 2) {
-                val sx = ((mhz * 1000 - 87500f) / (108000f - 87500f)).coerceIn(0f, 1f) * w
-                drawLine(MikuTeal.copy(alpha = 0.35f), Offset(sx, scaleTop + scaleHeight * 0.5f), Offset(sx, scaleTop + scaleHeight), strokeWidth = 1f)
-            }
-
-            // 2. Live spectrum curve from the real PCM (flat when nothing flows)
-            val fftPath = Path()
-            val step = w / (binCount - 1)
-            fftPath.moveTo(0f, fftHeight)
-
-            for (i in 0 until binCount) {
-                val x = i * step
-                val mag = live[i].coerceIn(0f, 1f)
-                val y = fftHeight - (mag * (fftHeight - 6f))
-                if (i == 0) fftPath.moveTo(x, y) else fftPath.lineTo(x, y)
-            }
-
-            val fillPath = Path().apply {
-                addPath(fftPath)
-                lineTo(w, fftHeight)
-                lineTo(0f, fftHeight)
-                close()
-            }
-
-            drawPath(
-                path = fillPath,
-                brush = Brush.verticalGradient(
-                    listOf(Color(0x8800E5FF), Color(0x1100E5FF)),
-                    startY = 0f,
-                    endY = fftHeight
-                )
-            )
-
-            drawPath(
-                path = fftPath,
-                color = MikuTeal,
-                style = Stroke(width = 2.dp.toPx())
-            )
-
-            // 3. Tuned Carrier Frequency Marker
-            val markerX = tunedFrac * w
-            drawLine(
-                color = MikuPink,
-                start = Offset(markerX, 0f),
-                end = Offset(markerX, h),
-                strokeWidth = 2.dp.toPx()
-            )
-        }
-
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 3.dp),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(
-                "LIVE AUDIO SPECTRUM · FM PCM 60 Hz–15 kHz",
-                color = MikuTeal.copy(alpha = 0.85f),
-                fontSize = 7.5.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Text(
-                when {
-                    isHardwareOnline -> "HARDWARE ACTIVE"
-                    hardwareError != null -> "TUNER ERROR"
-                    isPowerOn -> "STARTING…"
-                    else -> "STANDBY"
-                },
-                color = when {
-                    isHardwareOnline -> MikuPink
-                    hardwareError != null -> MikuNeonPink
-                    isPowerOn -> Color(0xFFFFD54F)
-                    else -> Color.Gray
-                },
-                fontSize = 7.5.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
-
-@Composable
-fun FmRecordButton(
-    isRecording: Boolean,
-    onClick: () -> Unit
-) {
-    val infiniteTransition = rememberInfiniteTransition(label = "recPulse")
-    val pulseScale by infiniteTransition.animateFloat(
-        initialValue = 1f,
-        targetValue = if (isRecording) 1.25f else 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseScale"
-    )
-
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(54.dp)
-    ) {
-        if (isRecording) {
-            Box(
-                Modifier
-                    .size((44 * pulseScale).dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFFFF1744).copy(alpha = 0.35f))
-                    .border(1.5.dp, Color(0xFFFF1744), CircleShape)
-            )
-        }
-
-        IconButton(
-            onClick = onClick,
-            modifier = Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .background(
-                    if (isRecording) Brush.verticalGradient(listOf(Color(0xFFFF1744), Color(0xFFB71C1C)))
-                    else Brush.verticalGradient(listOf(Color(0xEE0A1E26), Color(0xFF040D12)))
-                )
-                .border(1.5.dp, if (isRecording) Color(0xFFFF5252) else CyberGlassBorder, CircleShape)
-        ) {
-            if (isRecording) {
-                Icon(
-                    Icons.Default.Stop,
-                    contentDescription = "Stop Recording",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
-                )
-            } else {
-                Box(
-                    Modifier
-                        .size(14.dp)
-                        .clip(CircleShape)
-                        .background(Color(0xFFFF1744))
-                )
-            }
-        }
+        Log.d("MikuFMRadioActivity", "activity gone; tuner state left to MikuFmService")
     }
 }
