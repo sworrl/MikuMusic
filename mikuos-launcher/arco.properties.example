@@ -1,0 +1,23 @@
+# arcobocconotto RGB fleet integration — local dev secrets template.
+#
+# Copy this file to "arco.properties" (same directory) and fill in real values
+# ONLY if you want the "direct key" auth path (pre-shared HMAC-SHA512, bypasses
+# interactive SAS pairing) available for local builds. arco.properties is
+# gitignored and NEVER read into a .kt source literal — build.gradle.kts loads
+# it at configure time into BuildConfig fields, which ArcoConfig.kt reads as
+# fallback defaults only.
+#
+# None of this is required: with no arco.properties present, the app falls
+# back to mDNS discovery (_arcobocconotto._tcp) + interactive 6-digit SAS
+# pairing, and the resulting Bearer token is stored in EncryptedSharedPreferences
+# at runtime instead.
+
+# Pre-shared HMAC-SHA512 key id + secret (see PAIRING_SPEC.md / API_REFERENCE.md
+# "Direct / Scripting Auth"). Leave blank to disable the direct-key auth path.
+ARCO_HMAC_KEY_ID=
+ARCO_HMAC_SECRET=
+
+# Optional endpoint overrides. Leave blank to use interactive discovery/entry
+# only (recommended) instead of baking a network address into the build.
+ARCO_LAN_URL=
+ARCO_PUBLIC_URL=
