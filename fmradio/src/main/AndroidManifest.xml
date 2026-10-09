@@ -4,6 +4,28 @@
     <!-- AudioRecord(MediaRecorder.AudioSource.RADIO_TUNER=1998) needs this; it's a
          privileged permission only granted to platform-signed system apps — which is
          why this ships in /system_ext/app and is signed with the platform key. -->
+    <!--
+      Required by the VENDOR jar, not by anything we wrote.
+
+      qcom.fmradio.FmReceiver.enable(FmConfig, Context) calls WifiManager.getWifiState() as part
+      of its FM/WLAN coexistence check, and WifiServiceImpl.enforceAccessPermission throws
+      SecurityException without this. Observed on-device 2026-10-09 once the tuner was finally
+      reachable: the JNI loaded, openV4L2Radio returned 82, soc came back as cherokee and the
+      receiver reached FMRxOn, and then enable() threw before returning, so the engine reported
+      "FM power-on FAILED" on hardware that had in fact powered on.
+
+      ACCESS_WIFI_STATE is a normal (install-time) permission, so declaring it is the whole fix.
+
+      NOT copied wholesale from stock FM2, which declares 29 permissions including MANAGE_USERS,
+      INTERACT_ACROSS_USERS_FULL, STATUS_BAR and WRITE_SECURE_SETTINGS. Disassembling
+      qcom.fmradio.jar shows only three permission-sensitive framework calls in the whole
+      library. This one. BluetoothAdapter.getDefaultAdapter(), also inside enable(), but the
+      adapter is assigned to a local and nothing is ever invoked on it, so no BLUETOOTH
+      permission is needed. And TelephonyManager.listen(LISTEN_CALL_STATE), which lives in
+      registerDataConnectionStateListener(), a method this app never calls, so READ_PHONE_STATE
+      is not needed either. The rest of stock's list is for stock's own UI.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
