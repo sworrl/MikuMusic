@@ -722,22 +722,19 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
         // weighted rather than uniform, and it is seeded on track.id so a given track always gets
         // the same tape back.
         //
-        // The two things it must NOT do: cover the brand text every single time (y 8.25, which is
-        // why the label-well band starts at 9 rather than at the top of the band), and collide with
-        // the volume fader, which owns +38 mm along the length.
+        // The printed label band is y 3.4..17.2 mm. Place the masking tape strictly in the
+        // label well (y 10.2..14.8 mm), clear of the brand text at y 8.25 mm and well above the
+        // window and reels/spindle holes (top of hub is y=17.5 mm; hub center is y=28.4 mm).
+        // The tape is never allowed to cover the spindle drive holes or window.
         val place = remember(track.id) {
             val r = kotlin.random.Random(track.id + 700)
-            val cassetteY = when {
-                r.nextFloat() < 0.58f -> 9f + r.nextFloat() * 8.5f    // label well, the usual spot
-                r.nextFloat() < 0.75f -> 18f + r.nextFloat() * 7f     // straddling the band's edge
-                else -> 25f + r.nextFloat() * 8f                      // down over the window/reels
-            }
-            val alongMm = -17f + r.nextFloat() * 31f                  // clear of the fader at +38
+            val cassetteY = 10.2f + r.nextFloat() * 4.6f
+            val alongMm = -10f + r.nextFloat() * 20f
             Pair(31.75f - cassetteY, alongMm)
         }
         val stripX = mmDp * place.first
         val stripAlong = mmDp * place.second
-        val labelJitterY = remember(track.id) { kotlin.random.Random(track.id).nextFloat() * 4f - 2f }
+        val labelJitterY = remember(track.id) { kotlin.random.Random(track.id).nextFloat() * 2f - 1f }
         val labelJitterX = remember(track.id) { kotlin.random.Random(track.id + 1).nextFloat() * 1.5f - 0.75f }
 
         // Bespoke authentic era brand typography & printing texture on the upper cassette rail
@@ -749,24 +746,13 @@ fun TapeScreen(track: Track, player: ExoPlayer, onExit: () -> Unit) {
                 .rotate(90f)
         )
 
-        // Masking tape draws LAST, and pins itself above its siblings with an explicit zIndex.
-        // A physical mixtape has the tape stuck ON TOP of whatever the shell already had printed
-        // on it, so anything the shell or the branding pass paints across the label band has to go
-        // UNDER the strip. This used to sit before BespokeTapeBranding, and the STUDIO-family
-        // layouts (which lay a cream paper strip across the whole label band, see
-        // brandStripBackground) painted straight over the strip and its handwriting. The zIndex is
-        // belt-and-braces: composition order alone already fixes it, but the order here is easy to
-        // disturb when something new gets added to this Box, and the failure is silent.
+        // Masking tape draws above the shell and branding, strictly across the label band.
         PhotorealisticMaskingTapeLabel(
             track = track,
             modifier = Modifier.align(Alignment.Center)
                 .zIndex(1f)
                 .offset(x = stripX + labelJitterX.dp, y = stripAlong + labelJitterY.dp)
         )
-
-        // The drive openings go back on LAST, above the masking tape's zIndex(1f). See
-        // drawSpindleOpenings: they are holes through the shell, so nothing sticks over them.
-        Canvas(Modifier.fillMaxSize().zIndex(2f)) { withCassetteTransform { drawSpindleOpenings(theme) } }
 
         // The deck's own VOLUME fader. Persistent by design: this is the ONE place in the OS with
         // its own volume control, and the app-wide modal stands down while tape mode is up.
@@ -2350,30 +2336,6 @@ private fun DrawScope.drawReel(cx: Float, cy: Float, tapeR: Float, angle: Float,
     }
 }
 
-/**
- * The two splined drive openings, drawn on their own so they can be laid over the top of anything
- * that has been stuck to the cassette face.
- *
- * These are holes straight through the shell, not printing. Nothing can sit on them: a strip of
- * masking tape laid across one would be bridging a gap, and you would still be looking through it
- * at the deck underneath. The tape's placement is rolled per track and is allowed to land anywhere
- * on the face, so rather than fence its position off around two fixed circles, the openings are
- * simply redrawn last and punch back through whatever landed on them.
- */
-private fun DrawScope.drawSpindleOpenings(t: TapeTheme) {
-    for (hubX in listOf(HUB_L_X, HUB_R_X)) {
-        val c = Offset(hubX, HUB_Y)
-        drawCircle(Color(0xFF0D0A08), SPINDLE_R + 1.2f, c)
-        drawCircle(Color(0xFFE8E5DC), SPINDLE_R, c)
-        drawCircle(Color(0x40000000), SPINDLE_R, c, style = Stroke(0.3f))
-        for (tooth in 0 until 6) {
-            val a = Math.toRadians((tooth * 60).toDouble())
-            val dir = Offset(cos(a).toFloat(), sin(a).toFloat())
-            drawLine(Color(0xFF0D0A08), c + dir * (SPINDLE_R - 1.6f), c + dir * SPINDLE_R, strokeWidth = 1.6f)
-            drawLine(Color(0x44FFFFFF), c + dir * (SPINDLE_R - 1.4f) + Offset(0.1f, 0.1f), c + dir * (SPINDLE_R - 0.2f), strokeWidth = 0.6f)
-        }
-    }
-}
 
 /**
  * A small, honest portrait of one cassette theme, for the picker.
@@ -3361,9 +3323,9 @@ private fun PhotorealisticMaskingTapeLabel(
     // a few degrees out, and every so often somebody slaps one on properly crooked, so the
     // distribution is a small base tilt plus an occasional larger one rather than one flat range.
     val rotation = remember(track.id) {
-        val crooked = seed.nextFloat() < 0.22f
-        val mag = if (crooked) 6f + seed.nextFloat() * 7f else seed.nextFloat() * 5f
-        if (seed.nextFloat() < 0.5f) -mag else mag
+        // Natural hand-applied tilt, kept within ±2.3 degrees so the strip stays cleanly
+        // within the cassette's label band and never dips toward the window or hubs.
+        seed.nextFloat() * 4.6f - 2.3f
     }
 
     // Not every tape is fresh — real masking tape picks up thumb grease, dust, rub marks from

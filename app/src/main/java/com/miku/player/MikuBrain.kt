@@ -198,7 +198,7 @@ object MikuBrain {
                     val uiUnderLoad = (now - lastUiActivityTime.get()) < 1500L
 
                     // ========================================================
-                    // 1. AUTONOMOUS LIVE PROBE: AUDIO DSP & CS43131 DIRECT ALSA
+                    // 1. AUTONOMOUS LIVE PROBE: AUDIO DSP & CS43198 DIRECT ALSA
                     // ========================================================
                     try {
                         val p = PlayerHolder.player

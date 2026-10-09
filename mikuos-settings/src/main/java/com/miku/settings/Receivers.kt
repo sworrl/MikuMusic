@@ -25,24 +25,6 @@ class BootReceiver : BroadcastReceiver() {
             "stop adbd 2>/dev/null; start adbd 2>/dev/null"
         )
 
-        val mode = PulsarLight.getMode(context)
-        val bright = PulsarLight.getBrightness(context)
-        PulsarLight.applyMode(context, mode, bright)
     }
 }
 
-class PulsarReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent?) {
-        val action = intent?.action ?: return
-        if (action == "com.m500.hardware.action.SET_PULSAR_MODE") {
-            val modeId = intent.getStringExtra("mode") ?: return
-            val mode = PulsarLight.Mode.values().firstOrNull { it.id == modeId } ?: return
-            PulsarLight.setMode(context, mode)
-        } else if (action == "com.m500.hardware.action.SET_PULSAR_RGB") {
-            val r = intent.getIntExtra("r", 0)
-            val b = intent.getIntExtra("b", 255)
-            val brightness = intent.getIntExtra("brightness", 255)
-            PulsarLight.writeDual(r, b, brightness)
-        }
-    }
-}

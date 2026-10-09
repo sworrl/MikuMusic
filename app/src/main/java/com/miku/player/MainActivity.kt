@@ -1201,8 +1201,6 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                     PlayerPreferences.saveLastPlayback(ctx, currentTrack!!.id, player.currentPosition)
                     PlayerPreferences.saveQueueIndex(ctx, player.currentMediaItemIndex)
                 }
-                // Root-gated, no-op without root/opt-in — see PulsarLight's doc comment.
-                kotlinx.coroutines.MainScope().launch { PulsarLight.updateForPlayback(ctx, currentTrack, p) }
             }
             override fun onEvents(pl: Player, events: Player.Events) {
                 if (events.containsAny(Player.EVENT_MEDIA_ITEM_TRANSITION, Player.EVENT_TIMELINE_CHANGED, Player.EVENT_POSITION_DISCONTINUITY)) {
@@ -1214,8 +1212,7 @@ private fun App(tracks: List<Track>, player: ExoPlayer, loading: Boolean = false
                             currentTrack = it
                             PlayerPreferences.saveLastPlayback(ctx, it.id, pl.currentPosition)
                             PlayerPreferences.recordPlay(ctx, it.id, System.currentTimeMillis())   // history + play count
-                            historyTick++
-                            kotlinx.coroutines.MainScope().launch { PulsarLight.updateForPlayback(ctx, it, pl.isPlaying) }
+                            kotlinx.coroutines.MainScope().launch { }
                         }
                     }
                 }
@@ -6043,9 +6040,7 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
  */
 @Composable private fun RootFeaturesSection(ctx: android.content.Context) {
     val scope = rememberCoroutineScope()
-    var pulsarOn by remember { mutableStateOf(PlayerPreferences.loadPulsarEnabled(ctx)) }
     var cpuPerfOn by remember { mutableStateOf(PlayerPreferences.loadCpuPerfEnabled(ctx)) }
-    val ledWritable = remember { PulsarLight.isHardwareWritable() }
     var cpuSupported by remember { mutableStateOf<Boolean?>(null) }
     LaunchedEffect(Unit) { cpuSupported = CpuPerformance.isSupported() }
 
@@ -6069,19 +6064,6 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
         )
     }
 
-    Spacer(Modifier.height(10.dp))
-
-    SettingsToggleRow(
-        title = "Pulsar RGB Master Control",
-        subtitle = if (ledWritable) "Front indicator colour and animation engine"
-                   else "Not available on this unit — no writable LED node, so the setting is stored but the light will not respond",
-        checked = pulsarOn
-    ) { pulsarOn = it; scope.launch { PulsarLight.setEnabled(ctx, it) } }
-
-    if (pulsarOn) {
-        PulsarSettingsCard(ctx)
-        Spacer(Modifier.height(10.dp))
-    }
 
     if (cpuSupported == true) {
         SettingsToggleRow(
@@ -6102,108 +6084,6 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
     }
 }
 
-@Composable private fun PulsarSettingsCard(ctx: android.content.Context) {
-    val scope = rememberCoroutineScope()
-    var mode by remember { mutableStateOf(PulsarLight.getMode(ctx)) }
-    var brightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx)) }
-    var bpmSync by remember { mutableStateOf(PulsarLight.isBpmSyncEnabled(ctx)) }
-    var animSpeed by remember { mutableStateOf(PulsarLight.getAnimationSpeed(ctx)) }
-    // Real probe: are any LED sysfs nodes actually writable? The status chip below used to read a
-    // hardcoded "✨ ACTIVE" whether or not a single byte ever reached the diode.
-    val ledWritable = remember { PulsarLight.isHardwareWritable() }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(Brush.verticalGradient(listOf(Color(0xFF072428), Color(0xFF041417))))
-            .border(1.dp, MikuTealBright.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-            .padding(14.dp)
-    ) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text("Pulsar Cyber RGB Engine", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
-            Text(
-                if (ledWritable) "✨ LED NODE WRITABLE" else "LED NODE NOT WRITABLE",
-                color = if (ledWritable) MikuTealBright else Color(0xFFFFB300),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Black
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(mode.description, color = Muted, fontSize = 11.sp)
-        if (!ledWritable) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "These settings are saved, but this unit exposes no writable LED node to the player, so the chassis light will not change.",
-                color = Color(0xFFFFB300),
-                fontSize = 10.sp
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-        // Mode Selector Chips
-        androidx.compose.foundation.lazy.LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(PulsarLight.Mode.values().filter { it != PulsarLight.Mode.OFF }) { m ->
-                val isSel = m == mode
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(if (isSel) MikuTealBright.copy(alpha = 0.3f) else Color(0xFF0A3036))
-                        .border(1.dp, if (isSel) MikuTealBright else Color.Transparent, RoundedCornerShape(8.dp))
-                        .clickable {
-                            mode = m
-                            scope.launch { PulsarLight.setMode(ctx, m, brightness) }
-                        }
-                        .padding(horizontal = 10.dp, vertical = 6.dp)
-                ) {
-                    Text(m.label, color = if (isSel) Color.White else Muted, fontSize = 11.sp, fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Peak Brightness", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            Text("$brightness / 255", color = MikuTealBright, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-        }
-        androidx.compose.material3.Slider(
-            value = brightness.toFloat(),
-            onValueChange = {
-                brightness = it.toInt()
-                scope.launch { PulsarLight.setMode(ctx, mode, brightness) }
-            },
-            valueRange = 10f..255f,
-            colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = MikuTealBright, activeTrackColor = MikuTeal, inactiveTrackColor = Surface1)
-        )
-
-        if (mode == PulsarLight.Mode.CHROMA_RAINBOW) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Spectrum Cycle Speed", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                Text("${String.format("%.1f", animSpeed)}x", color = MikuPink, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
-            }
-            androidx.compose.material3.Slider(
-                value = animSpeed,
-                onValueChange = {
-                    animSpeed = it
-                    scope.launch { PulsarLight.setAnimationSpeed(ctx, it) }
-                },
-                valueRange = 0.5f..3.0f,
-                colors = androidx.compose.material3.SliderDefaults.colors(thumbColor = MikuPink, activeTrackColor = MikuPink, inactiveTrackColor = Surface1)
-            )
-        }
-
-        if (mode == PulsarLight.Mode.AUDIOPHILE_AUTO) {
-            SettingsToggleRow(
-                title = "Live BPM Rhythm Sync",
-                subtitle = "Cosine modulation in sync with playing track tempo",
-                checked = bpmSync
-            ) {
-                bpmSync = it
-                scope.launch { PulsarLight.setBpmSyncEnabled(ctx, it) }
-            }
-        }
-    }
-}
 
 @Composable private fun MikuSyncCard(ctx: android.content.Context) {
     val syncState by MikuSyncTransceiver.state.collectAsState()
@@ -6475,8 +6355,6 @@ private fun gracefulAppRestart(ctx: android.content.Context) {
                         .border(1.dp, MikuTealBright.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
                         .padding(18.dp)
                 ) {
-                    ConsentFeatureRow("⚡", "Pulsar RGB LED Synchronization", "Writes directly to the front notification LED kernel nodes to pulse signature Miku colors to audio FFT.")
-                    Spacer(Modifier.height(14.dp))
                     ConsentFeatureRow("🏎️", "Qualcomm High-Performance Governor", "Pins Snapdragon 680 performance cores to eliminate buffer underruns during bit-perfect DSD256 decoding.")
                     Spacer(Modifier.height(14.dp))
                     ConsentFeatureRow("🛡️", "Hardware Pocket Lock Controls", "Controls touchscreen digitizer inhibition and button routing when the Fn physical switch is toggled.")

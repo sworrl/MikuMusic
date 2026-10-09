@@ -98,6 +98,12 @@ object PlayerHolder {
         // DTA: make sure we're in the platform's direct-output allow-list BEFORE the first
         // AudioTrack is created — the framework checks it per-track at construction. This is what
         // routes playback bit-perfect (native rate, no mixer/SRC) to the dual CS43198 DACs.
+        // A fresh player means nothing has produced an output format yet, and the key we publish
+        // it to is a Settings.Global row that OUTLIVES this process. Left alone, the format of
+        // whatever played before the app was last killed would sit there being read as live — the
+        // anatomical observatory shows it unconditionally. Clear it here so the surfaces show
+        // "not published" until an AudioTrack actually exists again.
+        runCatching { MikuNowPlayingFormat.clear(app) }
         runCatching { MikuDirectAudio.ensureAllowListed(app) }
         // Full-range volume: kill HiBy's "volume lock" (Settings.Global vendor.audio.hw.volume_lock)
         // which caps STREAM_MUSIC at index 35/40 on the phone-out jacks — see MikuDirectAudio.

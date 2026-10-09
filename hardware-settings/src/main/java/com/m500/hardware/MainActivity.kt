@@ -74,10 +74,6 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
         mutableStateOf(Settings.Global.getInt(ctx.contentResolver, "m500_fn_allow_volume_wheel", 0) == 1)
     }
 
-    // Pulsar RGB
-    var pulsarEnabled by remember { mutableStateOf(PulsarLight.isEnabled(ctx)) }
-    var pulsarMode by remember { mutableStateOf(PulsarLight.getMode(ctx)) }
-    var pulsarBrightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx).toFloat()) }
 
     // USB DAC
     var usbDacActive by remember { mutableStateOf(UsbDacManager.isActive(ctx)) }
@@ -103,25 +99,15 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
             } catch (e: Throwable) {
                 Log.e("SettingsOverlayCheck", "Failed to query settings resources", e)
             }
-            try {
-                Log.i("PulsarTest", "Testing setSystemProperty for LED...")
-                val resLed = PulsarLight.setSystemProperty("vendor.audio.hiby.hw.led", "on")
-                val resQuality = PulsarLight.setSystemProperty("vendor.audio.hiby.hw.sample_quality", "mqb")
-                Log.i("PulsarTest", "Result: led=$resLed, quality=$resQuality")
-            } catch (e: Throwable) {
-                Log.e("PulsarTest", "Error testing setSystemProperty", e)
-            }
             sysfsReachable = CirrusLogicManager.isSysfsReachable()
             csFilter = CirrusLogicManager.getDigitalFilter(ctx)
             csGain = CirrusLogicManager.getGainMode(ctx)
-            csDre = CirrusLogicManager.isDreEnabled(ctx)
             csTurbo = CirrusLogicManager.isHighPowerEnabled(ctx)
             csDsdComp = CirrusLogicManager.getDsdGainCompensate(ctx)
             csOutput = CirrusLogicManager.getOutputMode(ctx)
             // getBalance() substitutes 0 when nothing is readable, which the UI then printed as
             // "Center" on an enabled slider. Only show a position when a real source reported one.
             csBalance = CirrusLogicManager.getBalanceOrNull(ctx)?.toFloat()
-            pulsarDrivable = PulsarLight.isHardwareWritable()
         }
     }
 
@@ -378,81 +364,6 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                 }
             }
 
-            // Section 3: Pulsar RGB Audiophile Engine
-            item {
-                HwSettingsSection("Pulsar RGB LED Engine")
-
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(HwSurface1)
-                        .border(1.dp, HwMikuTeal.copy(alpha = 0.2f), RoundedCornerShape(14.dp))
-                        .padding(14.dp)
-                ) {
-                    // Was an unqualified "Controls front RGB notification indicator and TrueColor
-                    // PWM". Every write goes to LED sysfs nodes that are SELinux-denied on this
-                    // unit (isHardwareWritable() probes it), so the control stores a preference and
-                    // nothing lights up. Say which of the two it is instead of implying control.
-                    HwSettingsToggleRow(
-                        title = "Pulsar RGB Master Control",
-                        subtitle = when (pulsarDrivable) {
-                            null -> "Probing whether the LED nodes are writable\u2026"
-                            true -> "Front RGB indicator: LED nodes are writable on this unit"
-                            false -> "Saved preference only \u2014 the LED nodes are not writable on this unit, so the indicator will not respond"
-                        },
-                        checked = pulsarEnabled
-                    ) { enabled ->
-                        pulsarEnabled = enabled
-                        scope.launch { PulsarLight.setEnabled(ctx, enabled) }
-                    }
-
-                    if (pulsarEnabled) {
-                        Spacer(Modifier.height(12.dp))
-                        Text("LIGHTING MODE", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(8.dp))
-
-                        PulsarLight.Mode.values().filter { it != PulsarLight.Mode.OFF }.forEach { mode ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        pulsarMode = mode
-                                        scope.launch { PulsarLight.setMode(ctx, mode) }
-                                    }
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                RadioButton(
-                                    selected = pulsarMode == mode,
-                                    onClick = {
-                                        pulsarMode = mode
-                                        scope.launch { PulsarLight.setMode(ctx, mode) }
-                                    },
-                                    colors = RadioButtonDefaults.colors(selectedColor = HwMikuTeal, unselectedColor = HwMuted)
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Column {
-                                    Text(mode.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                    Text(mode.description, color = HwMuted, fontSize = 11.sp)
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(12.dp))
-                        Text("PEAK BRIGHTNESS (${(pulsarBrightness / 255f * 100).toInt()}%)", color = HwMikuTeal, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        Slider(
-                            value = pulsarBrightness,
-                            onValueChange = {
-                                pulsarBrightness = it
-                                scope.launch { PulsarLight.setBrightness(ctx, it.toInt()) }
-                            },
-                            valueRange = 10f..255f,
-                            colors = SliderDefaults.colors(thumbColor = HwMikuTeal, activeTrackColor = HwMikuTeal, inactiveTrackColor = HwSurface2)
-                        )
-                    }
-                }
-            }
 
             // Section 4: USB DAC UAC2 Bit-Perfect Subsystem
             item {
@@ -572,7 +483,6 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                     }
                 }
             }
-
             item { Spacer(Modifier.height(24.dp)) }
         }
     }

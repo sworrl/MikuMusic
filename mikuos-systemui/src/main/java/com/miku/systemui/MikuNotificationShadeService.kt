@@ -134,6 +134,8 @@ class MikuNotificationShadeService : AccessibilityService() {
 
     /** Now-Playing HUD (track-change pop-over drawn in our overlay layer). */
     private var trackHud: MikuTrackHud? = null
+    /** Universal volume HUD overlay for 3rd-party apps (Spotify, etc.). */
+    private var volumeHud: MikuVolumeHud? = null
 
     /** Album accent bled ≈25% into the nav chrome (pill glow, back capsule), animated 400ms. */
     @Volatile private var navTeal = MikuAccent.TEAL
@@ -170,6 +172,11 @@ class MikuNotificationShadeService : AccessibilityService() {
                     if (a != 0) MikuAccent.push(a, a2)
                     trackHud?.show(MikuTrackHud.Payload.from(intent))
                 }
+                "android.media.VOLUME_CHANGED_ACTION",
+                "android.media.MASTER_VOLUME_CHANGED_ACTION",
+                "android.media.RINGER_MODE_CHANGED" -> {
+                    volumeHud?.onVolumeChanged()
+                }
                 ACTION_TRIGGER_BACK, ACTION_DEBUG_BACK -> performGlobalAction(GLOBAL_ACTION_BACK)
                 ACTION_DEBUG_HOME -> triggerHome()
                 ACTION_DEBUG_RECENTS -> openRecents()
@@ -188,6 +195,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         idleDim = MikuIdleDimController(this, windowManager)
         trackHud = MikuTrackHud(this, windowManager) { dragPx -> openShadeActivity(dragPx) }
+        volumeHud = MikuVolumeHud(this, windowManager)
         MikuPowerProfile.observe(this)
         startAccentObserver()
         try {
@@ -196,6 +204,9 @@ class MikuNotificationShadeService : AccessibilityService() {
                 addAction(ACTION_DEBUG_HOME); addAction(ACTION_DEBUG_RECENTS)
                 addAction(ACTION_DEBUG_QUICK_SWITCH)
                 addAction(MikuTrackHud.ACTION_TRACK_CHANGED); addAction(MikuTrackHud.ACTION_DEBUG)
+                addAction("android.media.VOLUME_CHANGED_ACTION")
+                addAction("android.media.MASTER_VOLUME_CHANGED_ACTION")
+                addAction("android.media.RINGER_MODE_CHANGED")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -241,6 +252,7 @@ class MikuNotificationShadeService : AccessibilityService() {
         idleDim?.destroy(); idleDim = null
         shadeWindow?.detach(); shadeWindow = null
         trackHud?.destroy(); trackHud = null
+        volumeHud?.destroy(); volumeHud = null
         accentJob?.cancel(); accentAnim?.cancel()
         removeOverlays()
         try { workThread.quitSafely() } catch (_: Throwable) {}
@@ -268,9 +280,20 @@ class MikuNotificationShadeService : AccessibilityService() {
             val DISABLE_NOTIFICATION_ICONS = 0x00020000
             val DISABLE_SYSTEM_INFO = 0x00100000
             val DISABLE_CLOCK = 0x00800000
-            val flags = DISABLE_EXPAND or DISABLE_NOTIFICATION_ICONS or DISABLE_SYSTEM_INFO or DISABLE_CLOCK
+            // THE DUPLICATE GESTURE PILL. AOSP SystemUI draws its own NavigationBar0 and
+            // SecondaryHomeHandle0 next to our accessibility home pill, so there are two handles
+            // and the bland one is not ours. It cannot be removed with an RRO: idmap2 refuses to
+            // map android:bool/config_showNavigationBar on this device (proven 2026-09-27 — the
+            // resource exists in framework-res AND in our overlay, and the idmap carries only the
+            // other two entries), so baking it would change nothing. StatusBarManager's disable
+            // flags are the runtime lever that is actually ours to pull.
+            val DISABLE_HOME = 0x00200000
+            val DISABLE_BACK = 0x00400000
+            val DISABLE_RECENT = 0x01000000
+            val flags = DISABLE_EXPAND or DISABLE_NOTIFICATION_ICONS or DISABLE_SYSTEM_INFO or
+                DISABLE_CLOCK or DISABLE_HOME or DISABLE_BACK or DISABLE_RECENT
             sb.javaClass.getMethod("disable", Int::class.javaPrimitiveType).invoke(sb, flags)
-            Log.i(TAG, "stock status bar blanked + shade blocked (alerts/sounds preserved)")
+            Log.i(TAG, "stock status bar blanked, shade blocked, stock nav disabled (alerts/sounds preserved)")
         }.onFailure { Log.w(TAG, "suppressStockShade failed: $it") }
     }
 
@@ -585,9 +608,13 @@ class MikuNotificationShadeService : AccessibilityService() {
             android.provider.Settings.Global.getInt(contentResolver, "hiby_volume_dialog_enable", 0) == 1
         }.getOrDefault(false)
         val flags = if (showHiby) android.media.AudioManager.FLAG_SHOW_UI else 0
-        return runCatching { am.setStreamVolume(stream, target, flags); true }
+        val ok = runCatching { am.setStreamVolume(stream, target, flags); true }
             .onFailure { Log.w(TAG, "knob: setStreamVolume($target/$max) failed", it) }
             .getOrDefault(false)
+        if (ok) {
+            volumeHud?.onVolumeChanged(step)
+        }
+        return ok
     }
 
     override fun onKeyEvent(event: android.view.KeyEvent?): Boolean {
@@ -632,6 +659,7 @@ class MikuNotificationShadeService : AccessibilityService() {
             // Hand the ladder the new foreground app so it can stand down for the apps that run
             // their own brightness lifecycle (Miku Music, the MikuOS lockscreen/AOD).
             idleDim?.setForeground(event.packageName?.toString(), event.className?.toString())
+            volumeHud?.setForeground(event.packageName?.toString(), event.className?.toString())
             val cls = event.className?.toString() ?: ""
             val pkg = event.packageName?.toString() ?: ""
             if (cls.contains("GlobalActions", ignoreCase = true) ||

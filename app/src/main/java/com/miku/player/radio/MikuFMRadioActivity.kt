@@ -78,7 +78,7 @@ data class FmState(
 
 /**
  * Direct Qualcomm Snapdragon Hardware FM Radio Manager.
- * Uses QualcommFmHardwareEngine to route hardware FM tuner PCM directly to the CS43131 DAC.
+ * Uses QualcommFmHardwareEngine to route hardware FM tuner PCM directly to the CS43198 DAC.
  */
 object FmRadioManager {
     private const val TAG = "MikuDirectFmEngine"

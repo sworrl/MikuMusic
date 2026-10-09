@@ -235,30 +235,6 @@ object QuickSettingsModel {
             )
         )
 
-        // 7. Pulsar Dual-Die RGB - the tile used to light up "active" with the mode name as if
-        //    the diode were glowing. It is only a stored preference: the OS publishes whether the
-        //    LED can be driven at all (Settings.Global miku_pulsar_hw_writable) and on this unit
-        //    it cannot, so the tile says so instead of implying a lit indicator.
-        val pulsarLedDrivable = PulsarLight.isHardwareWritable(ctx)
-        val isPulsarActive = pulsarLedDrivable && PulsarLight.getMode(ctx) != PulsarLight.Mode.OFF
-        list.add(
-            QsTile(
-                id = "pulsar_light",
-                label = "Pulsar RGB",
-                subtitle = if (!pulsarLedDrivable) "LED inactive on this unit"
-                           else PulsarLight.getMode(ctx).label,
-                icon = Icons.Default.Lightbulb,
-                isActive = isPulsarActive,
-                onClick = {
-                    val all = PulsarLight.Mode.values()
-                    val cur = PulsarLight.getMode(ctx)
-                    val next = all[(cur.ordinal + 1) % all.size]
-                    PulsarLight.setMode(ctx, next)
-                    onRefresh()
-                },
-                onLongClick = { openMikuSettings(ctx, "pulsar") }
-            )
-        )
 
         // 8. Wireless ADB — the port shown is the one adbd is really bound to (service.adb.tcp.port)
         val adbPort = WirelessAdbManager.currentPort()

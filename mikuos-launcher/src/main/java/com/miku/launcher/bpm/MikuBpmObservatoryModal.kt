@@ -92,24 +92,41 @@ fun MikuBpmObservatoryModal(
     val selectedModeState = remember { mutableIntStateOf(0) }
     val selectedMode by selectedModeState
 
+    var activeMediaLink by remember { mutableStateOf<com.miku.launcher.lockscreen.MikuMediaLink?>(null) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            activeMediaLink = com.miku.launcher.lockscreen.MikuMediaLink.active(ctx)
+            delay(500L)
+        }
+    }
+
+    val isSessionPlaying = activeMediaLink?.isPlaying == true
+    val isPlaying = bpmState.isPlaying || isSessionPlaying
+
     // hasLiveTempo gates every READOUT; the 120 fallback below only feeds the rhythm-game engine's
     // default tempo and is never printed as a measurement.
     val hasLiveTempo = bpmState.bpm.isFinite() && bpmState.bpm in 20f..999f
     val liveBpm = if (hasLiveTempo) bpmState.bpm else 120f
-    val isPlaying = bpmState.isPlaying
     val beatIntervalMs = bpmState.beatIntervalMs.coerceIn(60L, 3000L)
 
     val cr = ctx.contentResolver
-    // NULLABLE — no invented now-playing track. These used to default to "World is Mine" /
-    // "supercell feat. Hatsune Miku", which was not just printed on screen while something else
-    // (Spotify, YouTube) played: it was fed to resolveCanonicalBpm(), hit the preseeded dictionary
-    // entry for that song, and then WROTE Settings.Global miku_live_bpm = 165 and broadcast
-    // com.miku.action.BPM_UPDATE — poisoning the live tempo for every BPM surface in the OS.
-    val trackTitle: String? = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
-        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_title")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
+    // Session-agnostic track identification: prefer active MediaSession (Spotify, Tidal, etc.),
+    // then fall back to Settings.Global keys written by Miku Music.
+    val trackTitle: String? = remember(activeMediaLink?.title, activeMediaLink?.packageName, isPlaying, bpmState.dominantColor, bpmState.bpm) {
+        val linkTitle = activeMediaLink?.title?.takeIf { it.isNotBlank() }
+        if (linkTitle != null) {
+            linkTitle
+        } else {
+            try { android.provider.Settings.Global.getString(cr, "miku_now_playing_title")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
+        }
     }
-    val trackArtist: String? = remember(isPlaying, bpmState.dominantColor, bpmState.bpm) {
-        try { android.provider.Settings.Global.getString(cr, "miku_now_playing_artist")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
+    val trackArtist: String? = remember(activeMediaLink?.artist, activeMediaLink?.packageName, isPlaying, bpmState.dominantColor, bpmState.bpm) {
+        val linkArtist = activeMediaLink?.artist?.takeIf { it.isNotBlank() }
+        if (linkArtist != null) {
+            linkArtist
+        } else {
+            try { android.provider.Settings.Global.getString(cr, "miku_now_playing_artist")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
+        }
     }
 
     val calculatedTapBpmState = remember { mutableStateOf<Float?>(null) }
@@ -1115,10 +1132,9 @@ private fun BpmHeroRhythmMatchCard(
             ) {
                 Column(Modifier.weight(1f)) {
                     Text(
-                        // Audio can be playing from an app that publishes no metadata
-                        // (Spotify, YouTube). Say "Unknown track" rather than naming one.
                         text = when {
-                            !isPlaying -> "🌸 MikuOS Player"
+                            !isPlaying && trackTitle == null -> "🌸 MikuOS Player"
+                            !isPlaying && trackTitle != null -> "♪ $trackTitle (Paused)"
                             trackTitle != null -> "♪ $trackTitle"
                             else -> "♪ Unknown track"
                         },
@@ -1130,7 +1146,7 @@ private fun BpmHeroRhythmMatchCard(
                     )
                     Text(
                         text = when {
-                            !isPlaying -> "Nothing playing"
+                            !isPlaying && trackArtist == null -> "Nothing playing"
                             trackArtist != null -> trackArtist
                             else -> "External audio source · no metadata published"
                         },

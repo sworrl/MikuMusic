@@ -55,7 +55,9 @@ object MikuLiveBeatDetector {
                     MikuPowerProfile.awaitVisible()   // suspends — no polling at all while hidden
                     continue
                 }
-                val musicOut = try { am?.isMusicActive == true } catch (_: Throwable) { false }
+                val activeLink = com.miku.launcher.lockscreen.MikuMediaLink.active(app)
+                val isLinkPlaying = activeLink?.isPlaying == true
+                val musicOut = (try { am?.isMusicActive == true } catch (_: Throwable) { false }) || isLinkPlaying
                 if (musicOut && vis == null) attach(app)
                 if (!musicOut && vis != null) {
                     detach()
@@ -69,11 +71,16 @@ object MikuLiveBeatDetector {
                 // A track change is not an outlier to be argued down over six onsets — drop the
                 // lock at once and re-acquire. onTrackChanged() no-ops when the key is unchanged.
                 if (musicOut) {
-                    val key = try {
-                        val t = android.provider.Settings.Global.getString(app.contentResolver, "miku_now_playing_title")
-                        val a2 = android.provider.Settings.Global.getString(app.contentResolver, "miku_now_playing_artist")
-                        if (t.isNullOrBlank() && a2.isNullOrBlank()) null else "$a2|$t"
-                    } catch (_: Throwable) { null }
+                    MikuBpmEngine.pushLivePlaying(true)
+                    val key = if (activeLink != null && (!activeLink.title.isNullOrBlank() || !activeLink.artist.isNullOrBlank())) {
+                        "${activeLink.artist.orEmpty()}|${activeLink.title.orEmpty()}"
+                    } else {
+                        try {
+                            val t = android.provider.Settings.Global.getString(app.contentResolver, "miku_now_playing_title")
+                            val a2 = android.provider.Settings.Global.getString(app.contentResolver, "miku_now_playing_artist")
+                            if (t.isNullOrBlank() && a2.isNullOrBlank()) null else "$a2|$t"
+                        } catch (_: Throwable) { null }
+                    }
                     val hadLock = MikuTempoLock.tempo.value.isLocked
                     MikuTempoLock.onTrackChanged(key)
                     // A dropped lock means the displayed tempo belonged to the PREVIOUS track.
@@ -129,7 +136,7 @@ object MikuLiveBeatDetector {
         val avg = if (energyHist.isNotEmpty()) energyHist.sum() / energyHist.size else e
         val now = System.currentTimeMillis()
         val refractoryMs = 260L                        // cap ~230 BPM, reject double-triggers
-        val isOnset = e > avg * 1.45f && e > 800f && (now - lastBeatMs) > refractoryMs
+        val isOnset = e > avg * 1.45f && e > 250f && (now - lastBeatMs) > refractoryMs
         if (isOnset) {
             if (lastBeatMs != 0L) {
                 val interval = now - lastBeatMs

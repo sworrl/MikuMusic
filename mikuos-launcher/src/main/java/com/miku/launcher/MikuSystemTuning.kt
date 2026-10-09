@@ -13,8 +13,7 @@ import android.util.Log
  * WHY THIS EXISTS. `MikuLauncherActivity.onCreate` used to hand a 19-command string to
  * `RootShell.execFast`. MikuOS has no root and never will, so every launch produced
  * `Cannot run program "su": error=2, No such file or directory`, RootShell backed off for 120
- * seconds, and NOT ONE of those nineteen settings was ever applied. That included
- * every setting in it, so none of them were ever applied.
+ * seconds, and NOT ONE of those nineteen settings was ever applied.
  *
  * Every one of those commands has a first-class API behind it, and a platform-signed app holds the
  * permissions they need: WRITE_SECURE_SETTINGS for the `settings put` lines,

@@ -198,24 +198,31 @@ object MikuHardwareGestureEngine {
         val currentItem = player.currentMediaItem
         val mediaId = currentItem?.mediaId?.toLongOrNull()
         val title = currentItem?.mediaMetadata?.title?.toString()
-            ?: try { android.provider.Settings.Global.getString(context.contentResolver, "miku_now_playing_title") ?: "Current Track" } catch (_: Throwable) { "Current Track" }
+            ?.takeIf { it.isNotBlank() }
+            ?: try { android.provider.Settings.Global.getString(context.contentResolver, "miku_now_playing_title")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
+        // NO fabricated artist. This fell back to the literal "Hatsune Miku" for any track with no
+        // artist tag, and the branch below then called LikeStore.toggleArtist with it: a like
+        // gesture on a tag-less file or a third-party stream PERSISTED a like against her name.
+        // Same defect as the lockscreen attribution bug fixed in 2.0.263, different call site.
         val artist = currentItem?.mediaMetadata?.artist?.toString()
-            ?: try { android.provider.Settings.Global.getString(context.contentResolver, "miku_now_playing_artist") ?: "Hatsune Miku" } catch (_: Throwable) { "Hatsune Miku" }
+            ?.takeIf { it.isNotBlank() }
+            ?: try { android.provider.Settings.Global.getString(context.contentResolver, "miku_now_playing_artist")?.takeIf { it.isNotBlank() } } catch (_: Throwable) { null }
 
-        val isNowLiked = if (mediaId != null) {
-            LikeStore.toggle(context, mediaId)
-        } else {
-            // If mediaId is not a raw numeric ID, toggle by artist/title
-            LikeStore.toggleArtist(context, artist)
+        val isNowLiked = when {
+            mediaId != null -> LikeStore.toggle(context, mediaId)
+            // Not a raw numeric id: an artist-level toggle is the only thing LikeStore can do, and
+            // it needs a real artist. With none, there is nothing to like — report the current
+            // state unchanged rather than inventing a target.
+            artist != null -> LikeStore.toggleArtist(context, artist)
+            else -> {
+                Log.w(TAG, "like gesture ignored: no media id and no artist to attribute it to")
+                false
+            }
         }
 
         // Bumpy Tactile Feedback
         playBumpyLikeTexture(context)
 
-        // Pulsar LED Flash
-        if (isNowLiked) {
-            PulsarLight.indicateHearted(context)
-        }
 
         // Display Floating HUD
         showHeartToast(isLiked = isNowLiked, title = title, artist = artist)
@@ -229,8 +236,9 @@ object MikuHardwareGestureEngine {
         val player = PlayerHolder.ensure(context)
         val currentItem = player.currentMediaItem
         val mediaId = currentItem?.mediaId?.toLongOrNull()
-        val title = currentItem?.mediaMetadata?.title?.toString() ?: "Current Track"
-        val artist = currentItem?.mediaMetadata?.artist?.toString() ?: "Hatsune Miku"
+        // See [triggerLikeGesture]: no invented title, no invented artist.
+        val title = currentItem?.mediaMetadata?.title?.toString()?.takeIf { it.isNotBlank() }
+        val artist = currentItem?.mediaMetadata?.artist?.toString()?.takeIf { it.isNotBlank() }
 
         if (mediaId != null && LikeStore.isLiked(mediaId)) {
             LikeStore.toggle(context, mediaId)
@@ -308,12 +316,17 @@ object MikuHardwareGestureEngine {
         }
     }
 
-    private fun showHeartToast(isLiked: Boolean, title: String, artist: String) {
+    /**
+     * [title] and [artist] are nullable because "not tagged" is a real state and the callers used
+     * to paper over it with the literals "Current Track" and "Hatsune Miku". The HUD renders the
+     * absence instead of a name that was never in the file.
+     */
+    private fun showHeartToast(isLiked: Boolean, title: String?, artist: String?) {
         _heartToast.value = HeartToastState(
             visible = true,
             isLiked = isLiked,
-            trackTitle = title,
-            trackArtist = artist
+            trackTitle = title ?: "Unknown title",
+            trackArtist = artist ?: "Unknown artist"
         )
         hideToastRunnable?.let { mainHandler.removeCallbacks(it) }
         val r = Runnable { _heartToast.value = _heartToast.value.copy(visible = false) }

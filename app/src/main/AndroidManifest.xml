@@ -177,24 +177,10 @@
                 android:value="M500 Hardware &amp; DAC Settings" />
             <meta-data
                 android:name="com.android.settings.summary"
-                android:value="Cirrus Logic CS43131 DAC, NOS filter mode, Gain stages &amp; UAC2 USB DAC" />
+                android:value="Cirrus Logic CS43198 DAC, NOS filter mode, Gain stages &amp; UAC2 USB DAC" />
         </activity>
 
-        <activity
-            android:name=".PulsarSettingsActivity"
-            android:exported="true"
-            android:label="Miku Pulsar RGB Lighting"
-            android:icon="@mipmap/ic_launcher"
-            android:roundIcon="@mipmap/ic_launcher_round"
-            android:theme="@style/Theme.MikuLauncher"
-            android:screenOrientation="portrait"
-            android:configChanges="orientation|screenSize|keyboardHidden">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <action android:name="com.miku.player.action.PULSAR_SETTINGS" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+
 
         <activity
             android:name=".FnLockSettingsActivity"

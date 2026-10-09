@@ -84,8 +84,8 @@ object MikuRhythmTiming {
     /** No window may exceed this share of a beat period, or windows would overlap the next beat. */
     const val MAX_WINDOW_BEAT_FRACTION = 0.46f
 
-    /** A judgment is only possible against a detector pulse no older than this. */
-    const val PULSE_FRESHNESS_MS = 5_000L
+    /** A judgment is only possible against a detector pulse no older than this. Matches MikuTempoLock.STALE_MS. */
+    const val PULSE_FRESHNESS_MS = 12_000L
 
     data class Windows(
         val deadzoneMs: Int,

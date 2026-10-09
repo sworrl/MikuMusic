@@ -51,7 +51,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
 
     var isRooted by remember { mutableStateOf(false) }
 
-    // Cirrus Logic CS43131 Hardware State
+    // Cirrus Logic CS43198 Hardware State
     var csFilter by remember { mutableStateOf(CirrusLogicManager.DigitalFilter.NOS) }
     var csGain by remember { mutableStateOf(CirrusLogicManager.GainMode.LOW) }
     var csDre by remember { mutableStateOf(true) }
@@ -320,7 +320,7 @@ fun HardwareSettingsScreen(onBack: () -> Unit) {
                 }
 
                 // ============================================================
-                // SECTION 1: CIRRUS LOGIC CS43131 DAC ARCHITECTURE
+                // SECTION 1: CIRRUS LOGIC CS43198 DAC ARCHITECTURE
                 // ============================================================
                 item {
                     Column(

@@ -12,7 +12,7 @@ import kotlin.concurrent.withLock
 /**
  * Hatsune Miku Telemetry & Historical Metrics Database.
  * Persists high-granularity weather history, RF network telemetry (Wi-Fi/Cellular dBm),
- * CS43131 audio hardware telemetry, and launcher configuration keys.
+ * CS43198 audio hardware telemetry, and launcher configuration keys.
  */
 class MikuMetricDatabase private constructor(context: Context) :
     SQLiteOpenHelper(context.applicationContext, DB_NAME, null, DB_VERSION) {

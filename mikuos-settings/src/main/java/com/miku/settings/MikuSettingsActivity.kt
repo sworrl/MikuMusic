@@ -113,7 +113,6 @@ enum class SettingsSection(val title: String, val icon: ImageVector, val desc: S
     AUDIO_DAC("DAC & Audio", Icons.Default.Headphones, "Cirrus Dual CS43198 MasterHIFI, Gain, Filters & USB DAC"),
     // Was "dynamic modes & BPM pulse": this screen stores a mode, it does not animate anything,
     // and the indicator is non-functional on this unit.
-    PULSAR_RGB("Pulsar Light", Icons.Default.Lightbulb, "Front RGB indicator preferences (indicator is inactive on this unit)"),
     FN_SWITCH("FN Switch & Keys", Icons.Default.ToggleOn, "Hardware Fn lock switch (Screen & Keys Lock default)"),
     WIRELESS("Network & ADB", Icons.Default.Wifi, "Wi-Fi, Wireless ADB, Hotspot & Network tools"),
     BLUETOOTH("Bluetooth", Icons.Default.Bluetooth, "Audio streaming codecs, LDAC, aptX & paired gear"),
@@ -147,7 +146,6 @@ class MikuSettingsActivity : ComponentActivity() {
             extraSec.equals("wireless", ignoreCase = true) || extraSec.equals("wifi", ignoreCase = true) || targetAction == Settings.ACTION_WIFI_SETTINGS || targetAction == Settings.ACTION_WIRELESS_SETTINGS -> SettingsSection.WIRELESS
             extraSec.equals("bluetooth", ignoreCase = true) || extraSec.equals("bt", ignoreCase = true) || targetAction == Settings.ACTION_BLUETOOTH_SETTINGS -> SettingsSection.BLUETOOTH
             extraSec.equals("audio_dac", ignoreCase = true) || extraSec.equals("dac", ignoreCase = true) || targetAction == "com.m500.hardware.action.USB_DAC" || targetAction == Settings.ACTION_SOUND_SETTINGS || targetAction == "android.media.action.DISPLAY_AUDIO_EFFECT_CONTROL_PANEL" -> SettingsSection.AUDIO_DAC
-            extraSec.equals("pulsar", ignoreCase = true) || extraSec.equals("rgb", ignoreCase = true) || targetAction == "com.m500.hardware.action.PULSAR_SETTINGS" -> SettingsSection.PULSAR_RGB
             extraSec.equals("fn_switch", ignoreCase = true) || extraSec.equals("fn", ignoreCase = true) || targetAction == "com.m500.hardware.action.FN_SETTINGS" -> SettingsSection.FN_SWITCH
             extraSec.equals("display", ignoreCase = true) || targetAction == Settings.ACTION_DISPLAY_SETTINGS -> SettingsSection.DISPLAY
             extraSec.equals("storage_apps", ignoreCase = true) || extraSec.equals("storage", ignoreCase = true) || targetAction == Settings.ACTION_APPLICATION_SETTINGS || targetAction == Settings.ACTION_INTERNAL_STORAGE_SETTINGS -> SettingsSection.STORAGE_APPS
@@ -367,7 +365,6 @@ fun MikuOSSettingsApp(initialSection: SettingsSection?, onExit: () -> Unit) {
                 ) {
                     when (currentSection) {
                         SettingsSection.AUDIO_DAC -> AudioDacScreen(ctx)
-                        SettingsSection.PULSAR_RGB -> PulsarScreen(ctx)
                         SettingsSection.FN_SWITCH -> FnSwitchScreen(ctx)
                         SettingsSection.WIRELESS -> WirelessScreen(ctx)
                         SettingsSection.BLUETOOTH -> BluetoothScreen(ctx)
@@ -1040,132 +1037,6 @@ fun AudioDacScreen(ctx: Context) {
 }
 
 // ----------------------------------------------------
-// Section 2: Pulsar RGB Light
-// ----------------------------------------------------
-@Composable
-fun PulsarScreen(ctx: Context) {
-    var mode by remember { mutableStateOf(PulsarLight.getMode(ctx)) }
-    var brightness by remember { mutableStateOf(PulsarLight.getBrightness(ctx)) }
-    var bpmSync by remember { mutableStateOf(PulsarLight.isBpmSyncEnabled(ctx)) }
-    // REAL answer from the OS (Settings.Global miku_pulsar_hw_writable), not an assumption.
-    // On this unit the LED sysfs nodes are SELinux-locked, so this is normally false.
-    val ledDrivable = remember { PulsarLight.isHardwareWritable(ctx) }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        item {
-            Column(Modifier.mikuHeroCard().padding(16.dp)) {
-                Text(
-                    "Front Pulsar RGB Matrix (Dual-Die PWM)",
-                    color = MikuTealBright,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.height(6.dp))
-                // Was: "Dual-die red & blue PWM cross-fading for dynamic audio tier status,
-                // beats-per-minute sync, and ambient battery glow" - none of which this screen
-                // does (a mode writes one static colour pair) and none of which is visible,
-                // because the indicator is confirmed non-functional on this unit. Now reports
-                // what the OS says about the diode and nothing more.
-                Text(
-                    if (ledDrivable)
-                        "SGM31324 constant-current LED driver. The OS reports the indicator as drivable; the mode you pick below is stored and handed to the MikuOS Pulsar engine."
-                    else
-                        "SGM31324 constant-current LED driver. The OS reports this unit's indicator as NOT drivable (LED nodes are SELinux-locked), so the settings below are stored preferences only \u2014 the light will not respond.",
-                    color = if (ledDrivable) MikuMuted else MikuGold,
-                    fontSize = 12.sp,
-                    lineHeight = 16.sp
-                )
-            }
-        }
-
-        item {
-            Column(Modifier.mikuCard().padding(14.dp)) {
-                Text("LIGHTING MODE", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(8.dp))
-
-                PulsarLight.Mode.values().forEach { m ->
-                    val isSel = mode == m
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(if (isSel) MikuTealBright.copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable {
-                                mode = m
-                                PulsarLight.setMode(ctx, m)
-                            }
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = isSel,
-                            onClick = {
-                                mode = m
-                                PulsarLight.setMode(ctx, m)
-                            },
-                            colors = RadioButtonDefaults.colors(selectedColor = MikuTealBright, unselectedColor = MikuMuted)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column {
-                            Text(m.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                            Text(m.description, color = MikuMuted, fontSize = 11.sp)
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            Column(Modifier.mikuCard().padding(14.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("LED BRIGHTNESS LEVEL", color = MikuTealBright, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                    Text("$brightness / 255", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.height(8.dp))
-                Slider(
-                    value = brightness.toFloat(),
-                    onValueChange = {
-                        brightness = it.toInt()
-                        PulsarLight.setBrightness(ctx, it.toInt())
-                    },
-                    valueRange = 10f..255f,
-                    colors = SliderDefaults.colors(thumbColor = MikuTealBright, activeTrackColor = MikuTeal, inactiveTrackColor = MikuSurface2)
-                )
-
-                Spacer(Modifier.height(10.dp))
-
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Audiophile BPM Pulse Sync", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold)
-                        // Was "Pulse LED brightness in rhythm with track tempo (BPM)" on a switch
-                        // that only wrote this app's private pref - the BPM engine lives in the
-                        // launcher and never saw it. The op is now forwarded to the OS, and the
-                        // copy no longer promises a light that cannot turn on.
-                        Text(
-                            if (ledDrivable) "Asks the MikuOS Pulsar engine to pulse the indicator with track tempo"
-                            else "Stored and sent to MikuOS \u2014 no visible effect: this unit's indicator does not respond",
-                            color = if (ledDrivable) MikuMuted else MikuGold,
-                            fontSize = 11.5.sp
-                        )
-                    }
-                    Switch(
-                        checked = bpmSync,
-                        onCheckedChange = {
-                            bpmSync = it
-                            PulsarLight.setBpmSyncEnabled(ctx, it)
-                        },
-                        colors = SwitchDefaults.colors(checkedThumbColor = MikuTealBright, checkedTrackColor = Color(0xFF0F3238))
-                    )
-                }
-            }
-        }
-
-        item { Spacer(Modifier.height(24.dp)) }
-    }
-}
 
 // ----------------------------------------------------
 // Section 2.5: Physical FN Hardware Switch & Key Lock

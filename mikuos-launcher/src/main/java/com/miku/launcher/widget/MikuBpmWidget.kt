@@ -39,9 +39,12 @@ class MikuBpmWidget : AppWidgetProvider() {
             val v = RemoteViews(ctx.packageName, R.layout.widget_miku_bpm)
 
             val cr = ctx.contentResolver
-            val title = try { Settings.Global.getString(cr, "miku_now_playing_title") ?: "" } catch (_: Throwable) { "" }
-            val artist = try { Settings.Global.getString(cr, "miku_now_playing_artist") ?: "" } catch (_: Throwable) { "" }
-            val playing = try { Settings.Global.getInt(cr, "miku_is_playing", 0) == 1 } catch (_: Throwable) { false }
+            val link = com.miku.launcher.lockscreen.MikuMediaLink.active(ctx)
+            val title = link?.title?.takeIf { it.isNotBlank() }
+                ?: try { Settings.Global.getString(cr, "miku_now_playing_title") ?: "" } catch (_: Throwable) { "" }
+            val artist = link?.artist?.takeIf { it.isNotBlank() }
+                ?: try { Settings.Global.getString(cr, "miku_now_playing_artist") ?: "" } catch (_: Throwable) { "" }
+            val playing = (link?.isPlaying == true) || try { Settings.Global.getInt(cr, "miku_is_playing", 0) == 1 } catch (_: Throwable) { false }
             val intervalMs = try { Settings.Global.getInt(cr, "miku_beat_interval_ms", 0) } catch (_: Throwable) { 0 }
             val bpm = if (intervalMs > 0) 60_000 / intervalMs else 0
 

@@ -57,27 +57,6 @@ Java_com_miku_player_M500AudioHal_nativeSetPocketLock(JNIEnv* env, jclass clazz,
     return (ok1 || ok2) ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_miku_player_M500AudioHal_nativeSetPulsarPattern(JNIEnv* env, jclass clazz, jint pattern) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", pattern);
-    bool ok = writeSysfs("/sys/class/leds/sgm31324-leds/led_pattern", buf);
-    return ok ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_miku_player_M500AudioHal_nativeSetPulsarRgb(JNIEnv* env, jclass clazz, jint r, jint g, jint b, jint brightness) {
-    float scale = (brightness / 255.0f);
-    char bufR[16], bufG[16], bufB[16];
-    snprintf(bufR, sizeof(bufR), "%d", (int)(r * scale));
-    snprintf(bufG, sizeof(bufG), "%d", (int)(g * scale));
-    snprintf(bufB, sizeof(bufB), "%d", (int)(b * scale));
-
-    bool okR = writeSysfs("/sys/class/leds/red/brightness", bufR);
-    bool okG = writeSysfs("/sys/class/leds/green/brightness", bufG);
-    bool okB = writeSysfs("/sys/class/leds/blue/brightness", bufB);
-    return (okR || okG || okB) ? JNI_TRUE : JNI_FALSE;
-}
 
 JNIEXPORT jboolean JNICALL
 Java_com_miku_player_M500AudioHal_nativeSetOutput(JNIEnv* env, jclass clazz, jstring output) {

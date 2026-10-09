@@ -864,6 +864,19 @@ public final class MikuDirectAudioSink implements AudioSink {
       Api31.setLogSessionIdOnAudioTrack(audioTrack, playerId);
     }
     audioSessionId = audioTrack.getAudioSessionId();
+
+    // Publish the format the platform GRANTED to the OS surfaces that show it (launcher status
+    // bar chip, lockscreen badge, anatomical observatory pill). Read back from the AudioTrack
+    // rather than reported from the Configuration we asked for: the request can be refused (see
+    // the platform-minimum buffer fallback above) and the policy can land the track at a rate the
+    // file is not in, and the chip has to say what is actually on the wire. Settings.Global key
+    // miku_now_playing_format had no writer anywhere in the tree before this, so all three
+    // surfaces rendered their "not published" state permanently.
+    com.miku.player.MikuNowPlayingFormat.onTrackInitialized(
+        context,
+        audioTrack,
+        configuration.inputFormat != null ? configuration.inputFormat.sampleRate : 0,
+        isBluetoothRoute());
     audioTrackPositionTracker.setAudioTrack(
         audioTrack,
         /* isPassthrough= */ configuration.outputMode == OUTPUT_MODE_PASSTHROUGH,

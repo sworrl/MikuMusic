@@ -83,6 +83,11 @@ object MikuBpmEngine {
 
         if (mediaItem == null || !playing) {
             stopBeatPulse(context)
+            // Nothing loaded means there is no output format to report. The sink publishes
+            // miku_now_playing_format when it builds an AudioTrack but has no stop hook of its
+            // own, so without this the last track's format would outlive the session and the
+            // lockscreen badge would describe audio that is not playing.
+            if (mediaItem == null) com.miku.player.MikuNowPlayingFormat.clear(context)
             publishState(context, currentBpm, false)
             return
         }

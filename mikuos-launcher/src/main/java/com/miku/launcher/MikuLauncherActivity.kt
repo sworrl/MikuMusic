@@ -5006,7 +5006,7 @@ private fun CyberShadeSoundboardSection(
     Spacer(Modifier.height(6.dp))
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // Row 1: CS43131 Gain + Filter Mode
+        // Row 1: CS43198 Gain + Filter Mode
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             CyberQuickTile(
                 modifier = Modifier.weight(1f),

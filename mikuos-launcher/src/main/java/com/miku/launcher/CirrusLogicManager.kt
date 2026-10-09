@@ -99,6 +99,16 @@ object CirrusLogicManager {
         return OutputMode.values().firstOrNull { it.sysfsValue == saved } ?: OutputMode.AUTO
     }
 
+    /**
+     * Route switching. Every branch pushes its key=value pair to the audio HAL through
+     * [AudioManager.setParameters], which is the channel that reaches the DAC on this unit.
+     *
+     * Each branch also used to run a RootShell twin of the same write (`echo … > out_mode;
+     * setprop …`). There is no su on MikuOS, so that line never executed; the HAL push beside it
+     * was already doing the whole job. Removed rather than kept "in case root appears", because a
+     * dead shell fork per route change is pure cost and reading it suggests the HAL push is only
+     * half the story. See [MikuHalAudio].
+     */
     suspend fun setOutputMode(ctx: Context, mode: OutputMode) = withContext(Dispatchers.IO) {
         val cr = ctx.contentResolver
         val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
@@ -109,7 +119,6 @@ object CirrusLogicManager {
 
         when (mode) {
             OutputMode.BAL_HEADPHONE_OUT -> {
-                RootShell.execFast("echo bal_po > $SYSFS_BASE/out_mode; settings put global vendor.audio.hiby.hw.output_mode bal_po; setprop vendor.audio.hiby.hw.output_mode bal_po")
                 am?.setParameters("routing=4;vendor.audio.hiby.hw.output_mode=bal_po")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
                     val wiredDev = am.availableCommunicationDevices.firstOrNull {
@@ -120,7 +129,6 @@ object CirrusLogicManager {
                 }
             }
             OutputMode.HEADPHONE_OUT -> {
-                RootShell.execFast("echo po > $SYSFS_BASE/out_mode; settings put global vendor.audio.hiby.hw.output_mode po; setprop vendor.audio.hiby.hw.output_mode po")
                 am?.setParameters("routing=4;vendor.audio.hiby.hw.output_mode=po")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
                     val wiredDev = am.availableCommunicationDevices.firstOrNull {
@@ -131,7 +139,6 @@ object CirrusLogicManager {
                 }
             }
             OutputMode.BLUETOOTH -> {
-                RootShell.execFast("settings put global vendor.audio.hiby.hw.output_mode bt; setprop vendor.audio.hiby.hw.output_mode bt")
                 am?.setParameters("routing=128;vendor.audio.hiby.hw.output_mode=bt")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
                     val btDev = am.availableCommunicationDevices.firstOrNull {
@@ -141,11 +148,9 @@ object CirrusLogicManager {
                 }
             }
             OutputMode.LINE_OUT -> {
-                RootShell.execFast("echo lo > $SYSFS_BASE/out_mode; settings put global vendor.audio.hiby.hw.output_mode lo; setprop vendor.audio.hiby.hw.output_mode lo")
                 am?.setParameters("routing=8;vendor.audio.hiby.hw.output_mode=lo")
             }
             OutputMode.USB_DAC -> {
-                RootShell.execFast("settings put global vendor.audio.hiby.hw.output_mode usb; setprop vendor.audio.hiby.hw.output_mode usb")
                 am?.setParameters("routing=16384;vendor.audio.hiby.hw.output_mode=usb")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
                     val usbDev = am.availableCommunicationDevices.firstOrNull {
@@ -155,7 +160,6 @@ object CirrusLogicManager {
                 }
             }
             OutputMode.AUTO -> {
-                RootShell.execFast("echo auto > $SYSFS_BASE/out_mode; settings put global vendor.audio.hiby.hw.output_mode auto; setprop vendor.audio.hiby.hw.output_mode auto")
                 am?.setParameters("vendor.audio.hiby.hw.output_mode=auto")
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am != null) {
                     am.clearCommunicationDevice()
@@ -187,24 +191,19 @@ object CirrusLogicManager {
             val target = getAudioShareTarget(ctx)
             when (target) {
                 AudioShareTarget.DUAL_44_AND_BT -> {
-                    RootShell.execFast("echo bal_po > $SYSFS_BASE/out_mode; setprop vendor.audio.dual_output 1; setprop vendor.audio.bt_dual_stream 1")
                     am?.setParameters("vendor.audio.dual_output=1;vendor.audio.bt_dual_stream=1;vendor.audio.hiby.hw.output_mode=bal_po")
                 }
                 AudioShareTarget.DUAL_35_AND_BT -> {
-                    RootShell.execFast("echo po > $SYSFS_BASE/out_mode; setprop vendor.audio.dual_output 1; setprop vendor.audio.bt_dual_stream 1")
                     am?.setParameters("vendor.audio.dual_output=1;vendor.audio.bt_dual_stream=1;vendor.audio.hiby.hw.output_mode=po")
                 }
                 AudioShareTarget.DUAL_PHYSICAL -> {
-                    RootShell.execFast("echo dual_po > $SYSFS_BASE/out_mode; setprop vendor.audio.dual_output 1")
                     am?.setParameters("vendor.audio.dual_output=1")
                 }
                 AudioShareTarget.WIRED_AND_USB -> {
-                    RootShell.execFast("setprop vendor.audio.usb_mirror 1")
                     am?.setParameters("vendor.audio.usb_mirror=1")
                 }
             }
         } else {
-            RootShell.execFast("setprop vendor.audio.dual_output 0; setprop vendor.audio.bt_dual_stream 0; setprop vendor.audio.usb_mirror 0")
             am?.setParameters("vendor.audio.dual_output=0;vendor.audio.bt_dual_stream=0;vendor.audio.usb_mirror=0")
             // Restore current single output mode
             setOutputMode(ctx, getOutputMode(ctx))
@@ -258,14 +257,12 @@ object CirrusLogicManager {
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.digital_filter", filter.id) }
         runCatching { Settings.Global.putString(cr, "hw.digital_filter", filter.id) }
 
-        RootShell.execFast(
-            "echo ${filter.id} > $SYSFS_BASE/digital_filter; " +
-            "settings put global vendor.audio.hiby.hw.digital_filter ${filter.id}; " +
-            "settings put global vendor.audio.hiby.digital_filter ${filter.id}; " +
-            "settings put global hw.digital_filter ${filter.id}; " +
-            "setprop vendor.audio.hiby.hw.digital_filter ${filter.id}; " +
-            "setprop vendor.audio.hiby.digital_filter ${filter.id}"
-        )
+        // The HAL parameter is the route that actually lands on this hardware. What used to be
+        // here was a RootShell line (echo > sysfs / setprop), and there is no su on MikuOS, so the
+        // Settings row above changed while the DAC did not and the UI echoed the choice back as
+        // applied. See [MikuHalAudio].
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.hw.digital_filter", filter.id)
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.digital_filter", filter.id)
         ctx.sendBroadcast(Intent("com.m500.hardware.action.FILTER_CHANGED").apply {
             putExtra("filter", filter.id)
         })
@@ -298,13 +295,12 @@ object CirrusLogicManager {
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.hw.gain", mode.sysfsValue) }
         runCatching { Settings.Global.putString(cr, "vendor.audio.hiby.gain", mode.sysfsValue) }
 
-        RootShell.execFast(
-            "echo ${mode.sysfsValue} > $SYSFS_BASE/gain; " +
-            "settings put global vendor.audio.hiby.hw.gain ${mode.sysfsValue}; " +
-            "settings put global vendor.audio.hiby.gain ${mode.sysfsValue}; " +
-            "setprop vendor.audio.hiby.hw.gain ${mode.sysfsValue}; " +
-            "setprop vendor.audio.hiby.gain ${mode.sysfsValue}"
-        )
+        // The HAL parameter is the route that actually lands on this hardware. What used to be
+        // here was a RootShell line (echo > sysfs / setprop), and there is no su on MikuOS, so the
+        // Settings row above changed while the DAC did not and the UI echoed the choice back as
+        // applied. See [MikuHalAudio].
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.hw.gain", mode.sysfsValue)
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.gain", mode.sysfsValue)
         ctx.sendBroadcast(Intent("com.m500.hardware.action.GAIN_CHANGED").apply {
             putExtra("gain", mode.sysfsValue)
         })
@@ -333,7 +329,12 @@ object CirrusLogicManager {
         val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
         prefs.edit().putString("dre_mode", sysfsStr).apply()
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dre", v) }
-        RootShell.execFast("echo $sysfsStr > $SYSFS_BASE/dre_mode; settings put global vendor.audio.hiby.hw.dre $v; setprop vendor.audio.hiby.hw.dre $v")
+        // The HAL parameter is the route that actually lands on this hardware. What used to be
+        // here was a RootShell line (echo > sysfs / setprop), and there is no su on MikuOS, so the
+        // Settings row above changed while the DAC did not and the UI echoed the choice back as
+        // applied. See [MikuHalAudio].
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.hw.dre", v)
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.dre_mode", sysfsStr)
     }
 
     /** Tiered read — see [readDigitalFilter]. Null when nothing anywhere reports high power. */
@@ -356,7 +357,12 @@ object CirrusLogicManager {
         val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
         prefs.edit().putString("high_power_mode", sysfsStr).apply()
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.high_power", v) }
-        RootShell.execFast("echo $sysfsStr > $SYSFS_BASE/high_power_mode; settings put global vendor.audio.hiby.hw.high_power $v; setprop vendor.audio.hiby.hw.high_power $v")
+        // The HAL parameter is the route that actually lands on this hardware. What used to be
+        // here was a RootShell line (echo > sysfs / setprop), and there is no su on MikuOS, so the
+        // Settings row above changed while the DAC did not and the UI echoed the choice back as
+        // applied. See [MikuHalAudio].
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.hw.high_power", v)
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.high_power_mode", sysfsStr)
     }
 
     /** Tiered read — see [readDigitalFilter]. Null when nothing anywhere reports a balance. */
@@ -378,7 +384,12 @@ object CirrusLogicManager {
         val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
         prefs.edit().putString("lr_balance", clamped.toString()).apply()
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.balance", clamped) }
-        RootShell.execFast("echo $clamped > $SYSFS_BASE/lr_balance; settings put global vendor.audio.hiby.hw.balance $clamped; setprop vendor.audio.hiby.hw.balance $clamped")
+        // The HAL parameter is the route that actually lands on this hardware. What used to be
+        // here was a RootShell line (echo > sysfs / setprop), and there is no su on MikuOS, so the
+        // Settings row above changed while the DAC did not and the UI echoed the choice back as
+        // applied. See [MikuHalAudio].
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.hw.balance", clamped)
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.lr_balance", clamped)
     }
 
     fun getDsdGainCompensate(ctx: Context): Boolean {
@@ -390,7 +401,11 @@ object CirrusLogicManager {
         val cr = ctx.contentResolver
         val v = if (enabled) 1 else 0
         runCatching { Settings.Global.putInt(cr, "vendor.audio.hiby.hw.dsd_gain_comp", v) }
-        RootShell.execFast("settings put global vendor.audio.hiby.hw.dsd_gain_comp $v; setprop vendor.audio.hiby.hw.dsd_gain_comp $v")
+        // The HAL parameter is the route that actually lands on this hardware. What used to be
+        // here was a RootShell line (echo > sysfs / setprop), and there is no su on MikuOS, so the
+        // Settings row above changed while the DAC did not and the UI echoed the choice back as
+        // applied. See [MikuHalAudio].
+        MikuHalAudio.push(ctx, "vendor.audio.hiby.hw.dsd_gain_comp", v)
     }
 
     // ---- Honest (nullable) readers for DISPLAY surfaces ------------------------------------
@@ -426,8 +441,10 @@ object CirrusLogicManager {
         audit["kernel_sysfs_turbo"] = readKernelNode("audio_turbo") ?: readKernelNode("turbo") ?: "N/A"
         audit["kernel_sysfs_out_mode"] = readKernelNode("out_mode") ?: "N/A"
         audit["kernel_sysfs_balance"] = readKernelNode("lr_balance") ?: "N/A"
-        audit["prop_hw_filter"] = RootShell.execOut("getprop vendor.audio.hiby.hw.digital_filter") ?: "N/A"
-        audit["prop_hw_gain"] = RootShell.execOut("getprop vendor.audio.hiby.hw.gain") ?: "N/A"
+        // getprop never needed root; reading it through a su shell that does not exist turned two
+        // readable properties into "N/A" on every audit. SystemProperties.get is the direct read.
+        audit["prop_hw_filter"] = MikuHalAudio.sysProp("vendor.audio.hiby.hw.digital_filter") ?: "N/A"
+        audit["prop_hw_gain"] = MikuHalAudio.sysProp("vendor.audio.hiby.hw.gain") ?: "N/A"
         return audit
     }
 }

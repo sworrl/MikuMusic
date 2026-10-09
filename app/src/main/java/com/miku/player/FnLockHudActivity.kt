@@ -66,7 +66,6 @@ class FnLockHudActivity : ComponentActivity() {
         val allowVolume = intent.getBooleanExtra(EXTRA_ALLOW_VOLUME, false)
         val lockPower = intent.getBooleanExtra(EXTRA_LOCK_POWER, true)
 
-        PulsarLight.indicatePocketLock(this, isLockedState)
 
         // Real-time hardware switch observer while lock activity is active
         val cr = contentResolver
@@ -79,7 +78,6 @@ class FnLockHudActivity : ComponentActivity() {
                 val newLock = status == 1
                 if (newLock != isLockedState) {
                     isLockedState = newLock
-                    PulsarLight.indicatePocketLock(this@FnLockHudActivity, isLockedState)
                 }
             }
         }

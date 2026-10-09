@@ -3,5 +3,5 @@
     <string name="app_name">Miku Music</string>
     <string name="app_description">Miku Music — An Open Source Music Player</string>
     <string name="hardware_settings_title">M500 Hardware &amp; DAC Suite</string>
-    <string name="hardware_settings_summary">Hardware Fn Pocket Lock, Pulsar RGB Lighting, and Bit-Perfect USB DAC</string>
+    <string name="hardware_settings_summary">Hardware Fn Pocket Lock and Bit-Perfect USB DAC</string>
 </resources>

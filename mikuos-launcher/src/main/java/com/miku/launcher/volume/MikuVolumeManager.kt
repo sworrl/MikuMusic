@@ -218,7 +218,6 @@ object MikuVolumeManager {
         _state.value = _state.value.copy(isHudVisible = true)
 
         if (!wasVisible) {
-            MikuPulsarLight.showVolume(_state.value.volumePct, 2400L)
         }
 
         hudDismissJob?.cancel()

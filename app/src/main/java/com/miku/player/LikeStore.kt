@@ -69,7 +69,6 @@ object LikeStore {
         val key = canonicalArtistKey(artist, ctx)
         val now = if (likedArtists.contains(key)) { likedArtists.remove(key); false } else { likedArtists.add(key); true }
         PlayerPreferences.saveLikedArtist(ctx, key, now)
-        if (now) PulsarLight.indicateHearted(ctx)
         return now
     }
 
@@ -93,7 +92,6 @@ object LikeStore {
         mutateOnMain { if (!liked.contains(track.id)) liked.add(track.id) }
         PlayerPreferences.saveLikedTrackMeta(ctx, track.id, track.title, track.artist)
         MikuPlayQualifier.markHearted(track.id)
-        PulsarLight.indicateHearted(ctx)
         broadcastLike(ctx, track.id, true, n)
         if (n == 1 && track.artist.isNotBlank() && track.title.isNotBlank()) {
             LastFmPreferences.loadSessionKey(ctx)?.let { LastFm.setLoved(it, track.artist, track.title, true) }
@@ -151,7 +149,6 @@ object LikeStore {
         // Keep the heart score consistent with the boolean: turning it on seeds at least one heart,
         // turning it off zeroes the score. (Earning extra hearts goes through heart() per play.)
         PlayerPreferences.setHeartCount(ctx, id, if (nowLiked) PlayerPreferences.getHeartCount(ctx, id).coerceAtLeast(1) else 0)
-        if (nowLiked) PulsarLight.indicateHearted(ctx)
         try {
             android.provider.Settings.Global.putString(
                 ctx.contentResolver,
@@ -299,7 +296,6 @@ object LikeStore {
         val key = canonicalAlbumKey(artist, album, ctx)
         val now = if (likedAlbums.contains(key)) { likedAlbums.remove(key); false } else { likedAlbums.add(key); true }
         PlayerPreferences.saveLikedAlbum(ctx, key, now)
-        if (now) PulsarLight.indicateHearted(ctx)
         return now
     }
 }

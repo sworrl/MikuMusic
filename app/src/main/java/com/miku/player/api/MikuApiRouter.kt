@@ -11,7 +11,6 @@ import androidx.media3.common.Player
 import com.miku.player.FastLibraryStore
 import com.miku.player.PlayerHolder
 import com.miku.player.PlayerPreferences
-import com.miku.player.PulsarLight
 import com.miku.player.Track
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -194,28 +193,6 @@ class MikuApiRouter(private val context: Context) {
                 searchLibrary(query, limit)
             }
 
-            // Hardware Controls (Pulsar)
-            cleanPath == "/api/v1/hardware/pulsar" && method == "POST" -> {
-                val modeStr = jsonBody.optString("mode", "")
-                val hex = jsonBody.optString("hex", "")
-                val brightness = jsonBody.optInt("brightness", -1)
-
-                kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                    if (hex.isNotEmpty()) {
-                        PulsarLight.setCustomColorHex(context, hex)
-                    }
-                    if (modeStr.isNotEmpty()) {
-                        val modeEnum = PulsarLight.Mode.values().firstOrNull { it.id.equals(modeStr, ignoreCase = true) }
-                        if (modeEnum != null) {
-                            val b = if (brightness in 10..255) brightness else PulsarLight.getBrightness(context)
-                            PulsarLight.setMode(context, modeEnum, b)
-                        }
-                    } else if (brightness in 10..255) {
-                        PulsarLight.setMode(context, PulsarLight.getMode(context), brightness)
-                    }
-                }
-                getStatus()
-            }
 
             // 404 Not Found
             else -> {
@@ -285,8 +262,6 @@ class MikuApiRouter(private val context: Context) {
 
             put("hardware", JSONObject().apply {
                 put("dac_sample_rate_hz", dacRate)
-                put("pulsar_mode", PulsarLight.getMode(context).id)
-                put("pulsar_brightness", PulsarLight.getBrightness(context))
                 put("pocket_lock_active", fnStatus)
                 put("button_lock_active", buttonLock)
                 put("battery_pct", batteryLevel)

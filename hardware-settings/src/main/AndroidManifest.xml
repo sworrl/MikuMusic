@@ -13,9 +13,6 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <!-- Fn pocket lock (FnLockDaemon): root-free input-device disable + screen blank -->
-    <!-- CellRadioSaver: setRadioPower + service-state reads -->
-    <uses-permission android:name="android.permission.MODIFY_PHONE_STATE" />
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
     <uses-permission android:name="android.permission.DISABLE_INPUT_DEVICE" />
     <uses-permission android:name="android.permission.DEVICE_POWER" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -80,37 +77,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Pulsar RGB Lighting Settings Activity (Injected directly into Main Android Settings) -->
-        <activity
-            android:name=".PulsarDialogActivity"
-            android:exported="true"
-            android:label="Pulsar RGB Light"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.M500Hardware">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <action android:name="com.m500.hardware.action.PULSAR_SETTINGS" />
-                <action android:name="com.android.settings.action.IA_SETTINGS" />
-                <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="com.android.settings.category.ia.display" />
-                <category android:name="com.android.settings.category.ia.system" />
-                <category android:name="com.android.settings.category.ia.sound" />
-                <category android:name="com.android.settings.category.ia.homepage" />
-            </intent-filter>
-            <meta-data
-                android:name="com.android.settings.category"
-                android:value="com.android.settings.category.ia.system" />
-            <meta-data
-                android:name="com.android.settings.title"
-                android:value="Pulsar RGB Light" />
-            <meta-data
-                android:name="com.android.settings.summary"
-                android:value="Audio format status, battery indication &amp; dynamic effects" />
-            <meta-data
-                android:name="com.android.settings.order"
-                android:value="-257" />
-        </activity>
 
         <!-- Fullscreen Cyber Pocket Lock HUD Overlay -->
         <activity
@@ -148,16 +114,6 @@
             </intent-filter>
         </service>
 
-        <service
-            android:name=".PulsarTileService"
-            android:label="Pulsar RGB"
-            android:icon="@android:drawable/ic_dialog_alert"
-            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.service.quicksettings.action.QS_TILE" />
-            </intent-filter>
-        </service>
 
         <!-- Exported so the baked boot-exec (shell) can start it; foreground so
              A14 does not reap the screen-on receiver it hosts. -->
@@ -180,14 +136,6 @@
                 android:value="System hardware key and touch lock barrier" />
         </service>
 
-        <receiver
-            android:name=".PulsarReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="com.m500.hardware.action.SET_PULSAR_MODE" />
-                <action android:name="com.m500.hardware.action.SET_PULSAR_RGB" />
-            </intent-filter>
-        </receiver>
 
         <receiver
             android:name=".PocketLockReceiver"
