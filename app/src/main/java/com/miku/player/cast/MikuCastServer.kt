@@ -240,15 +240,32 @@ object MikuCastServer {
     }
 
     /** Push now-playing metadata to the TV. Safe to call when nothing is connected. */
+    /**
+     * Send a now-playing frame to the TV. Safe to call from any thread, including the main one.
+     *
+     * The dispatch is here rather than left to callers on purpose. The only caller that matters
+     * has to read the metadata on the main thread, because ExoPlayer is main-thread-only, and the
+     * obvious thing to do next — send it — throws NetworkOnMainThreadException. That went
+     * unnoticed because the failure was swallowed and because a missing META frame looks exactly
+     * like metadata that has not changed: the TV played perfect audio under a blank title for as
+     * long as the feature existed. Putting the hop inside the function that owns the socket means
+     * no future caller can make the same mistake.
+     */
     fun sendMeta(meta: JSONObject) {
-        val out = clientOut ?: return
         val bytes = meta.toString().toByteArray()
-        runCatching {
-            synchronized(out) {
-                out.write(MikuCastProtocol.header(MikuCastProtocol.TYPE_META, bytes.size))
-                out.write(bytes)
-                out.flush()
+        scope.launch {
+            val out = clientOut
+            if (out == null) {
+                Log.w(TAG, "sendMeta with no client stream; metadata dropped")
+                return@launch
             }
+            runCatching {
+                synchronized(out) {
+                    out.write(MikuCastProtocol.header(MikuCastProtocol.TYPE_META, bytes.size))
+                    out.write(bytes)
+                    out.flush()
+                }
+            }.onFailure { Log.w(TAG, "sendMeta failed: ${it.javaClass.simpleName}: ${it.message}") }
         }
     }
 

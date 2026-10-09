@@ -33,6 +33,10 @@ object MikuCastBridge {
     @Volatile private var attached = false
     @Volatile private var lastMetaKey = ""
 
+    // One-shot latches so a repeating cause logs once instead of once a second.
+    @Volatile private var warnedNoClient = 0
+    @Volatile private var warnedNoPlayer = 0
+
     fun attach(ctx: Context) {
         if (attached) return
         attached = true
@@ -52,6 +56,7 @@ object MikuCastBridge {
         scope.launch {
             while (true) {
                 runCatching { pushMetaIfChanged() }
+                    .onFailure { Log.w(TAG, "metadata poll failed: ${it.javaClass.simpleName}: ${it.message}") }
                 kotlinx.coroutines.delay(1000)
             }
         }
@@ -78,10 +83,23 @@ object MikuCastBridge {
     }
 
     private fun pushMetaIfChanged() {
-        if (!MikuCastServer.state.value.connected) return
+        if (!MikuCastServer.state.value.connected) {
+            if (warnedNoClient != 1) { warnedNoClient = 1; Log.d(TAG, "no TV attached; not sending metadata") }
+            return
+        }
         main.post {
-            val p = PlayerHolder.player ?: return@post
-            val md = runCatching { p.mediaMetadata }.getOrNull() ?: return@post
+            val p = PlayerHolder.player
+            if (p == null) {
+                // Worth a line rather than a bare elvis return: a null player here is the
+                // difference between a TV showing the track and a TV showing nothing, and it is
+                // invisible from the wire because the connection and the audio are both fine.
+                if (warnedNoPlayer != 1) { warnedNoPlayer = 1; Log.w(TAG, "PlayerHolder.player is null; TV will show no metadata") }
+                return@post
+            }
+            warnedNoPlayer = 0
+            val md = runCatching { p.mediaMetadata }
+                .onFailure { Log.w(TAG, "mediaMetadata threw: ${it.javaClass.simpleName}: ${it.message}") }
+                .getOrNull() ?: return@post
             val title = md.title?.toString().orEmpty()
             val artist = md.artist?.toString().orEmpty()
             val album = md.albumTitle?.toString().orEmpty()
@@ -93,17 +111,23 @@ object MikuCastBridge {
             // otherwise push a frame a second forever.
             val key = "$title|$artist|$album|$playing"
             if (key == lastMetaKey) return@post
-            lastMetaKey = key
 
-            MikuCastServer.sendMeta(
-                JSONObject()
-                    .put("title", title)
-                    .put("artist", artist)
-                    .put("album", album)
-                    .put("durationMs", if (dur > 0) dur else 0L)
-                    .put("positionMs", pos)
-                    .put("playing", playing)
-            )
+            Log.i(TAG, "pushing metadata to TV: '$title' / '$artist' (playing=$playing)")
+            val frame = JSONObject()
+                .put("title", title)
+                .put("artist", artist)
+                .put("album", album)
+                .put("durationMs", if (dur > 0) dur else 0L)
+                .put("positionMs", pos)
+                .put("playing", playing)
+
+            // This block runs on the main thread because ExoPlayer is main-thread-only.
+            // MikuCastServer.sendMeta does its own hop to an IO thread, which it has to: sending
+            // straight from here threw NetworkOnMainThreadException, and because that was
+            // swallowed and a missing META frame is indistinguishable from unchanged metadata,
+            // the TV played perfect audio under a blank title with nothing in the log.
+            lastMetaKey = key
+            MikuCastServer.sendMeta(frame)
         }
     }
 }
