@@ -85,11 +85,15 @@ data class FmDiagnostics(
 /**
  * HiBy M500 FM tuner engine.
  *
- * HARDWARE. Not a discrete tuner: this is the Qualcomm WCN SoC's FM core, reached over the
- * shared Bluetooth HCI transport (`fm_hci` / `radio_helium` in logcat, `getSocName()` =
- * "cherokee") and exposed as a V4L2 node at /dev/radio0. The framework side is the device's
- * `qcom.fmradio.jar` plus `libqcomfm_jni.so`, the same stack stock FM2 uses. Only the package
- * `com.caf.fmradio` (platform-signed, SELinux domain vendor_fm_app) may open the tuner.
+ * HARDWARE. There are two FM-capable paths on this board and they are not the same chip.
+ * `/dev/radio0` is bound to i2c-2 address 0x63, which is a Silicon Labs Si4705, and the kernel
+ * logs `si4705_i2c_interrupt` continuously while the tuner runs. That is the part that actually
+ * receives: its RSSI moves across the band. Separately the Qualcomm WCN FM stack is present and
+ * answers (`fm_hci` / `radio_helium` in logcat, and `getSocName()` returns "cherokee", which is
+ * the Bluetooth SoC name read out of bt_configstore). HiBy's V4L2 hooks on `FmReceiverJNI` drive
+ * the Si4705; the `FmReceiver` HCI API drives the Qualcomm side. The framework glue for both is
+ * the device's `qcom.fmradio.jar` plus `libqcomfm_jni.so`. Only the package `com.caf.fmradio`
+ * (platform-signed, SELinux domain vendor_fm_app) may open the tuner.
  *
  * AUDIO. Two things have to happen and the engine used to do neither. The HAL has to be told to
  * start its FM session with the output device bitmask in `handle_fm` (see [FmAudioRoute]), and
@@ -114,6 +118,9 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
         /** Stock FM2 waits this long after building the route before clearing the driver mute. */
         private const val UNMUTE_SETTLE_MS = 300L
+
+        /** Si4705 RX volume is a 6-bit field, so full scale is 63. */
+        private const val SI4705_MAX_VOLUME = 63
 
         /** Seek sensitivity, CAF's FM_RX_SIGNAL_STRENGTH_* scale. */
         val SENSITIVITY_LABELS = listOf("Weakest", "Weak", "Strong", "Strongest")
@@ -224,6 +231,17 @@ class QualcommFmHardwareEngine(private val context: Context) {
     val spectrum = MutableStateFlow(FloatArray(0))
     /** RMS level (0..1) of the same PCM; 0 when nothing flows. */
     val audioLevel = MutableStateFlow(0f)
+    /**
+     * True when the capture turned out to be the vendor's six-byte framing rather than the
+     * 16-bit PCM it advertises. Surfaced so the diagnostics panel can say which one it got
+     * instead of leaving the question open.
+     */
+    val captureFraming = MutableStateFlow<Boolean?>(null)
+    /** Highest frequency the spectrum can actually represent, given the decoded rate. */
+    val spectrumTopHz = MutableStateFlow(SPECTRUM_HIGH_HZ.toInt())
+
+    /** Rate the decoded capture really runs at, so a recording is not written at the wrong speed. */
+    @Volatile private var capturedRateHz: Int = 48000
 
     // ------------------------------------------------------------------ presets
 
@@ -411,7 +429,15 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 if (!jniLoaded) loadJni()
                 if (!jniLoaded) throw UnsatisfiedLinkError("libqcomfm_jni.so not loadable from this install location")
 
-                val rx = receiver ?: FmReceiver(FM_DEVICE_PATH, callbacks).also { receiver = it }
+                var rx = receiver ?: FmReceiver(FM_DEVICE_PATH, callbacks).also { receiver = it }
+                // If a previous session left the chip's state machine somewhere enable() will
+                // not accept, start over with a new one instead of failing the power-on.
+                val priorState = runCatching { rx.fmState }.getOrNull()
+                if (priorState != null && priorState != 0) {
+                    Log.w(TAG, "receiver came back in state $priorState, rebuilding it")
+                    runCatching { rx.disable(context) }
+                    rx = FmReceiver(FM_DEVICE_PATH, callbacks).also { receiver = it }
+                }
                 val soc = runCatching { rx.socName }.getOrNull()
                 Log.i(TAG, "FmReceiver created; soc=$soc smd=${runCatching { rx.isSmdTransportLayer }.getOrNull()} " +
                     "state=${runCatching { rx.fmState }.getOrNull()}")
@@ -426,7 +452,13 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 //    has a session with nothing arriving on it.
                 enableSlimbus(true)
 
-                // 3. Open the tuner.
+                // 3. Start the HAL's FM session BEFORE enabling the chip, which is the order
+                //    stock uses: fmTurnOnSequence() calls startFM() and only then enable().
+                //    The ADSP loopback latches onto the FM backend when it is opened, so
+                //    opening it after the source is already running is not the same thing.
+                startHalAudio()
+
+                // 4. Open the tuner.
                 val plan = band.value
                 val cfg = FmConfig().apply {
                     radioBand = plan.configBand
@@ -436,19 +468,38 @@ class QualcommFmHardwareEngine(private val context: Context) {
                     lowerLimit = plan.lowKHz
                     upperLimit = plan.highKHz
                 }
-                val deferred = CompletableDeferred<Boolean>().also { enableDeferred = it }
-                val ok = rx.enable(cfg, context)
+                enableDeferred = CompletableDeferred()
+                var ok = rx.enable(cfg, context)
                 Log.i(TAG, "FmReceiver.enable(config, ctx) -> $ok  [${plan.label}]")
-                if (!ok) throw IllegalStateException("FmReceiver.enable returned false")
-                val acked = withTimeoutOrNull(5000) { deferred.await() } ?: false
+                if (!ok) {
+                    // One retry on a brand-new receiver. This is the failure that made the
+                    // tuner unrestartable after a power cycle, and it clears on a fresh object.
+                    Log.w(TAG, "enable refused; retrying with a fresh receiver")
+                    runCatching { rx.disable(context) }
+                    rx = FmReceiver(FM_DEVICE_PATH, callbacks).also { receiver = it }
+                    enableDeferred = CompletableDeferred()
+                    ok = rx.enable(cfg, context)
+                    Log.i(TAG, "FmReceiver.enable retry -> $ok")
+                }
+                if (!ok) throw IllegalStateException("FmReceiver.enable returned false twice")
+                val acked = withTimeoutOrNull(5000) { enableDeferred!!.await() } ?: false
                 Log.i(TAG, "enable acked=$acked fmState=${runCatching { rx.fmState }.getOrNull()}")
 
-                // 4. Tuner setup.
+                // 5. Tuner setup, in stock's order.
+                runCatching { rx.setRawRdsGrpMask() }
+                // Normal power mode. Stock calls setLowPowerMode(false) here and we never did;
+                // the chip does not necessarily come up in it, and on QTI low power mode is
+                // what switches RDS reception off.
+                runCatching { rx.setPowerMode(FmReceiver.FM_RX_NORMAL_POWER_MODE) }
+                    .onSuccess { Log.i(TAG, "setPowerMode(normal) -> $it") }
+                    .onFailure { Log.w(TAG, "setPowerMode threw: $it") }
                 rx.setMuteMode(FmReceiver.FM_RX_UNMUTE)
                 rx.setStereoMode(stereoRequested.value)
                 runCatching { rx.EnableSoftMute(if (softMuteEnabled.value) 1 else 0) }
                 runCatching { rx.enableAFjump(afJumpEnabled.value) }
                 runCatching { rx.setSignalThreshold(seekSensitivity.value) }
+                // The part's own output volume, which nothing else sets.
+                FmV4L2.setRadioVolume(SI4705_MAX_VOLUME)
                 rx.registerRdsGroupProcessing(
                     FmReceiver.FM_RX_RDS_GRP_RT_EBL or FmReceiver.FM_RX_RDS_GRP_PS_EBL or
                         FmReceiver.FM_RX_RDS_GRP_AF_EBL or FmReceiver.FM_RX_RDS_GRP_PS_SIMPLE_EBL or
@@ -463,10 +514,6 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
                 hardwareOnline.value = true
                 radioText.value = "Live tuner · ${mhz(freq)}"
-
-                // 5. Start the HAL's FM session. This is the step that was missing: without the
-                //    AUDIO_DEVICE_OUT_FM bit in handle_fm the HAL treats the call as a stop.
-                startHalAudio()
 
                 // 6. SLIMbus again now that the HAL has a session, which is the second place
                 //    stock enables it (requestFocusImpl and onRebind both do startFM then
@@ -528,6 +575,12 @@ class QualcommFmHardwareEngine(private val context: Context) {
                     Log.i(TAG, "FmReceiver.disable(ctx) -> $ok")
                     withTimeoutOrNull(3000) { d.await() }
                 }
+                // Drop the receiver rather than reuse it. FmTransceiver refuses enable() unless
+                // its state machine is back at Turned_Off, and after a disable it does not
+                // always get there: the second power-on then failed with
+                // "FmReceiver.enable returned false" and the tuner could not be restarted
+                // without force-stopping the app. A fresh object costs one constructor.
+                runCatching { receiver = null }
                 hardwareOnline.value = false
                 abandonFocus()
                 radioText.value = "Tuner off"
@@ -879,15 +932,22 @@ class QualcommFmHardwareEngine(private val context: Context) {
     /**
      * Decide whether to hold the RADIO_TUNER capture open at all.
      *
-     * Capture is cheap but it is not free, and on Android 14 it lights the microphone privacy
-     * indicator — correctly, because the app really is recording. So it runs when it is the
-     * audio path (A2DP), when the user is recording, and when the spectrum is on screen and
-     * therefore being looked at. In the background on a wired route it does not run, and the
-     * radio plays through the loopback with nothing captured.
+     * It used to run whenever the tuner screen was visible, to feed the spectrum. It does not
+     * any more, because on this device the capture is not the radio. Recorded at the strongest
+     * frequency in the band with the antenna attached and at a dead frequency with no antenna,
+     * the two captures are indistinguishable: RMS -26.6 vs -27.1 dBFS, crest 4.26 vs 4.36, and
+     * the same spectral shape. Meanwhile RSSI moves from 0 to 19 across those same frequencies,
+     * so the tuner is receiving and this stream is not carrying what it receives. The HAL opens
+     * it as usecase 20 "audio-record" with no FM calibration (ACDB reports no matching module
+     * ids), which is consistent with an unrouted buffer rather than FM audio.
+     *
+     * Drawing a spectrum of it would be presenting a constant artifact as a measurement, so the
+     * capture now runs only where stock runs it: A2DP, where it genuinely is the audio path,
+     * and while recording, where the user asked for whatever is there.
      */
     private fun captureWanted(): Boolean =
         isPoweredOn.value && hardwareOnline.value &&
-            (activeRouteCode == FmAudioRoute.DEV_A2DP || uiVisible || wav.isRecording())
+            (activeRouteCode == FmAudioRoute.DEV_A2DP || wav.isRecording())
 
     fun setUiVisible(visible: Boolean) {
         if (uiVisible == visible) return
@@ -926,6 +986,10 @@ class QualcommFmHardwareEngine(private val context: Context) {
             val encoding = AudioFormat.ENCODING_PCM_16BIT
             val minBuf = AudioRecord.getMinBufferSize(sampleRate, channelIn, encoding).coerceAtLeast(4096)
             val buffer = ByteArray(minBuf)
+            // Decoded mono, which is never longer than one sample per 4 bytes of input.
+            val mono = ShortArray(minBuf / 4 + 2)
+            var framePhase = FmCaptureFrame.PHASE_NONE
+            var phaseChecked = false
             try {
                 @Suppress("MissingPermission")
                 audioRecord = AudioRecord(AUDIO_SOURCE_RADIO_TUNER, sampleRate, channelIn, encoding, minBuf).apply {
@@ -944,9 +1008,22 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 if (record != null && record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                     val read = record.read(buffer, 0, buffer.size)
                     if (read > 0) {
-                        if (bridgeToTrack) audioTrackHelper?.write(buffer, 0, read)
-                        wav.write(buffer, 0, read)
-                        updateSpectrum(buffer, read, sampleRate)
+                        // The stream claims to be 48 kHz 16-bit stereo and is not; see
+                        // FmCaptureFrame. Everything that treats it as a measurement has to go
+                        // through the decoder, or it is measuring mis-framed bytes.
+                        if (!phaseChecked) {
+                            framePhase = FmCaptureFrame.detectPhase(buffer, read)
+                            phaseChecked = true
+                            captureFraming.value = framePhase != FmCaptureFrame.PHASE_NONE
+                            capturedRateHz = FmCaptureFrame.decodedRate(framePhase, sampleRate)
+                        }
+                        val n = FmCaptureFrame.decode(buffer, read, framePhase, mono)
+                        val rate = FmCaptureFrame.decodedRate(framePhase, sampleRate)
+                        // The AudioTrack bridge is only the audio path on A2DP, and it is fed
+                        // the decoded samples for the same reason: the raw buffer is noise.
+                        if (bridgeToTrack) audioTrackHelper?.writeMono(mono, n)
+                        wav.writeMono(mono, n)
+                        updateSpectrum(mono, n, rate)
                     }
                 } else {
                     try { Thread.sleep(20) } catch (_: InterruptedException) { break }
@@ -961,6 +1038,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
             audioTrackHelper = null
             spectrum.value = FloatArray(0)
             audioLevel.value = 0f
+            captureFraming.value = null
             Log.d(TAG, "AudioRecord bridge stopped")
         }, "MikuFmAudioBridgeThread").apply { start() }
     }
@@ -985,21 +1063,24 @@ class QualcommFmHardwareEngine(private val context: Context) {
      * [SPECTRUM_FRAMES] frames of the 16-bit stereo buffer, ~12 updates/s. Cheap (48 × 1024 MACs)
      * and computed from the audio that is really being played — nothing synthetic.
      */
-    private fun updateSpectrum(buf: ByteArray, bytes: Int, sampleRate: Int) {
+    private fun updateSpectrum(samples: ShortArray, count: Int, sampleRate: Int) {
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastSpectrumMs < 80) return
-        val frames = minOf(bytes / 4, SPECTRUM_FRAMES)
+        val frames = minOf(count, SPECTRUM_FRAMES)
         if (frames < 256) return
         lastSpectrumMs = now
         var sumSq = 0.0
         for (i in 0 until frames) {
-            val l = ((buf[i * 4 + 1].toInt() shl 8) or (buf[i * 4].toInt() and 0xFF)).toShort().toFloat()
-            val r = ((buf[i * 4 + 3].toInt() shl 8) or (buf[i * 4 + 2].toInt() and 0xFF)).toShort().toFloat()
-            val m = (l + r) * 0.5f / 32768f
+            val m = samples[i] / 32768f
             monoScratch[i] = m; sumSq += (m * m).toDouble()
         }
+        // Bins above Nyquist cannot be measured, so they are not drawn rather than drawn as
+        // zero: the UI reads spectrumTopHz to know how far the plot is real.
+        val nyquist = sampleRate / 2
+        spectrumTopHz.value = minOf(SPECTRUM_HIGH_HZ, nyquist.toDouble()).toInt()
         val out = FloatArray(SPECTRUM_BINS)
         for (b in 0 until SPECTRUM_BINS) {
+            if (binFreqs[b] >= nyquist) { out[b] = 0f; continue }
             val w = 2.0 * Math.PI * binFreqs[b] / sampleRate
             val coeff = 2.0 * Math.cos(w)
             var s1 = 0.0; var s2 = 0.0
@@ -1024,6 +1105,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
      */
     fun startRecording(file: java.io.File): Boolean {
         if (!isPoweredOn.value || !hardwareOnline.value) return false
+        wav.setSampleRate(capturedRateHz)
         if (!wav.start(file)) return false
         reconcileCapture()
         return true
@@ -1060,6 +1142,13 @@ class QualcommFmHardwareEngine(private val context: Context) {
                         "mute" -> mute()
                         "unmute" -> unmute()
                         "vol" -> setVolumeIndex(intent.getIntExtra("index", volumeIndex.value))
+                        // Sweep the tuner part's own volume to find both the working range and
+                        // whether it is the thing standing between a correct route and silence.
+                        "v4l2vol" -> {
+                            val v = intent.getIntExtra("v", 63)
+                            val ok = FmV4L2.setRadioVolume(v)
+                            Log.i(TAG, "setV4L2RadioFmVolume($v) accepted=$ok")
+                        }
                         else -> logStatus()
                     }
                 }
@@ -1085,7 +1174,8 @@ class QualcommFmHardwareEngine(private val context: Context) {
             "route=${d.routeLabel}(${d.routeCode}) handle_fm=${d.handleFmWritten} " +
             "halLoopback=${d.halLoopback} fmVolume=${d.fmVolumeLinear} slimbus=${d.slimbusStatus} " +
             "rssi=${s.rssi} snr=${s.snr} multipath=${s.multipath} valid=${s.valid} " +
-            "audioLevel=${audioLevel.value} stereo=${isStereo.value} rds=${rdsAvailable.value} " +
+            "audioLevel=${audioLevel.value} framing=${captureFraming.value} " +
+            "stereo=${isStereo.value} rds=${rdsAvailable.value} " +
             "name='${stationName.value}' rt='${radioText.value}' err=${hardwareError.value}")
     }
 }

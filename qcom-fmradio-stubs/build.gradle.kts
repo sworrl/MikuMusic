@@ -1,9 +1,10 @@
 // Compile-time stubs for the device's /system/framework/qcom.fmradio.jar.
 //
-// The tuner is the Qualcomm WCN SoC FM core, not a discrete chip: on-device logging shows
-// fm_hci / radio_helium / android_hardware_fm carrying HCI opcodes over the shared BT transport,
-// and FmReceiver.getSocName() returns "cherokee". HiBy layers its own V4L2 hooks
-// (FmReceiverJNI.*V4L2*) on top of that same jar.
+// Two FM-capable paths exist on this board. /dev/radio0 is bound to i2c-2 address 0x63, a
+// Silicon Labs Si4705, and that is the part that receives. The Qualcomm WCN FM stack is also
+// present and answers (fm_hci / radio_helium; getSocName() returns "cherokee", which is the
+// Bluetooth SoC name out of bt_configstore). This jar carries the API for both: FmReceiver.*
+// speaks HCI to the Qualcomm side, FmReceiverJNI.*V4L2* drives the Si4705.
 //
 // Signatures were dumped from the device jar with dexdump on 2026-08-25 and extended with
 // baksmali on 2026-10-09 — keep them byte-exact. This module is compileOnly for :fmradio; at

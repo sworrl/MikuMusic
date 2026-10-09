@@ -52,6 +52,8 @@ data class FmState(
     val softMute: Boolean = true,
     val seekSensitivity: Int = 1,
     val audioLevel: Float = 0f,
+    val captureFraming: Boolean? = null,
+    val spectrumTopHz: Int = 15000,
     val diagnostics: FmDiagnostics = FmDiagnostics(),
     val spectrum: FloatArray = FloatArray(0),
 ) {
@@ -76,7 +78,8 @@ data class FmState(
             scanResults == other.scanResults && volumeIndex == other.volumeIndex &&
             volumeMax == other.volumeMax && afJump == other.afJump && softMute == other.softMute &&
             seekSensitivity == other.seekSensitivity && audioLevel == other.audioLevel &&
-            diagnostics == other.diagnostics && spectrum === other.spectrum
+            diagnostics == other.diagnostics && captureFraming == other.captureFraming &&
+            spectrumTopHz == other.spectrumTopHz && spectrum === other.spectrum
     }
 
     override fun hashCode(): Int {
@@ -142,6 +145,8 @@ object FmRadioManager {
             launch { eng.band.collect { v -> _state.update { it.copy(band = v) } } }
             launch { eng.spectrum.collect { v -> _state.update { it.copy(spectrum = v) } } }
             launch { eng.audioLevel.collect { v -> _state.update { it.copy(audioLevel = v) } } }
+            launch { eng.captureFraming.collect { v -> _state.update { it.copy(captureFraming = v) } } }
+            launch { eng.spectrumTopHz.collect { v -> _state.update { it.copy(spectrumTopHz = v) } } }
             launch { eng.currentFrequencyKHz.collect { v -> _state.update { it.copy(frequencyKHz = v) } } }
             launch { eng.isStereo.collect { v -> _state.update { it.copy(isStereo = v) } } }
             launch { eng.stereoRequested.collect { v -> _state.update { it.copy(stereoRequested = v) } } }

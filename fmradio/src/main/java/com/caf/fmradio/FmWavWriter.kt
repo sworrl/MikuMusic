@@ -13,7 +13,11 @@ import java.io.RandomAccessFile
  * could only work on A2DP. Stock FM2 splits them the same way — it has its own `stopWavHelper`
  * alongside `stopAudioTrackHelper`.
  */
-class FmWavWriter(private val sampleRate: Int = 48000, private val channels: Int = 2) {
+class FmWavWriter(private var sampleRate: Int = 48000, private val channels: Int = 2) {
+
+    /** The header is written at start(), so the real rate has to be known before then. */
+    @Synchronized
+    fun setSampleRate(hz: Int) { if (out == null && hz > 0) sampleRate = hz }
 
     companion object { private const val TAG = "FmWavWriter" }
 
@@ -54,6 +58,30 @@ class FmWavWriter(private val sampleRate: Int = 48000, private val channels: Int
             stop()
         }
     }
+
+    /**
+     * Write decoded mono samples. The WAV header is written for [channels], so a mono capture
+     * is duplicated rather than recorded at half speed.
+     */
+    @Synchronized
+    fun writeMono(samples: ShortArray, count: Int) {
+        val f = out ?: return
+        if (count <= 0) return
+        val need = count * 2 * channels
+        var b = scratch
+        if (b == null || b.size < need) { b = ByteArray(need); scratch = b }
+        var j = 0
+        for (i in 0 until count) {
+            val v = samples[i].toInt()
+            for (c in 0 until channels) {
+                b[j++] = (v and 0xFF).toByte()
+                b[j++] = ((v shr 8) and 0xFF).toByte()
+            }
+        }
+        write(b, 0, need)
+    }
+
+    private var scratch: ByteArray? = null
 
     /** Patch the two length fields the header could not know up front, then close. */
     @Synchronized

@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
@@ -76,6 +77,10 @@ fun RadioWaterfallSpectrum(
         else List(rowCount) { FloatArray(binCount) }
     }
     val live = if (spectrum.size == binCount) spectrum else FloatArray(binCount)
+    // No capture means no spectrum. The panel says so rather than drawing a flat line that
+    // could be read as "the radio is silent": on a wired route this device does not expose the
+    // tuner audio to the app at all, so there is nothing here to measure.
+    val hasAudio = spectrum.size == binCount
 
     val low = band.lowKHz.toFloat()
     val span = (band.highKHz - band.lowKHz).toFloat()
@@ -168,12 +173,24 @@ fun RadioWaterfallSpectrum(
             drawLine(MikuPink, Offset(markerX, 0f), Offset(markerX, h), strokeWidth = 2.dp.toPx())
         }
 
+        if (!hasAudio && isHardwareOnline) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    "Tuner audio is carried by the hardware loopback on this output,\n" +
+                        "so the app never sees the PCM. Signal readings above are live.",
+                    color = MikuTextSecondary.copy(alpha = 0.75f), fontSize = 8.sp,
+                    lineHeight = 11.sp, textAlign = TextAlign.Center
+                )
+            }
+        }
+
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 3.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                "LIVE AUDIO SPECTRUM · FM PCM 60 Hz–15 kHz",
+                if (hasAudio) "LIVE AUDIO SPECTRUM · FM PCM 60 Hz–15 kHz"
+                else "BAND ${band.lowKHz / 1000}–${band.highKHz / 1000} MHz · DRAG TO TUNE",
                 color = MikuTeal.copy(alpha = 0.85f), fontSize = 7.5.sp, fontWeight = FontWeight.Bold
             )
             Text(

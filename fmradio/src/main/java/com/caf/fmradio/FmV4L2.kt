@@ -50,6 +50,20 @@ object FmV4L2 {
     fun setTunedKHz(khz: Int): Boolean =
         guard("setV4L2RadioFrequency") { FmReceiverJNI.setV4L2RadioFrequency(khz * 16) } != null
 
+    /**
+     * Set the tuner part's own receive volume.
+     *
+     * Worth a look because of what the symptom is: the HAL enables the FM codec port and the
+     * output is constant noise that does not change with frequency, which is what an enabled
+     * port with nothing driving it sounds like. If the Si4705's output is sitting at zero then
+     * everything upstream can be correct and still produce exactly that.
+     *
+     * Range is a guess (the part takes 0..63), so the debug hook sweeps it rather than
+     * trusting the guess.
+     */
+    fun setRadioVolume(v: Int): Boolean =
+        guard("setV4L2RadioFmVolume") { FmReceiverJNI.setV4L2RadioFmVolume(v) } != null
+
     /** Frequency the driver believes it is on, in kHz. V4L2 counts in 1/16 kHz units. */
     fun tunedKHz(): Int? = guard("getV4L2RadioFrequency") {
         val raw = FmReceiverJNI.getV4L2RadioFrequency()

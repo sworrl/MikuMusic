@@ -264,6 +264,12 @@ fun FmDiagnosticsPanel(st: FmState) {
         DiagRow("Driver mute", when (d.driverMuted) { true -> "muted"; false -> "open"; null -> "—" })
         DiagRow("App mute", if (st.isMuted) "muted" else "open")
         DiagRow("PCM level", if (st.isPowerOn) String.format(Locale.US, "%.4f RMS", st.audioLevel) else "—")
+        DiagRow("Capture framing", when (st.captureFraming) {
+            true -> "vendor 6-byte frames, decoded to ${FmCaptureFrame.DECODED_RATE_HZ / 1000} kHz mono"
+            false -> "plain 16-bit PCM as advertised"
+            null -> "—"
+        })
+        DiagRow("Spectrum range", "60 Hz to ${st.spectrumTopHz} Hz")
         Spacer(Modifier.height(8.dp))
         DiagRow("RSSI", s.rssi?.toString() ?: st.rssi?.toString() ?: "—")
         DiagRow("SNR", s.snr?.toString() ?: "—")

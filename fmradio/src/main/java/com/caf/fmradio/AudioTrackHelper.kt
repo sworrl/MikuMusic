@@ -135,6 +135,29 @@ class AudioTrackHelper(
         }
     }
 
+    /**
+     * Write decoded mono samples, duplicated to both channels.
+     *
+     * The capture is mono once the vendor framing is undone (see FmCaptureFrame), and the track
+     * is stereo because that is the configuration this device carries FM on.
+     */
+    fun writeMono(samples: ShortArray, count: Int): Int {
+        val track = audioTrack ?: return -1
+        if (!isPlaying || count <= 0) return 0
+        val need = count * 2
+        var buf = stereoScratch
+        if (buf == null || buf.size < need) { buf = ShortArray(need); stereoScratch = buf }
+        for (i in 0 until count) { val v = samples[i]; buf[i * 2] = v; buf[i * 2 + 1] = v }
+        return try {
+            track.write(buf, 0, need)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Exception writing mono to AudioTrack", t)
+            -1
+        }
+    }
+
+    private var stereoScratch: ShortArray? = null
+
     @Synchronized
     fun setVolume(vol: Float) {
         currentVolume = vol.coerceIn(0.0f, 1.0f)
