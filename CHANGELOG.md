@@ -2,6 +2,32 @@
 
 Native Kotlin/Compose player for the HiBy M500 MIKU (`com.miku.player`).
 
+## A gap you should know about
+
+Every entry below is from 2026-08-15 and stops at 0.9.17. The player is on
+2.0.309. The file was written in one sitting and then never kept up, while
+roughly a hundred releases happened without it.
+
+Those hundred are not reconstructed here. Writing them now would mean inventing
+dates and attributing changes from memory, and a changelog that cannot be
+trusted is worse than one that admits where it ends. The commit log is the real
+history and it is written to be read:
+
+    git log --oneline
+    git log --stat <path>
+
+What landed in the gap, in outline, so the shape is not a mystery: bit-perfect
+DIRECT output to the dual CS43198 DACs; a Last.fm scrobbler with an offline
+queue; listening statistics and the Miku Rewind recap; the Miku Shaders GLES2
+visualizer engine alongside native libprojectM with 9,825 presets; a BLE remote
+peripheral; CUE-sheet splitting; artist photography from Wikidata; an alarm
+clock; an artwork and booklet viewer; a taste model with a radio station mode;
+a TV cast companion that mirrors the decoded PCM bit-perfect; and four
+successive sweeps that removed telemetry the UI was presenting as measured when
+nothing had measured it.
+
+The entries below are kept as written.
+
 ## 0.9.17 — 2026-08-15 — tape materials + OS fn-lock
 
 ### Tape mode — de-slopped, themed
