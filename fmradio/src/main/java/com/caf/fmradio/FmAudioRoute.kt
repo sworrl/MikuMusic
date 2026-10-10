@@ -146,14 +146,24 @@ object FmAudioRoute {
      * backend before it has a volume, and matching stock removes a variable rather than
      * leaving one in.
      */
-    fun start(am: AudioManager, code: Int): Int {
+    fun start(am: AudioManager, code: Int, gain: Float): Int {
         val withFm = code or AUDIO_DEVICE_OUT_FM
         am.setParameters("fm_routing=$withFm")
         Log.i(TAG, "fm_routing=$withFm (${describe(code)}) [start]")
-        val gain = applyVolume(am, code)
+        // The caller supplies the gain. It used to be read off STREAM_MUSIC here, which is the
+        // coupling the tuner was explicitly supposed to lose: the radio got quieter because the
+        // music volume had drifted, with nothing on screen saying so. The engine's own level is
+        // the only thing allowed to set this now.
+        setGain(am, gain)
         am.setParameters("handle_fm=$withFm")
         Log.i(TAG, "handle_fm=$withFm, fm_volume=$gain")
         return withFm
+    }
+
+    /** Write the HAL's FM gain. Linear, 0..1; see the engine for how the level maps onto it. */
+    fun setGain(am: AudioManager, gain: Float) {
+        runCatching { am.setParameters("fm_volume=$gain") }
+            .onFailure { Log.w(TAG, "fm_volume not applied: ${it.javaClass.simpleName}: ${it.message}") }
     }
 
     /** Move a running session to a new output without stopping it. */
@@ -175,20 +185,15 @@ object FmAudioRoute {
     }
 
     /**
-     * Track STREAM_MUSIC onto the HAL's FM gain, the way stock does: look up the real dB value
-     * the volume curve assigns to this index on this device, then convert to linear.
+     * What STREAM_MUSIC's curve WOULD give for this device, for reference only.
      *
-     * Returns the gain written, or null if the lookup failed. The engine shows that value rather
-     * than claiming a volume it could not set.
+     * Stock derives the FM gain this way and it is how 0.052481 was captured, so it is worth
+     * being able to read. It no longer writes anything: the tuner has its own level and tying
+     * it back to the media stream is the bug this whole path was changed to remove.
      */
-    fun applyVolume(am: AudioManager, code: Int): Float? = runCatching {
+    fun mediaStreamEquivalentGain(am: AudioManager, code: Int): Float? = runCatching {
         val index = am.getStreamVolume(AudioManager.STREAM_MUSIC)
         val db = am.getStreamVolumeDb(AudioManager.STREAM_MUSIC, index, code)
-        val linear = if (db.isInfinite() || db.isNaN()) 0f else exp(db * DB_TO_LINEAR)
-        am.setParameters("fm_volume=$linear")
-        linear
-    }.getOrElse {
-        Log.w(TAG, "fm_volume not applied: ${it.javaClass.simpleName}: ${it.message}")
-        null
-    }
+        if (db.isInfinite() || db.isNaN()) 0f else exp(db * DB_TO_LINEAR)
+    }.getOrNull()
 }

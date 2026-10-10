@@ -785,6 +785,10 @@ public final class MikuDirectAudioSink implements AudioSink {
         if (castChannels > 0) {
           com.miku.player.cast.MikuCastTap.onFormat(
               outputSampleRate, castBytesPerSample, castChannels, outputEncoding);
+          // Same format to the multi-output mirrors (MikuMirrorOutput), which convert to float.
+          com.miku.player.MikuMirrorOutput.onFormat(
+              outputSampleRate, castBytesPerSample, castChannels,
+              outputEncoding == C.ENCODING_PCM_FLOAT);
         }
       }
 
@@ -864,6 +868,8 @@ public final class MikuDirectAudioSink implements AudioSink {
       Api31.setLogSessionIdOnAudioTrack(audioTrack, playerId);
     }
     audioSessionId = audioTrack.getAudioSessionId();
+    // Mirrors sync against this track's head position, which starts from zero here.
+    com.miku.player.MikuMirrorOutput.onPrimaryTrack(audioTrack);
 
     // Publish the format the platform GRANTED to the OS surfaces that show it (launcher status
     // bar chip, lockscreen badge, anatomical observatory pill). Read back from the AudioTrack
@@ -911,6 +917,7 @@ public final class MikuDirectAudioSink implements AudioSink {
   @Override
   public void play() {
     playing = true;
+    com.miku.player.MikuMirrorOutput.onPrimaryPlay();
     if (isAudioTrackInitialized()) {
       audioTrackPositionTracker.start();
       audioTrack.play();
@@ -1348,6 +1355,19 @@ public final class MikuDirectAudioSink implements AudioSink {
       }
     }
 
+    // The other outputs (MikuMirrorOutput): same span, same rewind-and-restore. Always called for
+    // PCM, even with no mirror active, because it counts the bytes written to this track and the
+    // mirrors' sync depends on that count being complete.
+    if (bytesWrittenOrError > 0 && configuration.outputMode == OUTPUT_MODE_PCM) {
+      int afterWrite = buffer.position();
+      int teeFrom = afterWrite - bytesWrittenOrError;
+      if (teeFrom >= 0) {
+        buffer.position(teeFrom);
+        com.miku.player.MikuMirrorOutput.offer(buffer, bytesWrittenOrError);
+        buffer.position(afterWrite);
+      }
+    }
+
     lastFeedElapsedRealtimeMs = SystemClock.elapsedRealtime();
 
     if (bytesWrittenOrError < 0) {
@@ -1592,6 +1612,7 @@ public final class MikuDirectAudioSink implements AudioSink {
 
   private void setVolumeInternal() {
     registerCastMute();
+    com.miku.player.MikuMirrorOutput.setVolume(volume);
     // While a TV is mirroring, the local output is silenced but DECODING CONTINUES. That
     // distinction is the whole trick: pausing would stop the decoder and there would be nothing
     // left to send, so the local AudioTrack is simply run at zero gain instead.
@@ -1634,6 +1655,7 @@ public final class MikuDirectAudioSink implements AudioSink {
   @Override
   public void pause() {
     playing = false;
+    com.miku.player.MikuMirrorOutput.onPrimaryPause();
     if (isAudioTrackInitialized()
         && (audioTrackPositionTracker.pause() || isOffloadedPlayback(audioTrack))) {
       audioTrack.pause();
@@ -1642,6 +1664,7 @@ public final class MikuDirectAudioSink implements AudioSink {
 
   @Override
   public void flush() {
+    com.miku.player.MikuMirrorOutput.onPrimaryFlush();
     if (isAudioTrackInitialized()) {
       resetSinkStateForFlush();
 

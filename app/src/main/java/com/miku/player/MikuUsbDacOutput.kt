@@ -107,6 +107,9 @@ object MikuUsbDacOutput {
 
     private val USB_SINKS = setOf(AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_USB_HEADSET)
 
+    /** Re-evaluate, e.g. when MikuMirrorOutput starts or stops sharing. */
+    fun refresh(reason: String) = rescan(reason)
+
     private fun rescan(reason: String) {
         val a = app ?: return
         val am = a.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
@@ -128,6 +131,21 @@ object MikuUsbDacOutput {
             channelCounts = usb.channelCounts,
         )
         Log.i(TAG, "USB DAC present ($reason): ${device!!.name} rates=${usb.sampleRates.joinToString()} encodings=${usb.encodings.joinToString()}")
+        // Playing to every output at once (MikuMirrorOutput) owns the routing then: the player's
+        // own track goes to the primary and the USB device gets a mirror. A bit-perfect mixer on
+        // the USB device would refuse that mirror (it admits one format-matched track), so it
+        // is cleared too. Note this does not unroute through setPreferredAudioDevice(null),
+        // which would undo the primary the mirror just chose.
+        if (MikuMirrorOutput.isSharing(a)) {
+            if (routed || mixerMode.isNotEmpty()) {
+                routed = false
+                mixerMode = ""
+                applyVolumePassthrough(false)
+                if (Build.VERSION.SDK_INT >= 34) clearBitPerfectMixer(a)
+            }
+            Log.i(TAG, "sharing to every output; USB is a mirror, not the route ($reason)")
+            return
+        }
         // Car projection veto: in car mode USB carries video; the car router forces analog.
         val carBlocks = !PlayerPreferences.loadAllowUsbAudio(a) && MikuCarAudioRouter.isCarUiMode(a)
         if (preferUsb && !carBlocks) route(a, usb) else Log.i(TAG, "not routing (preferUsb=$preferUsb carBlocks=$carBlocks)")

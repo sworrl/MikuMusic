@@ -160,13 +160,105 @@ private val NO_SPLIT_ARTIST_NAMES = setOf(
 // the app fail to launch — verified live, this is not a hypothetical.
 private val PAREN_FEAT_RE = Regex("(?i)\\s*[\\[\\(](feat|ft|featuring)\\b.*?[\\)\\]]")
 private val ARTIST_SPLIT_RE =
-    Regex("(?i)\\s*(?:\\bfeat\\.?\\b|\\bft\\.?\\b|\\bfeaturing\\b|\\bwith\\b|\\band\\b|\\bw/|[&/+,;|]|\\bx\\b|\\bvs\\.?\\b|[–—])\\s*")
+    Regex("(?i)\\s*(?:\\bfeat\\.?\\b|\\bft\\.?\\b|\\bfeaturing\\b|\\bwith\\b|\\band\\b|\\bw/|[&/+,;|]|\\bx\\b|\u00d7|\\bvs\\.?\\b|[–—])\\s*")
 private val DISC_FOLDER_RE = Regex("(?i)^(cd|disc|disk|vol\\.?|volume)\\s*\\.?\\s*\\d{1,3}$|^\\d{1,2}$")
 private val YEAR_ALBUM_RE = Regex("^(19|20)\\d{2}\\s*[-–—:].+")
 private val YEAR_ONLY_RE = Regex("^(?:19|20)\\d{2}(?:[-/]\\d{2,4})?$|^\\[(?:19|20)\\d{2}\\]$|^\\((?:19|20)\\d{2}\\)$")
 private val TRAILING_BRACKET_RE = Regex("\\s*[\\[(][^\\])]*[\\])]\\s*$")
 private val TRAILING_THE_RE = Regex("(?i),?\\s+the$")
 private val COMBINING_MARKS_RE = Regex("\\p{Mn}+")
+
+// Characters bands use as STAND-INS FOR LETTERS, folded to the letter they are drawn as.
+//
+// This is the difference between a name being findable and not. "$uicide Boy$" went through the
+// non-letter strip below, which turned every "$" into a space, and keyed as "uicide boy" - the
+// leading S simply gone. Searching "Suicide Boys" matched nothing, and a second rip tagged
+// "$uicideboy$" keyed differently again, so the same band sat in the library as two artists
+// neither of which could be found by typing their name.
+//
+// DIGITS ARE DELIBERATELY NOT IN HERE. Folding 0->o, 1->i, 3->e and so on would also rewrite
+// "Blink-182", "2 Unlimited", "Eiffel 65" and "3 Doors Down", where the digits ARE the name.
+// Leetspeak that leans on digits stays unfolded; that is the conservative half of the trade and
+// it is better than inventing an artist called "Blink-IBZ". Only glyphs that are never part of a
+// real name on their own are listed, so folding them cannot destroy information.
+private val STYLIZED_LETTER_FOLD: Map<Char, String> = mapOf(
+    '$' to "s", '\u00a7' to "s",                              // $, section sign
+    '@' to "a",
+    '\u20ac' to "e", '\u00a2' to "c",                         // euro, cent
+    '\u00a3' to "l", '\u00a5' to "y",                         // pound, yen
+    '\u0192' to "f", '\u00b5' to "u",                         // florin, micro
+    '\u00f8' to "o", '\u00d8' to "o",                         // slashed o - not decomposable by NFD
+    '\u00df' to "ss", '\u00e6' to "ae", '\u00c6' to "ae",     // eszett, ash
+    '\u0153' to "oe", '\u0152' to "oe",                       // ligature oe
+    '\u00fe' to "th", '\u00f0' to "d", '\u0111' to "d",      // thorn, eth, d-stroke
+    '\u0142' to "l", '\u0141' to "l",                         // l-stroke
+    '\u2020' to "t", '\u2021' to "t",                         // dagger, double dagger
+    '\u00a9' to "c", '\u00ae' to "r",                         // copyright, registered
+    '\u0394' to "a", '\u2206' to "a",                         // deltas, drawn as an A
+)
+
+// Glyphs that stand in for a letter ONLY in the middle of a word, and are ordinary punctuation
+// at either end. "P!nk" is a letter; "Snap!" and "Ballyhoo!" are not, and both are real artists
+// in the library this was tested against - folding these unconditionally turned them into
+// "snapi" and "ballyhooi". So they fold only with a letter on BOTH sides.
+// Not '|': ARTIST_SPLIT_RE already treats it as a collaboration separator ("A|B"), and the split
+// runs before this fold, so a pipe never reaches here. Not accented letters either - those are
+// real letters and NFD handles them a few lines down.
+private val INNER_ONLY_FOLD: Map<Char, String> = mapOf(
+    '!' to "i", '\u00a1' to "i",
+)
+
+// UPPERCASE Cyrillic and Greek letters that are drawn like Latin capitals, which is how a lot of
+// band names get their look: "NIИ" is Nine Inch Nails with a reversed N, and keyed as "ni" before
+// this because the mixed-script branch below simply deleted anything non-ASCII.
+//
+// Only uppercase, and only applied when the name ALSO has ASCII letters in it. Lowercase Cyrillic
+// is not a homoglyph of anything Latin, and a genuinely Russian or Greek name has no ASCII in it
+// at all - those must keep going to the transliteration store untouched rather than being mangled
+// into a lookalike spelling here.
+private val HOMOGLYPH_FOLD: Map<Char, String> = mapOf(
+    '\u0418' to "n", '\u042f' to "r",                          // И, Я - reversed N and R
+    '\u0410' to "a", '\u0412' to "b", '\u0415' to "e",         // А, В, Е
+    '\u041a' to "k", '\u041c' to "m", '\u041d' to "h",         // К, М, Н
+    '\u041e' to "o", '\u0420' to "p", '\u0421' to "c",         // О, Р, С
+    '\u0422' to "t", '\u0423' to "y", '\u0425' to "x",         // Т, У, Х
+    '\u0391' to "a", '\u0392' to "b", '\u0395' to "e",         // Alpha, Beta, Epsilon
+    '\u0396' to "z", '\u0397' to "h", '\u0399' to "i",         // Zeta, Eta, Iota
+    '\u039a' to "k", '\u039c' to "m", '\u039d' to "n",         // Kappa, Mu, Nu
+    '\u039f' to "o", '\u03a1' to "p", '\u03a4' to "t",         // Omicron, Rho, Tau
+    '\u03a7' to "x",                                            // Chi
+)
+
+private fun foldStylizedLetters(s: String): String {
+    val needsPlain = s.any { STYLIZED_LETTER_FOLD.containsKey(it) }
+    val needsInner = s.any { INNER_ONLY_FOLD.containsKey(it) }
+    if (!needsPlain && !needsInner) return s
+    val sb = StringBuilder(s.length + 4)
+    for ((i, c) in s.withIndex()) {
+        val plain = STYLIZED_LETTER_FOLD[c]
+        if (plain != null) { sb.append(plain); continue }
+        val inner = INNER_ONLY_FOLD[c]
+        if (inner != null &&
+            i > 0 && i < s.length - 1 &&
+            s[i - 1].isLetter() && s[i + 1].isLetter()) {
+            sb.append(inner)
+            continue
+        }
+        sb.append(c)
+    }
+    return sb.toString()
+}
+
+/** Latin-lookalike capitals, folded only for a name that is already mostly ASCII. See above. */
+private fun foldHomoglyphs(s: String): String {
+    if (s.none { HOMOGLYPH_FOLD.containsKey(it) }) return s
+    if (s.none { it.code < 128 && it.isLetter() }) return s
+    val sb = StringBuilder(s.length)
+    for (c in s) sb.append(HOMOGLYPH_FOLD[c] ?: c.toString())
+    return sb.toString()
+}
+
+private val ALL_SPACE_RE = Regex("\\s+")
 private val NON_LETTER_DIGIT_RE = Regex("[^\\p{L}\\p{Nd}\\s]")
 private val WHITESPACE_RUN_RE = Regex("\\s+")
 
@@ -421,6 +513,9 @@ private fun canonicalArtistKeyUncached(artistName: String, ctx: android.content.
     // Without this, that variant keyed as "...method the" and never merged with the prefixed form.
     clean = TRAILING_THE_RE.replace(clean, "").trim()
     clean = clean.trim('.', '!', '?', '-', ',', '"', '\'', ' ')
+    // Resolve Latin-lookalike capitals first, or the ASCII-only filter below deletes them and
+    // "NIИ" becomes "NI". Only touches names that already contain ASCII letters.
+    clean = foldHomoglyphs(clean)
     if (clean.any { it.code > 127 }) {
         // If the tag already mixes non-Latin script with a human-provided Latin reading (e.g.
         // "花冷え hanabie" vs a plain "花冷え" elsewhere), trust that existing Latin text rather
@@ -454,8 +549,79 @@ private fun canonicalArtistKeyUncached(artistName: String, ctx: android.content.
     // Strip everything that isn't a letter/digit/space (smart quotes, stray punctuation, zero-
     // width/invisible characters some taggers inject) and collapse whitespace runs to one space —
     // "Denzel  Curry" (double space) and "Denzel Curry" must key identically, and currently didn't.
+    // Fold letter-substitute glyphs BEFORE the strip below, which would otherwise turn them
+    // into spaces and lose the letter: "$uicide Boy$" keyed as "uicide boy" until this existed.
+    clean = foldStylizedLetters(clean)
     clean = WHITESPACE_RUN_RE.replace(NON_LETTER_DIGIT_RE.replace(clean, " ").trim(), " ").lowercase()
     return ARTIST_KEY_ALIASES[clean] ?: clean
+}
+
+/**
+ * The key for deciding two tags are the SAME artist, and for matching a typed search.
+ *
+ * It is [canonicalArtistKey] with the spaces taken out, because how a stylised name is broken
+ * into words is not a fact about the artist: the same band is tagged "$uicide Boy$",
+ * "$uicideboy$" and "Suicide Boys" across different rips, and all three have to land in one
+ * place and be reachable by typing any of them. Dropping spaces is what makes the first two
+ * agree with the third.
+ *
+ * Kept SEPARATE from canonicalArtistKey rather than replacing it, because that one is persisted:
+ * liked artists and pinned artist covers are stored under it, and changing its output would
+ * quietly orphan every entry a user already has. See [legacyArtistKey].
+ */
+private val artistMatchKeyCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+fun artistMatchKey(artistName: String, ctx: android.content.Context? = null): String {
+    artistMatchKeyCache[artistName]?.let { return it }
+    val out = ALL_SPACE_RE.replace(canonicalArtistKey(artistName, ctx), "")
+    if (artistMatchKeyCache.size < 50_000) artistMatchKeyCache[artistName] = out
+    return out
+}
+
+/**
+ * What [canonicalArtistKey] produced before stylised letters were folded, for reading old data.
+ *
+ * A user who hearted "$uicide Boy$" has "uicide boy" written to their preferences. The fix
+ * changes that key to "suicide boys", so anything that READS a persisted artist key has to try
+ * this form too or the heart silently disappears. Writes always use the current key, so stored
+ * data migrates as it is touched and this fallback goes quiet on its own.
+ */
+fun legacyArtistKey(artistName: String, ctx: android.content.Context? = null): String {
+    var clean = normalizeArtistName(artistName).trim()
+    if (clean.startsWith("the ", ignoreCase = true)) clean = clean.substring(4).trim()
+    clean = TRAILING_THE_RE.replace(clean, "").trim()
+    clean = clean.trim('.', '!', '?', '-', ',', '"', '\'', ' ')
+    // Resolve Latin-lookalike capitals first, or the ASCII-only filter below deletes them and
+    // "NIИ" becomes "NI". Only touches names that already contain ASCII letters.
+    clean = foldHomoglyphs(clean)
+    if (clean.any { it.code > 127 }) {
+        val asciiOnly = clean.filter { it.code in 32..126 }.trim()
+        if (asciiOnly.any { it.isLetter() }) clean = asciiOnly
+    }
+    clean = runCatching {
+        COMBINING_MARKS_RE.replace(
+            java.text.Normalizer.normalize(clean, java.text.Normalizer.Form.NFD), "")
+    }.getOrDefault(clean)
+    clean = WHITESPACE_RUN_RE.replace(NON_LETTER_DIGIT_RE.replace(clean, " ").trim(), " ").lowercase()
+    return ARTIST_KEY_ALIASES[clean] ?: clean
+}
+
+/**
+ * Fold any free text the way a search box should compare it: stylised letters resolved to the
+ * letters they are drawn as, accents dropped, punctuation and spacing ignored entirely.
+ *
+ * Spacing has to go for the same reason as in [artistMatchKey] - "Suicide Boys" has to find
+ * "$uicideboy$" - and once spacing is gone from the haystack it has to go from the needle too,
+ * so both sides run through this.
+ */
+fun searchFold(text: String): String {
+    if (text.isEmpty()) return text
+    var t = foldStylizedLetters(text)
+    t = runCatching {
+        COMBINING_MARKS_RE.replace(
+            java.text.Normalizer.normalize(t, java.text.Normalizer.Form.NFD), "")
+    }.getOrDefault(t)
+    return ALL_SPACE_RE.replace(NON_LETTER_DIGIT_RE.replace(t, " "), "").lowercase()
 }
 
 // Stable album identity for anything that needs to persist an album reference across sessions
@@ -636,7 +802,10 @@ fun List<Track>.artists(
         list
     }
     }
-    .groupBy { (artistName, _) -> canonicalArtistKey(artistName, ctx) }
+    // Group on the spaceless key, so the same band tagged "$uicide Boy$", "$uicideboy$" and
+    // "Suicide Boys" across three rips is ONE artist instead of three. The display name is still
+    // chosen by majority vote below, so the group is labelled however most of the files spell it.
+    .groupBy { (artistName, _) -> artistMatchKey(artistName, ctx) }
     .map { (_, pairs) ->
         // PERF: was a sortedWith whose comparator lowercased album+title on every comparison; the
         // keys are built once per track now (see sortArtistGroupTracks). Same stable order.

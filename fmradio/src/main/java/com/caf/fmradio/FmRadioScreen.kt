@@ -66,7 +66,7 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(3.dp))
             FmFrequencyCard(st, onKeypad = { sheet = FmSheet.KEYPAD })
             Spacer(Modifier.height(3.dp))
-            FmSignalStrip(st) { sheet = FmSheet.DIAGNOSTICS }
+            FmSignalMeter(st, Modifier.clickable { sheet = FmSheet.DIAGNOSTICS })
             Spacer(Modifier.height(3.dp))
 
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -77,8 +77,15 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                     isHardwareOnline = st.isHardwareOnline,
                     hardwareError = st.hardwareError,
                     spectrum = st.spectrum,
+                    signalHistory = st.signalHistory,
+                    bandProfile = st.bandProfile,
+                    bandHistory = st.bandHistory,
                     favorites = st.favorites,
                     scanHits = st.scanResults.map { it.freqKHz },
+                    cataloguedStations = st.nearbyStations,
+                    skin = st.sdrSkin,
+                    rowTimes = st.bandHistoryTimes,
+                    onCycleSkin = { FmRadioManager.cycleSdrSkin() },
                     onTuneFreq = { FmRadioManager.tune(it) }
                 )
                 if (st.isScanning) {
@@ -86,11 +93,17 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
                 }
             }
 
+            // The terrain between here and whatever is tuned. Only shown once a profile has
+            // actually been obtained: this panel exists to answer "is a hill in the way", and
+            // an empty one every time the catalogue has no match would just be furniture.
+            st.tunedProfile?.let { prof ->
+                Spacer(Modifier.height(3.dp))
+                FmFresnelProfileView(prof, Modifier.height(82.dp))
+            }
+
             Spacer(Modifier.height(4.dp))
             FmTransportRow(st, ctx)
-            Spacer(Modifier.height(2.dp))
-            FmVolumeRow(st)
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(3.dp))
             FmToolRow(
                 st = st,
                 onScan = { if (st.isScanning) FmRadioManager.cancelSeek() else FmRadioManager.scanBand() },
@@ -106,6 +119,11 @@ fun MikuFMRadioScreen(onBack: () -> Unit) {
             FmGesturePill(ctx)
         }
     }
+
+    // Transient volume readout. The slider is gone and the wheel now drives the tuner's own
+    // gain, so without this a turn of the wheel changes something invisible. It shows on change
+    // and fades, which is the behaviour of every hardware volume control.
+    FmVolumeHud(st.fmVolumeLevel)
 
     when (sheet) {
         FmSheet.NONE -> Unit
@@ -259,8 +277,17 @@ private fun FmFrequencyCard(st: FmState, onKeypad: () -> Unit) {
                 online -> "No RDS name"
                 else -> "—"
             }
+            // The catalogue knows what is licensed on this channel here even when RDS has
+            // decoded nothing, so the dial is not blank while the antenna hunts.
+            val fromCatalogue = st.tunedStation
+            val shown = when {
+                headline != "No RDS name" && headline != "—" -> headline
+                fromCatalogue != null ->
+                    "${fromCatalogue.call} · ${fromCatalogue.city ?: ""} ${fromCatalogue.state ?: ""}".trim()
+                else -> headline
+            }
             Text(
-                headline,
+                shown,
                 color = MikuTextPrimary, fontSize = 10.sp, fontWeight = FontWeight.Bold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
@@ -381,35 +408,14 @@ private fun FmTransportRow(st: FmState, ctx: Context) {
 
 // ---------------------------------------------------------------------------- volume
 
-@Composable
-private fun FmVolumeRow(st: FmState) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(
-            if (st.isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-            "Mute",
-            tint = if (st.isMuted) MikuNeonPink else MikuCyan,
-            modifier = Modifier.size(18.dp).clickable { FmRadioManager.toggleMute() }
-        )
-        Slider(
-            value = st.volumeIndex.toFloat(),
-            onValueChange = { FmRadioManager.setVolumeIndex(it.toInt()) },
-            valueRange = 0f..st.volumeMax.coerceAtLeast(1).toFloat(),
-            steps = (st.volumeMax - 1).coerceAtLeast(0),
-            colors = SliderDefaults.colors(
-                thumbColor = MikuCyan,
-                activeTrackColor = MikuCyan,
-                inactiveTrackColor = Color(0x3300E5FF),
-                activeTickColor = Color.Transparent,
-                inactiveTickColor = Color.Transparent,
-            ),
-            modifier = Modifier.weight(1f).padding(horizontal = 6.dp).height(22.dp)
-        )
-        Text(
-            "${st.volumeIndex}/${st.volumeMax}",
-            color = MikuTextSecondary, fontSize = 8.sp, fontFamily = AudiowideFont
-        )
-    }
-}
+/*
+ * The volume row used to live here, between the transport and the tool rows.
+ *
+ * Removed: the M500 has a hardware volume wheel, which is a better control than a 4 mm slider
+ * on a 720 px screen and is the one you reach for anyway. The engine still tracks STREAM_MUSIC
+ * and pushes the matching linear gain to the HAL on every change, so the wheel drives FM volume
+ * exactly as it drives everything else. Mute stayed, as a button in the tool row.
+ */
 
 // ---------------------------------------------------------------------------- tools
 
@@ -481,18 +487,58 @@ private fun FmScanOverlay(st: FmState) {
 
 // ---------------------------------------------------------------------------- presets
 
+/**
+ * Two tiers of quick select.
+ *
+ * Filled chips are the user's own, locked and permanent. Outlined chips are what the station
+ * catalogue says is licensed within reach of wherever the device currently is — they follow
+ * you, appear without being asked for, and are gone when you move. Tap either to tune; tap the
+ * star on a predicted one to lock it into the permanent row.
+ *
+ * The predicted tier is not a promise. It is transmitter power and height against distance,
+ * with no terrain in it, which in a hollow is an upper bound rather than a forecast.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FmPresetRow(st: FmState) {
-    if (st.favorites.isEmpty()) {
+    val predicted = st.nearbyStations
+        .filter { it.khz !in st.favorites }
+        .distinctBy { it.khz }
+        .take(14)
+
+    if (st.favorites.isEmpty() && predicted.isEmpty()) {
         Text(
-            "No presets yet — tap ☆ to save the current station",
-            color = MikuTextSecondary, fontSize = 8.5.sp, fontFamily = AudiowideFont,
-            modifier = Modifier.padding(vertical = 2.dp)
+            if (st.listenerPlace == null)
+                "No presets yet — tap ☆ to save a station. Local stations appear once the device knows where it is."
+            else "No presets yet — tap ☆ to save the current station",
+            color = MikuTextSecondary, fontSize = 8.sp, fontFamily = AudiowideFont,
+            modifier = Modifier.padding(vertical = 2.dp), maxLines = 2
         )
         return
     }
+
     LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+        items(predicted) { stn ->
+            val current = st.frequencyKHz == stn.khz
+            Box(
+                Modifier.clip(RoundedCornerShape(9.dp))
+                    .background(Color(0x1100E5FF))
+                    .border(1.dp, if (current) MikuCyan else MikuTeal.copy(alpha = 0.55f),
+                            RoundedCornerShape(9.dp))
+                    .combinedClickable(
+                        onClick = { FmRadioManager.tune(stn.khz) },
+                        onLongClick = { FmRadioManager.togglePreset(stn.khz) }
+                    )
+                    .padding(horizontal = 7.dp, vertical = 3.dp)
+            ) {
+                Column {
+                    Text(stn.call, color = if (current) MikuCyan else MikuTeal,
+                         fontSize = 8.sp, fontWeight = FontWeight.Bold, fontFamily = AudiowideFont)
+                    Text("${mhz(stn.khz)} · ${stn.distanceKm.toInt()} km",
+                         color = MikuTextSecondary, fontSize = 6.5.sp)
+                }
+            }
+        }
         items(st.favorites) { freq ->
             val current = st.frequencyKHz == freq
             Box(
@@ -552,5 +598,41 @@ private fun FmGesturePill(ctx: Context) {
             Modifier.width(60.dp).height(3.5.dp).clip(RoundedCornerShape(2.dp))
                 .background(MikuCyan.copy(alpha = 0.9f))
         )
+    }
+}
+
+
+@Composable
+private fun FmVolumeHud(level: Int) {
+    var visible by remember { mutableStateOf(false) }
+    var first by remember { mutableStateOf(true) }
+    LaunchedEffect(level) {
+        if (first) { first = false; return@LaunchedEffect }   // do not flash on first compose
+        visible = true
+        kotlinx.coroutines.delay(1400)
+        visible = false
+    }
+    if (!visible) return
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.clip(RoundedCornerShape(14.dp)).background(Color(0xEE02090D))
+                .border(1.dp, MikuCyan, RoundedCornerShape(14.dp))
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("TUNER VOLUME", color = MikuTextSecondary, fontSize = 7.5.sp,
+                 fontFamily = AudiowideFont)
+            Spacer(Modifier.height(5.dp))
+            Text("$level", color = MikuCyan, fontSize = 26.sp, fontWeight = FontWeight.Black,
+                 fontFamily = AudiowideFont)
+            Spacer(Modifier.height(6.dp))
+            Box(Modifier.width(150.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+                    .background(Color(0x3300E5FF))) {
+                Box(Modifier.fillMaxWidth(level / 100f).fillMaxHeight()
+                        .clip(RoundedCornerShape(2.dp)).background(MikuCyan))
+            }
+            Spacer(Modifier.height(4.dp))
+            Text("independent of media volume", color = MikuTextSecondary, fontSize = 7.sp)
+        }
     }
 }

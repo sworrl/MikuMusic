@@ -29,6 +29,13 @@ import kotlinx.coroutines.launch
  * camera is opened only when the user is actually looking at the device, which
  * keeps the Android 12+ camera privacy indicator from flashing at random.
  */
+// Deliberately NOT the main looper. The Wi-Fi fix does a synchronous HTTP lookup and a Wi-Fi
+// scan, so on the main thread every poll died in NetworkOnMainThreadException - caught by the
+// runCatching inside MikuLocationFusion, which is why this failed silently for a whole image.
+private val locationThread = android.os.HandlerThread(
+    "miku-location", android.os.Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
+private val locationTicker = android.os.Handler(locationThread.looper)
+
 class AmbientBrightnessService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -107,6 +114,25 @@ class AmbientBrightnessService : Service() {
         registerReceiver(screenReceiver, filter)
         // This is the always-alive hardware daemon process - host the Fn pocket-lock watcher too.
         FnLockDaemon.start(this)
+
+        // Position, fused from GNSS, the modem and Wi-Fi, published to Settings.Global for the
+        // whole OS. Started here because this service is the one that is always alive.
+        //
+        // The Wi-Fi poll is paced by the library itself: it backs off to two hours while
+        // nothing changes and tightens to two minutes after the device has moved, and a look
+        // that recognises the same APs returns the previous fix in about a millisecond without
+        // touching the network or the disk. So calling it on a slow tick is cheap, and the tick
+        // exists only so a device that has been carried somewhere notices reasonably soon.
+        //
+        // It runs on locationThread, not the main looper: a cold look is a Wi-Fi scan plus an
+        // HTTP lookup, which the main thread is not allowed to do and would not want to wait for.
+        MikuLocationFusion.start(this)
+        locationTicker.post(object : Runnable {
+            override fun run() {
+                MikuLocationFusion.pollWifi(this@AmbientBrightnessService)
+                locationTicker.postDelayed(this, 60_000L)
+            }
+        })
 
         Log.i(TAG, "ambient brightness service started")
     }

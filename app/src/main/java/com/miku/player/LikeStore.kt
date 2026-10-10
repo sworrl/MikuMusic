@@ -62,12 +62,35 @@ object LikeStore {
         }
     }
 
+    /**
+     * Also checks the pre-2026-10-09 key form.
+     *
+     * canonicalArtistKey changed when stylised letters started folding ("$uicide Boy$" keyed as
+     * "uicide boy" before, "suicide boys" now). Anyone who had already hearted such an artist has
+     * the old string in their preferences, and reading only the new key would make that heart
+     * vanish. Writes below always use the current key, so an entry migrates the next time it is
+     * toggled and this fallback stops mattering on its own.
+     */
     fun isArtistLiked(artist: String, ctx: Context? = null): Boolean =
-        likedArtists.contains(canonicalArtistKey(artist, ctx))
+        likedArtists.contains(canonicalArtistKey(artist, ctx)) ||
+            likedArtists.contains(legacyArtistKey(artist, ctx))
 
     fun toggleArtist(ctx: Context, artist: String): Boolean {
         val key = canonicalArtistKey(artist, ctx)
-        val now = if (likedArtists.contains(key)) { likedArtists.remove(key); false } else { likedArtists.add(key); true }
+        val legacy = legacyArtistKey(artist, ctx)
+        val wasLiked = likedArtists.contains(key) || likedArtists.contains(legacy)
+        val now = !wasLiked
+        if (now) {
+            likedArtists.add(key)
+        } else {
+            // Clear BOTH spellings, or un-hearting an artist stored under the old key would
+            // appear to do nothing: the write would remove the new key while isArtistLiked kept
+            // finding the old one.
+            likedArtists.remove(key)
+            if (legacy != key && likedArtists.remove(legacy)) {
+                PlayerPreferences.saveLikedArtist(ctx, legacy, false)
+            }
+        }
         PlayerPreferences.saveLikedArtist(ctx, key, now)
         return now
     }

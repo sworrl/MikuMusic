@@ -51,18 +51,32 @@ object FmV4L2 {
         guard("setV4L2RadioFrequency") { FmReceiverJNI.setV4L2RadioFrequency(khz * 16) } != null
 
     /**
-     * Set the tuner part's own receive volume.
+     * Set the tuner part's own receive volume. The range is 0..[RADIO_VOLUME_MAX], not 0..63.
      *
-     * Worth a look because of what the symptom is: the HAL enables the FM codec port and the
-     * output is constant noise that does not change with frequency, which is what an enabled
-     * port with nothing driving it sounds like. If the Si4705's output is sitting at zero then
-     * everything upstream can be correct and still produce exactly that.
-     *
-     * Range is a guess (the part takes 0..63), so the debug hook sweeps it rather than
-     * trusting the guess.
+     * The driver registers V4L2_CID_AUDIO_VOLUME with a range of 0..15 and passes the value
+     * straight through to the chip's RX_VOLUME (`value & 0x3f`), so a write of 63 is clamped
+     * by the v4l2 core to 15 and every build that "set it to maximum" was really setting 15.
+     * Writing the real control maximum says what is happening instead of relying on a clamp.
      */
+    const val RADIO_VOLUME_MAX = 15
+
     fun setRadioVolume(v: Int): Boolean =
-        guard("setV4L2RadioFmVolume") { FmReceiverJNI.setV4L2RadioFmVolume(v) } != null
+        guard("setV4L2RadioFmVolume") {
+            FmReceiverJNI.setV4L2RadioFmVolume(v.coerceIn(0, RADIO_VOLUME_MAX))
+        } != null
+
+    /**
+     * The driver's channel-mode control. Stock toggles it between 0 and 1 and re-issues the
+     * frequency straight afterwards, which is the only JNI entry point stock uses that we did
+     * not. What it means on HiBy's driver is undocumented: mono/stereo is the obvious reading,
+     * but on a part whose digital output has to be configured before it drives the I2S bus at
+     * all, an audio-mode control is worth trying. Exposed through the debug hook so it can be
+     * swept rather than guessed.
+     */
+    fun setChannelMode(mode: Int): Boolean =
+        guard("setV4L2RadioChannelMode") { FmReceiverJNI.setV4L2RadioChannelMode(mode) } != null
+
+    fun channelMode(): Int? = guard("getV4L2RadioChannelMode") { FmReceiverJNI.getV4L2RadioChannelMode() }
 
     /** Frequency the driver believes it is on, in kHz. V4L2 counts in 1/16 kHz units. */
     fun tunedKHz(): Int? = guard("getV4L2RadioFrequency") {
@@ -74,6 +88,12 @@ object FmV4L2 {
      * One signal reading straight off the tuner. Element order is stock FM2's own labelling of
      * the same array; anything the array is too short to contain comes back null rather than 0,
      * because 0 is a legitimate value for most of these.
+     *
+     * Element 6 is NOT what stock calls it. The stock driver put FM_RSQ_STATUS's VALID bit
+     * there; MikuOS's patched driver (mikuos/build/patch_si4705_rds.py) puts the chip's stereo
+     * report there instead, as `pilot << 3 | STBLEND / 16`, because the stock driver reads
+     * the pilot and blend and then throws them away, leaving nothing in userspace that can
+     * tell stereo from mono.
      */
     data class Reading(
         val signal: Int?,
@@ -82,9 +102,21 @@ object FmV4L2 {
         val multipath: Int?,
         val freqOffset: Int?,
         val freqKHz: Int?,
-        val valid: Boolean?,
+        /** A stereo pilot is present on this carrier. Says the station is stereo, not that we are. */
+        val pilot: Boolean?,
+        /**
+         * How far the chip has blended toward stereo, 0 (full mono) to 100 (full stereo), to
+         * the nearest 16 %. This is the one that answers "am I hearing stereo".
+         */
+        val stereoBlendPct: Int?,
     ) {
-        companion object { val EMPTY = Reading(null, null, null, null, null, null, null) }
+        /** Locked, by the driver's own test for it (its audmode): any RSSI and a nonzero SNR. */
+        val valid: Boolean? get() = if (rssi == null || snr == null) null else rssi > 1 && snr != 0
+
+        /** Stereo as heard: pilot present and the blend more than half way to stereo. */
+        val stereo: Boolean? get() = if (pilot == null) null else pilot && (stereoBlendPct ?: 0) >= 50
+
+        companion object { val EMPTY = Reading(null, null, null, null, null, null, null, null) }
     }
 
     fun signal(): Reading? = guard("getV4L2RadioFmSignal") {
@@ -97,7 +129,9 @@ object FmV4L2 {
             multipath = at(3),
             freqOffset = at(4),
             freqKHz = at(5)?.let { if (it > 0) it / 16 else null },
-            valid = at(6)?.let { it != 0 },
+            pilot = at(6)?.let { it and 0x8 != 0 },
+            // Three bits of STBLEND's seven; 6 is the top step (96-100 %), so call it 100.
+            stereoBlendPct = at(6)?.let { ((it and 0x7) * 16).let { p -> if (p >= 96) 100 else p } },
         )
     }
 }

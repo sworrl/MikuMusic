@@ -56,6 +56,11 @@ public class FmReceiverJNI {
      */
     public static int setV4L2RadioFmVolume(int volume) { throw new RuntimeException("stub"); }
 
+    /** Stock toggles this 0/1 and re-issues the frequency right after. Meaning undocumented. */
+    public static int setV4L2RadioChannelMode(int mode) { throw new RuntimeException("stub"); }
+
+    public static int getV4L2RadioChannelMode() { throw new RuntimeException("stub"); }
+
     /**
      * Signal quality, read straight from the tuner. Stock FM2 labels the elements, in order:
      * [0] signal, [1] rssi, [2] snr, [3] multipath, [4] freqOffset, [5] freq, [6] valid.

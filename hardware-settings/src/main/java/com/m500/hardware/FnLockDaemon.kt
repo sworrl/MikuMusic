@@ -65,8 +65,10 @@ object FnLockDaemon {
         if (!locked) {
             runCatching { Settings.Global.putInt(cr, "button_lock", 0) }
             setDevice(ctx, DEV_TOUCH, true); setDevice(ctx, DEV_WHEEL, true); setDevice(ctx, DEV_POWER, true)
+            restoreTapToWake(ctx)
             return
         }
+        suppressTapToWake(ctx)
         val lockKeys = mode != "touch_lock"
         val lockTouch = mode != "key_lock"
         runCatching { Settings.Global.putInt(cr, "button_lock", if (lockKeys) 1 else 0) }
@@ -89,6 +91,47 @@ object FnLockDaemon {
             } catch (t: Throwable) { Log.w(TAG, "setDevice($name,$enabled) failed: $t") }
         }
         Log.i(TAG, "setDevice($name, enabled=$enabled) -> $n")
+    }
+
+    // ---------------------------------------------------------------- tap to wake
+    //
+    // Sliding Fn back should leave the screen wakeable by touch, not only by the power button:
+    // the lock blanks the screen, so without this you come out of pocket lock into a dark slab
+    // that only a button press revives.
+    //
+    // The inverse matters more. While locked, tap to wake is exactly the thing that must not
+    // work, or a pocket will light the screen all afternoon. So it is suppressed on lock and
+    // put back on unlock.
+    //
+    // The user's own setting is preserved rather than forced on. Whatever double_tap_to_wake
+    // was before the lock is stashed and restored, so someone who deliberately turned it off
+    // does not find it switched on by having used the switch.
+
+    private const val PREF_SAVED_DTW = "m500_fn_saved_double_tap_to_wake"   // -1 = nothing saved
+
+    private fun suppressTapToWake(ctx: Context) {
+        val cr = ctx.contentResolver
+        runCatching {
+            val already = Settings.Global.getInt(cr, PREF_SAVED_DTW, -1)
+            if (already == -1) {
+                val current = Settings.Secure.getInt(cr, "double_tap_to_wake", 0)
+                Settings.Global.putInt(cr, PREF_SAVED_DTW, current)
+            }
+            Settings.Secure.putInt(cr, "double_tap_to_wake", 0)
+            Log.i(TAG, "tap to wake suppressed for the lock")
+        }.onFailure { Log.w(TAG, "could not suppress tap to wake: $it") }
+    }
+
+    private fun restoreTapToWake(ctx: Context) {
+        val cr = ctx.contentResolver
+        runCatching {
+            // Default to ON when nothing was stashed: that is the behaviour asked for, a tap
+            // wakes the screen after the switch releases it.
+            val saved = Settings.Global.getInt(cr, PREF_SAVED_DTW, 1)
+            Settings.Secure.putInt(cr, "double_tap_to_wake", saved)
+            Settings.Global.putInt(cr, PREF_SAVED_DTW, -1)
+            Log.i(TAG, "tap to wake restored to $saved")
+        }.onFailure { Log.w(TAG, "could not restore tap to wake: $it") }
     }
 
     private fun blankScreen(ctx: Context) {

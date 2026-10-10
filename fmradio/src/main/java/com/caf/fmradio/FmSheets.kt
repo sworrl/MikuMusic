@@ -170,6 +170,31 @@ fun FmSettings(st: FmState) {
         )
 
         Spacer(Modifier.height(12.dp))
+        Text("CHANNEL GRID", color = MikuTextSecondary, fontSize = 7.5.sp, fontFamily = AudiowideFont)
+        Spacer(Modifier.height(4.dp))
+        FmChannelGrid.entries.forEach { g ->
+            val sel = g == st.channelGrid
+            Row(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp))
+                    .background(if (sel) MikuCyan.copy(alpha = 0.2f) else Color.Transparent)
+                    .clickable { FmRadioManager.setChannelGrid(g) }
+                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(g.label, color = if (sel) MikuCyan else Color.White,
+                     fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.weight(1f))
+                Text(g.detail, color = MikuTextSecondary, fontSize = 7.5.sp)
+            }
+        }
+        Spacer(Modifier.height(3.dp))
+        SheetNote(
+            "North America puts every FM channel on an odd tenth, 200 kHz apart. Most of the " +
+                "rest of the world uses every tenth at 100 kHz. Automatic follows the region " +
+                "above and is right unless you are chasing something unusual."
+        )
+
+        Spacer(Modifier.height(12.dp))
         Text("SEEK SENSITIVITY", color = MikuTextSecondary, fontSize = 7.5.sp, fontFamily = AudiowideFont)
         Spacer(Modifier.height(4.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -279,8 +304,9 @@ fun FmDiagnosticsPanel(st: FmState) {
         DiagRow("SNR", s.snr?.toString() ?: "—")
         DiagRow("Multipath", s.multipath?.toString() ?: "—")
         DiagRow("Frequency offset", s.freqOffset?.toString() ?: "—")
-        DiagRow("Reading valid", when (s.valid) { true -> "yes"; false -> "no"; null -> "—" })
-        DiagRow("Stereo pilot", when (st.isStereo) { true -> "stereo"; false -> "mono"; null -> "—" })
+        DiagRow("Locked (RSSI>1, SNR>0)", when (s.valid) { true -> "yes"; false -> "no"; null -> "—" })
+        DiagRow("Stereo pilot", when (s.pilot) { true -> "present"; false -> "absent"; null -> "—" })
+        DiagRow("Stereo blend", s.stereoBlendPct?.let { "$it %" } ?: "—")
         DiagRow("RDS", when (st.rdsAvailable) { true -> "locked"; false -> "none"; null -> "—" })
         DiagRow("RDS PI", st.programmeId?.let { "0x${it.toString(16).uppercase(Locale.US)}" } ?: "—")
         DiagRow("RDS PTY", FmRadioManager.programmeTypeName(st.programmeType, st.band)
@@ -314,8 +340,8 @@ fun ColumnScope.FmKeypad(st: FmState, onTuned: () -> Unit) {
         val mhzValue = entry.toDoubleOrNull() ?: return
         val khz = Math.round(mhzValue * 1000).toInt()
         if (khz in st.band.lowKHz..st.band.highKHz) {
-            val step = st.band.stepKHz
-            FmRadioManager.tune(((khz + step / 2) / step) * step)
+            // Engine snaps, using the band-anchored grid. Rounding here from zero was the bug.
+            FmRadioManager.tune(khz)
             onTuned()
         }
     }

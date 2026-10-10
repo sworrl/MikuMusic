@@ -310,6 +310,7 @@ class MikuApiRouter(private val context: Context) {
 
     private fun searchLibrary(query: String, limit: Int): ApiResponse {
         val q = query.lowercase().trim()
+        val qf = com.miku.player.searchFold(query)
         val cached: List<Track> = FastLibraryStore.loadSync(context) ?: emptyList()
         val results = JSONArray()
 
@@ -319,7 +320,13 @@ class MikuApiRouter(private val context: Context) {
             cached.filter {
                 it.title.lowercase().contains(q) ||
                 it.artist.lowercase().contains(q) ||
-                it.album.lowercase().contains(q)
+                it.album.lowercase().contains(q) ||
+                // Same stylised-name folding the UI search uses, so the API does not quietly
+                // disagree with the app about whether a library contains "$uicide Boy$".
+                (qf.isNotEmpty() && (
+                    com.miku.player.searchFold(it.title).contains(qf) ||
+                    com.miku.player.searchFold(it.artist).contains(qf) ||
+                    com.miku.player.searchFold(it.album).contains(qf)))
             }.take(limit)
         }
 

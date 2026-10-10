@@ -166,44 +166,25 @@ object CirrusLogicManager {
         return next
     }
 
-    fun isAudioShareEnabled(ctx: Context): Boolean {
-        val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
-        return prefs.getBoolean("audio_share_enabled", false)
-    }
+    /**
+     * Play to every connected output at once (not the built-in speaker). The player does the
+     * work (com.miku.player.MikuMirrorOutput); this is only the switch, in Settings.Global so the
+     * player sees it. Unset means ON.
+     */
+    fun isAudioShareEnabled(ctx: Context): Boolean =
+        runCatching { Settings.Global.getInt(ctx.contentResolver, "miku_audio_share_enabled", 1) != 0 }
+            .getOrDefault(true)
 
+    /**
+     * The vendor parameters this used to send (vendor.audio.dual_output, bt_dual_stream,
+     * usb_mirror, and setprops of the same names) exist nowhere in this device's audio HAL or
+     * its configs; nothing read them. Writing the switch is the whole job now.
+     */
     suspend fun setAudioShareEnabled(ctx: Context, enabled: Boolean) = withContext(Dispatchers.IO) {
-        val prefs = ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
-        prefs.edit().putBoolean("audio_share_enabled", enabled).apply()
-        val v = if (enabled) 1 else 0
-        runCatching { Settings.Global.putInt(ctx.contentResolver, "miku_audio_share_enabled", v) }
-        val am = ctx.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-
-        if (enabled) {
-            val target = getAudioShareTarget(ctx)
-            when (target) {
-                AudioShareTarget.DUAL_44_AND_BT -> {
-                    RootShell.execFast("setprop vendor.audio.dual_output 1; setprop vendor.audio.bt_dual_stream 1")
-                    am?.setParameters("vendor.audio.dual_output=1;vendor.audio.bt_dual_stream=1;vendor.audio.hiby.hw.output_mode=bal_po")
-                }
-                AudioShareTarget.DUAL_35_AND_BT -> {
-                    RootShell.execFast("setprop vendor.audio.dual_output 1; setprop vendor.audio.bt_dual_stream 1")
-                    am?.setParameters("vendor.audio.dual_output=1;vendor.audio.bt_dual_stream=1;vendor.audio.hiby.hw.output_mode=po")
-                }
-                AudioShareTarget.DUAL_PHYSICAL -> {
-                    RootShell.execFast("setprop vendor.audio.dual_output 1")
-                    am?.setParameters("vendor.audio.dual_output=1")
-                }
-                AudioShareTarget.WIRED_AND_USB -> {
-                    RootShell.execFast("setprop vendor.audio.usb_mirror 1")
-                    am?.setParameters("vendor.audio.usb_mirror=1")
-                }
-            }
-        } else {
-            RootShell.execFast("setprop vendor.audio.dual_output 0; setprop vendor.audio.bt_dual_stream 0; setprop vendor.audio.usb_mirror 0")
-            am?.setParameters("vendor.audio.dual_output=0;vendor.audio.bt_dual_stream=0;vendor.audio.usb_mirror=0")
-            // Restore current single output mode
-            setOutputMode(ctx, getOutputMode(ctx))
-        }
+        ctx.getSharedPreferences("miku_dac_settings", Context.MODE_PRIVATE)
+            .edit().putBoolean("audio_share_enabled", enabled).apply()
+        runCatching { Settings.Global.putInt(ctx.contentResolver, "miku_audio_share_enabled", if (enabled) 1 else 0) }
+        Unit
     }
 
     fun getAudioShareTarget(ctx: Context): AudioShareTarget {

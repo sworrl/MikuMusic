@@ -2,6 +2,25 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Position, for MikuLocationFusion. ACCESS_FINE_LOCATION is Android's gate on reading Wi-Fi
+      scan results as much as it is on GNSS, so Wi-Fi positioning needs it too. The passive
+      provider is used for GNSS, so holding this does not mean the GNSS engine is running: it
+      means we are told about fixes other apps already paid for.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!--
+      And this one, or none of the above does anything here. From Android 10 a process that is
+      not in the foreground gets an EMPTY scan-result list and a withheld BSSID rather than an
+      error, whatever else it holds. This is an always-alive background daemon by design, so
+      without this it would read zero access points while seven were in range - which is what
+      it did, silently, and which is indistinguishable from a device with no Wi-Fi.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />

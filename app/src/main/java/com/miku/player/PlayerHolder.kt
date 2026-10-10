@@ -122,6 +122,7 @@ object PlayerHolder {
         runCatching { MikuPowerGovernor.init(app) }
         // External USB DAC output: route + bit-perfect mixer when a USB sink enumerates (MikuUsbDacOutput).
         runCatching { MikuUsbDacOutput.init(app) }
+        runCatching { MikuMirrorOutput.init(app) }
 
         // Integer PCM output with bit-perfect DIRECT support for dual CS43198 DACs:
         // Media3's stock DefaultAudioSink either downsamples 24/32-bit to 16-bit (float=false)

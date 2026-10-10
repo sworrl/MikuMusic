@@ -3585,10 +3585,19 @@ fun MikuEmptyState(
             val base = if (searchQuery.isBlank()) tracks
             else {
                 val q = searchQuery.trim().lowercase()
+                // Fold the query the same way the fields are folded, so "Suicide Boys" finds
+                // "$uicide Boy$" and "$uicideboy$". The raw contains() below stays as well:
+                // folding drops spacing and punctuation, so it must not be the only test or a
+                // query the user typed with punctuation on purpose would get worse, not better.
+                val qf = searchFold(searchQuery)
                 tracks.filter {
                     it.title.lowercase().contains(q) ||
                     it.artist.lowercase().contains(q) ||
-                    it.album.lowercase().contains(q)
+                    it.album.lowercase().contains(q) ||
+                    (qf.isNotEmpty() && (
+                        searchFold(it.title).contains(qf) ||
+                        searchFold(it.artist).contains(qf) ||
+                        searchFold(it.album).contains(qf)))
                 }
             }
             base.sortedBy { formatArtistSortKey(it.title, sortIgnoreThe, ctx) }
@@ -3649,7 +3658,11 @@ fun MikuEmptyState(
         if (searchQuery.isBlank()) artists
         else {
             val q = searchQuery.trim().lowercase()
-            artists.filter { it.name.lowercase().contains(q) }
+            val qf = searchFold(searchQuery)
+            artists.filter {
+                it.name.lowercase().contains(q) ||
+                    (qf.isNotEmpty() && searchFold(it.name).contains(qf))
+            }
         }
     }
     val scope = rememberCoroutineScope()
@@ -4229,7 +4242,12 @@ private fun ArtistSortSettingsModal(
         if (searchQuery.isBlank()) albums
         else {
             val q = searchQuery.trim().lowercase()
-            albums.filter { it.name.lowercase().contains(q) || it.artist.lowercase().contains(q) }
+            albums.filter {
+                val qf = searchFold(q)
+                it.name.lowercase().contains(q) || it.artist.lowercase().contains(q) ||
+                    (qf.isNotEmpty() &&
+                        (searchFold(it.name).contains(qf) || searchFold(it.artist).contains(qf)))
+            }
         }
     }
     val scope = rememberCoroutineScope()

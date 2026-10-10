@@ -15,7 +15,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -55,6 +56,12 @@ class MikuFmService : Service() {
         }
     }
 
+    /** Exactly the fields the notification renders; anything else must not trigger a re-post. */
+    private data class NotifKey(
+        val on: Boolean, val khz: Int, val station: String,
+        val muted: Boolean, val error: Boolean, val radioText: String,
+    )
+
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var watcher: Job? = null
 
@@ -86,16 +93,26 @@ class MikuFmService : Service() {
                 // until the tuner has actually been seen running before treating "off" as a
                 // reason to shut down, or the service stops itself the moment it starts.
                 var sawRunning = false
-                FmRadioManager.state.collectLatest { st ->
-                    if (st.isPowerOn) sawRunning = true
-                    if (sawRunning && !st.isPowerOn) {
-                        // The engine powered itself down (focus loss, user, chip reset): there
-                        // is nothing left to keep in the foreground.
-                        stopSelfAndForeground()
-                    } else {
-                        notificationManager().notify(NOTIFICATION_ID, buildNotification())
+                // Re-post ONLY when something the notification actually shows has changed.
+                //
+                // This used to notify() on every FmState emission. That was survivable until
+                // the state grew signal history, per-channel band data and a diagnostics block,
+                // at which point a 750 ms poll produced several emissions and the service was
+                // rebuilding a four-action Notification about fourteen times a second. It cost
+                // two cores between the coroutine workers and NotificationService, and it was
+                // the whole of the "laggy as hell" regression: the UI was fine, the binder
+                // traffic behind it was not.
+                FmRadioManager.state
+                    .map { st ->
+                        NotifKey(st.isPowerOn, st.frequencyKHz, st.stationName,
+                                 st.isMuted, st.hardwareError != null, st.radioText)
                     }
-                }
+                    .distinctUntilChanged()
+                    .collect { key ->
+                        if (key.on) sawRunning = true
+                        if (sawRunning && !key.on) stopSelfAndForeground()
+                        else notificationManager().notify(NOTIFICATION_ID, buildNotification())
+                    }
             }
         }
         return START_STICKY

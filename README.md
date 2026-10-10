@@ -90,7 +90,8 @@ Legend: ✅ confirmed on a real M500 · ⚠️ implemented, not proven on hardwa
 | The 80 Miku presets | ⚠️ | Generated and confirmed unpacking into the preset library on device; not yet watched rendering one by one |
 | CUE sheet splitting | ✅ | Disc images with a sibling `.cue` split into real tracks |
 | Cue-less disc image splitting (MusicBrainz durations) | ⚠️ | Implemented, roughly 489 images in the test library still unsplit |
-| FM tuner | ❌ | SELinux denies `platform_app` direct access to `/dev/radio0`. Two real paths forward are documented in MikuOS, neither is shipped |
+| FM tuner | ✅ | Audible on MikuOS 0.1.15. Works only bundled in the image as `com.caf.fmradio`; an `adb install`ed copy cannot reach the tuner. Station name, RadioText and stereo need MikuOS's patched Si4705 driver and are not yet verified |
+| Playing to every connected output at once | ⚠️ | 4.4mm and a USB headset confirmed playing together. Sync between them and per-output volume are still in progress |
 
 ---
 
@@ -132,6 +133,16 @@ between the file and the DAC.
 **Integer PCM passthrough.** 16, 24 and 32-bit integer PCM reach the DAC in their own format.
 No float conversion, no dither, no volume attenuation applied in software on the DIRECT path, which
 is also why volume behaves differently there than through the mixer.
+
+**Every output at once.** With more than one output connected (wired, USB, Bluetooth, never the
+built-in speaker) the player plays to all of them. The DIRECT track above stays bit-perfect,
+pinned to the best device present, wired jack first. `MikuMirrorOutput` gives every other output
+a mirror: the same PCM, teed from the sink right after it is written, into a float `AudioTrack`
+pinned to that device, so a 48kHz-only USB headset still plays a 96kHz file. Mirrors are kept in
+step by comparing what each output has presented (`AudioTrack.getTimestamp`) and correcting with
+a short gap or skip when the median drifts past tolerance. `settings put global
+miku_audio_share_offset_ms <ms>` nudges a mirror; `miku_audio_share_enabled=0` turns it off. This
+replaces a "dual output" setting that sent vendor parameters the HAL never had.
 
 ---
 
@@ -300,8 +311,11 @@ instead, which is documented over in that repo.
 
 - **One device.** Everything here is verified on an M500 and nothing else. The bit-perfect path in
   particular depends on Qualcomm's `direct_pcm` profile being present and on this vendor's policy.
-- **FM does not work.** SELinux denies direct `/dev/radio0` access to a `platform_app`. The UI is
-  there, the tuner is not.
+- **FM only works bundled in MikuOS.** SELinux gives the tuner to `com.caf.fmradio` in the image,
+  not to anything installed over it. It also needs a decent signal for stereo and station data;
+  indoors on the headphone-cable antenna it is often mono with none.
+- **Per-output volume is not done.** While playing to several outputs, the volume keys still move
+  only one of them.
 - **LDAC push is unproven.** The enforcement code runs, no LDAC sink has been connected to verify it.
 - **Roughly 489 cue-less disc images** in the test library are still one file per disc.
 - **Volume behaves differently on the DIRECT path**, because no software attenuation is applied

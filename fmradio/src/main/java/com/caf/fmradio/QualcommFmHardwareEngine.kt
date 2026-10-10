@@ -15,6 +15,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.android.asCoroutineDispatcher
@@ -49,14 +50,39 @@ enum class FmBandPlan(
     val emphasis: Int,
     val rdsStd: Int,
 ) {
-    US("US / Canada", FmConfig.FM_US_BAND, 87500, 108000, 200,
+    /**
+     * North America. Channels sit on ODD tenths: 87.9, 88.1 ... 107.9, 200 kHz apart.
+     *
+     * The BAND LIMITS here are what the chip is given in FmConfig, and they stay at the values
+     * stock uses. The channel GRID is a separate thing, anchored at 87.9 by [gridBase]. I
+     * briefly conflated the two and narrowed the band to 87.9-107.9 to fix the grid, which
+     * changed what the tuner was configured with as a side effect of a UI bug fix. Two
+     * different concerns; keep them apart.
+     */
+    US("US / Canada / Mexico", FmConfig.FM_US_BAND, 87500, 108000, 200,
         FmConfig.FM_CHSPACE_200_KHZ, 75, FmConfig.FM_DE_EMP75, FmConfig.FM_RDS_STD_RBDS),
+    /** ITU Region 1. Every tenth is a channel, 100 kHz apart, 50 us de-emphasis. */
     EUROPE("Europe", FmConfig.FM_EU_BAND, 87500, 108000, 100,
         FmConfig.FM_CHSPACE_100_KHZ, 50, FmConfig.FM_DE_EMP50, FmConfig.FM_RDS_STD_RDS),
-    JAPAN("Japan", FmConfig.FM_JAPAN_STANDARD_BAND, 76000, 90000, 100,
+    JAPAN("Japan", FmConfig.FM_JAPAN_STANDARD_BAND, 76000, 95000, 100,
         FmConfig.FM_CHSPACE_100_KHZ, 50, FmConfig.FM_DE_EMP50, FmConfig.FM_RDS_STD_RDS),
     JAPAN_WIDE("Japan wide", FmConfig.FM_JAPAN_WIDE_BAND, 76000, 108000, 100,
         FmConfig.FM_CHSPACE_100_KHZ, 50, FmConfig.FM_DE_EMP50, FmConfig.FM_RDS_STD_RDS),
+}
+
+/**
+ * How the tuning dial snaps.
+ *
+ * Worth being explicit about because the regions genuinely differ and a wrong grid makes real
+ * stations unreachable rather than merely inconvenient. North America puts every FM channel on
+ * an odd tenth 200 kHz apart; most of the rest of the world uses every tenth, 100 kHz apart.
+ */
+enum class FmChannelGrid(val label: String, val detail: String) {
+    AUTO("Automatic", "Follow the selected region's channel plan"),
+    ODD_TENTHS("Odd tenths", "87.9, 88.1, 88.3 … — North America"),
+    EVEN_TENTHS("Even tenths", "88.0, 88.2, 88.4 … — rare, for odd allocations"),
+    EVERY_TENTH("Every tenth", "87.5, 87.6, 87.7 … — Europe, Japan, 100 kHz"),
+    FREE("Off", "Tune anywhere the chip will go, no snapping"),
 }
 
 /** One station found by a band sweep, with the signal that was measured when it was found. */
@@ -131,8 +157,50 @@ class QualcommFmHardwareEngine(private val context: Context) {
         /** Stock FM2 waits this long after building the route before clearing the driver mute. */
         private const val UNMUTE_SETTLE_MS = 300L
 
+        /** How many signal samples the time plot keeps. */
+        const val SIGNAL_HISTORY = 64
+
+        /**
+         * Signal poll interval. Every I2C read on this tuner is a transaction on a chip that is
+         * demodulating, so this is as slow as the meter can be while still feeling live in the
+         * hand when aiming the antenna.
+         */
+        const val SIGNAL_POLL_MS = 750L
+
+        /**
+         * Settle time per channel during a band sweep. The Si4705 needs a moment after a tune
+         * before its signal meter means anything; 60 ms across ~103 US channels is about six
+         * seconds of silence, which is the honest cost of seeing the band on a part with no
+         * spectrum analyser.
+         */
+        const val SWEEP_SETTLE_MS = 60L
+
+        /** Sweeps kept for the waterfall underneath the live trace. */
+        const val SWEEP_HISTORY = 24
+
+        /** Observed RSSI ceiling on this tuner; only scales the plot, never the printed number. */
+        const val SWEEP_RSSI_FULL_SCALE = 40f
+
         /** Si4705 RX volume is a 6-bit field, so full scale is 63. */
         private const val SI4705_MAX_VOLUME = 63
+
+        /** Re-arm RDS (poll the node) after this long without a group. */
+        private const val RDS_REARM_MS = 1000L
+        /** Tuned this long without one clean group: report no RDS, while still listening. */
+        private const val RDS_ABSENT_MS = 10_000L
+
+        /**
+         * The HAL gain stock FM2 sends on this hardware, captured from a live stock session
+         * on 2026-10-09: `fm_volume=0.052481`, which is -25.6 dB.
+         *
+         * It is the only gain this device has ever been heard playing music at, so it is the
+         * default rather than a round number off the taper. On the 48 dB taper used by
+         * applyFmVolume(), level 47 gives 10^((47-100)*0.48/20) = 0.0537, within a quarter of
+         * a dB of it; exact enough that the difference is inaudible and the arithmetic stays
+         * legible in one expression.
+         */
+        private const val STOCK_FM_VOLUME = 0.052481f
+        private const val STOCK_EQUIVALENT_LEVEL = 47
 
         /** Seek sensitivity, CAF's FM_RX_SIGNAL_STRENGTH_* scale. */
         val SENSITIVITY_LABELS = listOf("Weakest", "Weak", "Strong", "Strongest")
@@ -226,13 +294,135 @@ class QualcommFmHardwareEngine(private val context: Context) {
     val presets = MutableStateFlow(loadPresets())
     val diagnostics = MutableStateFlow(FmDiagnostics())
 
+    /**
+     * Stations the catalogue says are within reach of where the device currently is.
+     *
+     * This is the dynamic half of the quick selector: it follows you, and it is populated from
+     * public record data rather than from anything heard, so it is useful before the antenna
+     * has found a single thing. A station here is one whose transmitter is close enough and
+     * strong enough to be plausible, NOT a promise that it will come in; terrain is not
+     * modelled and this is a hollow.
+     */
+    val nearbyStations = MutableStateFlow<List<FmStationCatalogue.Station>>(emptyList())
+    /** Null until something has placed the device. The UI says so rather than showing nothing. */
+    val listenerPlace = MutableStateFlow<Pair<Double, Double>?>(null)
+    val catalogueSize = MutableStateFlow(0)
+
+    /** Terrain between here and whatever is tuned. Null until a profile has been obtained. */
+    val tunedProfile = MutableStateFlow<FmFresnel.Profile?>(null)
+    @Volatile private var profileJob: Job? = null
+
+    /** The station the catalogue believes we are tuned to, for the big readout. */
+    val tunedStation = MutableStateFlow<FmStationCatalogue.Station?>(null)
+
+    /**
+     * Refresh the local station list from wherever the device now is.
+     *
+     * Cheap and bounded: the query is index-bounded by a lat/lon box, and it only runs when the
+     * position has actually moved more than a kilometre, so standing still costs nothing.
+     */
+    fun refreshNearby(force: Boolean = false) {
+        scope.launch {
+            val pos = FmStationCatalogue.listenerPosition(context)
+            if (pos == null) {
+                listenerPlace.value = null
+                if (nearbyStations.value.isNotEmpty()) nearbyStations.value = emptyList()
+                return@launch
+            }
+            val prev = listenerPlace.value
+            val moved = prev == null ||
+                Math.abs(prev.first - pos.first) > 0.009 || Math.abs(prev.second - pos.second) > 0.012
+            if (!force && !moved) return@launch
+            listenerPlace.value = pos
+            catalogueSize.value = FmStationCatalogue.size()
+            val svc = if (band.value == FmBandPlan.US) listOf("FM", "FX", "FL") else listOf("FM")
+            val list = FmStationCatalogue.near(pos.first, pos.second, services = svc)
+            nearbyStations.value = list
+            Log.i(TAG, "catalogue: ${list.size} station(s) within reach of " +
+                "%.4f,%.4f".format(pos.first, pos.second))
+            updateTunedStation()
+        }
+    }
+
+    private fun updateTunedStation() {
+        val f = currentFrequencyKHz.value
+        val st = nearbyStations.value
+            .filter { Math.abs(it.khz - f) <= 60 }
+            .maxByOrNull { it.score }
+        val changed = st?.call != tunedStation.value?.call
+        tunedStation.value = st
+        if (changed) refreshTerrain(st)
+    }
+
+    /**
+     * Work out whether the ground is in the way, for the station now tuned.
+     *
+     * One job at a time and cancelled on retune, because this can mean a network round trip
+     * and spinning the dial should not queue sixty of them. The profile is cached on disk per
+     * (rounded position, station), so coming back to a station is free.
+     */
+    private fun refreshTerrain(st: FmStationCatalogue.Station?) {
+        profileJob?.cancel()
+        if (st == null) { tunedProfile.value = null; return }
+        val pos = FmStationCatalogue.listenerPosition(context)
+        if (pos == null) { tunedProfile.value = null; return }
+        profileJob = scope.launch {
+            val p = runCatching { FmFresnel.profile(context, pos.first, pos.second, st) }
+                .onFailure { Log.w(TAG, "terrain profile failed: $it") }
+                .getOrNull()
+            if (isActive) tunedProfile.value = p
+        }
+    }
+
+    /** How the dial snaps. AUTO follows the band plan, which is the right answer almost always. */
+    val channelGrid = MutableStateFlow(
+        runCatching { FmChannelGrid.valueOf(prefs.getString("grid", FmChannelGrid.AUTO.name)!!) }
+            .getOrDefault(FmChannelGrid.AUTO)
+    )
+
     val afJumpEnabled = MutableStateFlow(prefs.getBoolean("af_jump", false))
     val softMuteEnabled = MutableStateFlow(prefs.getBoolean("soft_mute", true))
     val seekSensitivity = MutableStateFlow(prefs.getInt("sensitivity", 1).coerceIn(0, 3))
 
-    /** Current STREAM_MUSIC index and its maximum, so the UI can own the volume slider. */
-    val volumeIndex = MutableStateFlow(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
-    val volumeMax = MutableStateFlow(audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+    /**
+     * The tuner's own volume level, 0..100, persisted and deliberately NOT the media stream.
+     * Defaults high: a radio you have just switched on should be audible.
+     */
+    /**
+     * The tuner's own level, 0..100. Default [STOCK_EQUIVALENT_LEVEL], not something round.
+     *
+     * 80 was the default until 2026-10-09 and it was a guess off the taper curve. It put
+     * fm_volume at 0.331 against the 0.0525 that stock FM2 sends and that this device was
+     * measured audible at: 16 dB hotter, with the tuner chip driven to full scale at the same
+     * time, which clips a marginal signal into something that sounds like louder static. The
+     * default is now the measured number, and the volume keys go up from there.
+     */
+    val fmVolumeLevel = MutableStateFlow(anchoredStartingLevel())
+
+    /**
+     * The starting level, correcting the bad default exactly once.
+     *
+     * A new default is not enough on a device that has already run the old build: 80 is sitting
+     * in prefs and would survive the fix. So the first time this runs after the change it
+     * overwrites the stored level and records that it has done so. A level the user sets
+     * afterwards is theirs and is never touched again.
+     */
+    private fun anchoredStartingLevel(): Int {
+        if (!prefs.getBoolean("fm_volume_anchored", false)) {
+            val had = prefs.getInt("fm_volume", -1)
+            prefs.edit()
+                .putInt("fm_volume", STOCK_EQUIVALENT_LEVEL)
+                .putBoolean("fm_volume_anchored", true)
+                .apply()
+            if (had >= 0) {
+                Log.i(TAG, "tuner level reset $had -> $STOCK_EQUIVALENT_LEVEL " +
+                    "(the old default drove the HAL 16 dB past the gain this device was " +
+                    "measured audible at)")
+            }
+            return STOCK_EQUIVALENT_LEVEL
+        }
+        return prefs.getInt("fm_volume", STOCK_EQUIVALENT_LEVEL).coerceIn(0, 100)
+    }
 
     /**
      * Live audio spectrum of the FM PCM flowing through the bridge: [SPECTRUM_BINS] log-spaced
@@ -251,6 +441,39 @@ class QualcommFmHardwareEngine(private val context: Context) {
     val captureFraming = MutableStateFlow<Boolean?>(null)
     /** Highest frequency the spectrum can actually represent, given the decoded rate. */
     val spectrumTopHz = MutableStateFlow(SPECTRUM_HIGH_HZ.toInt())
+
+    /**
+     * Rolling history of the real signal, newest first, each entry 0..1.
+     *
+     * This is what the waterfall draws on a wired route now. The audio spectrum it used to draw
+     * was an artifact of a capture stream that is not the tuner audio on this device, and it
+     * looked identical at the strongest and the deadest frequency in the band. RSSI does not:
+     * it reads 19 at 88.3 and 2 at 107.9. So the panel plots something that actually moves when
+     * the radio does.
+     */
+    val signalHistory = MutableStateFlow(FloatArray(0))
+    private val histBuf = ArrayDeque<Float>()
+
+    /**
+     * RSSI across the whole band, one entry per tunable channel, newest sweep.
+     *
+     * This is what makes the panel a band display rather than a time plot. The Si4705 has no
+     * spectrum analyser, so the only way to see the band is to tune across it and read the
+     * signal meter at each channel. That costs audio: the chip can only be on one frequency at
+     * a time, so a sweep interrupts whatever you were listening to for its duration. The engine
+     * mutes for the sweep and returns to the station it started on.
+     */
+    val bandProfile = MutableStateFlow(FloatArray(0))
+
+    /** Previous sweeps, newest first, for the waterfall underneath the live trace. */
+    val bandHistory = MutableStateFlow<List<FloatArray>>(emptyList())
+    private val sweepHistory = ArrayDeque<FloatArray>()
+    /** When each sweep in [bandHistory] finished, same order, so the waterfall can be dated. */
+    private val sweepTimes = ArrayDeque<Long>()
+    val bandHistoryTimes = MutableStateFlow<List<Long>>(emptyList())
+
+    /** Raw RSSI per channel from the newest sweep, for the station list and tooltips. */
+    val bandRssi = MutableStateFlow<IntArray>(IntArray(0))
 
     /** Rate the decoded capture really runs at, so a recording is not written at the wrong speed. */
     @Volatile private var capturedRateHz: Int = 48000
@@ -319,10 +542,15 @@ class QualcommFmHardwareEngine(private val context: Context) {
         override fun FmRxEvSearchListComplete() {
             Log.i(TAG, "cb: SearchListComplete")
         }
-        override fun FmRxEvStereoStatus(stereo: Boolean) { isStereo.value = stereo }
+        // The next two come from the Qualcomm WCN core, which has no antenna on this board, so
+        // they always report mono and no RDS whatever the Si4705 is receiving. They were the
+        // source of a permanent MONO pill and "No RDS on this station". Stereo now comes from
+        // the Si4705's own pilot report (refreshSignal) and RDS from FmRdsReader.
+        override fun FmRxEvStereoStatus(stereo: Boolean) {
+            Log.d(TAG, "cb: StereoStatus $stereo (WCN core, ignored)")
+        }
         override fun FmRxEvRdsLockStatus(rdsAvail: Boolean) {
-            rdsAvailable.value = rdsAvail
-            if (!rdsAvail) radioText.value = "No RDS on ${mhz(currentFrequencyKHz.value)}"
+            Log.d(TAG, "cb: RdsLockStatus $rdsAvail (WCN core, ignored)")
         }
         override fun FmRxEvRdsPsInfo() {
             val ps = runCatching { receiver?.psInfo }.getOrNull() ?: return
@@ -347,6 +575,13 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     /** Everything that is only true of the station we just left. */
     private fun onNewStation() {
+        updateTunedStation()
+        FmRdsReader.newStation()
+        rdsTunedAt = SystemClock.elapsedRealtime()
+        rdsAvailable.value = null
+        rdsArtist.value = null
+        rdsTitle.value = null
+        rdsGroups.value = 0
         stationName.value = ""
         isStereo.value = null
         programmeType.value = null
@@ -356,8 +591,40 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     init {
         loadJni()
+        FmStationCatalogue.prepare(context)
         registerRouteWatcher()
         registerDebugReceiver()
+        refreshNearby(force = true)
+        watchPosition()
+    }
+
+    /**
+     * Re-read the local station list when the device's position changes.
+     *
+     * This matters more than it sounds. refreshNearby() used to run once, from init, and the
+     * position is published by a separate daemon that needs a Wi-Fi fix - which lands seconds to
+     * minutes AFTER this app has started. So the one call almost always found nothing, set the
+     * list empty, and never looked again: the quick selector stayed blank forever on a device
+     * that had a full catalogue and a known position sitting right there.
+     *
+     * A content observer on the published keys is the cheap fix. It costs nothing while the
+     * device stands still, because the daemon only writes when it has a better fix, and
+     * refreshNearby() itself ignores a change of less than about a kilometre.
+     *
+     * Not unregistered: this engine is a process-lifetime singleton, so there is no later point
+     * at which it would be correct to stop caring where we are.
+     */
+    private fun watchPosition() {
+        val observer = object : android.database.ContentObserver(null) {
+            override fun onChange(selfChange: Boolean) = refreshNearby()
+        }
+        runCatching {
+            for (key in listOf("miku_loc_lat", "miku_loc_lon")) {
+                context.contentResolver.registerContentObserver(
+                    android.provider.Settings.Global.getUriFor(key), false, observer)
+            }
+            Log.i(TAG, "watching the published position for catalogue refreshes")
+        }.onFailure { Log.w(TAG, "could not watch the position: $it") }
     }
 
     /**
@@ -513,8 +780,35 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 runCatching { rx.EnableSoftMute(if (softMuteEnabled.value) 1 else 0) }
                 runCatching { rx.enableAFjump(afJumpEnabled.value) }
                 runCatching { rx.setSignalThreshold(seekSensitivity.value) }
-                // The part's own output volume, which nothing else sets.
-                FmV4L2.setRadioVolume(SI4705_MAX_VOLUME)
+                // THE DIGITAL OUTPUT FORMAT. This is the one that makes the difference
+                // between music and noise, and it was missing.
+                //
+                // The Si4705 driver's start sequence writes DIGITAL_OUTPUT_FORMAT = 0x0006,
+                // which by AN332 is I2S, OMONO=1, OSIZE=24-bit. Nothing else writes it. The
+                // only thing that changes it is VIDIOC_S_TUNER, which the driver turns into
+                // 0x0000 for stereo or 0x0004 for mono - both 16-bit.
+                //
+                // PAL consumes this backend as 48000 Hz, 16-bit, 2 channel
+                // (resourcemanager_bengal_idp.xml, PAL_DEVICE_IN_FM_TUNER on
+                // MI2S-LPAIF_WSA-TX-PRIMARY). So with the format left at its start value the
+                // chip emits 24-bit mono into something reading 16-bit stereo: every sample
+                // misaligned, which is not quiet audio, it is white noise. The tuner locks,
+                // RSSI moves with the antenna, the HAL reports a healthy loopback, and what
+                // comes out is static - which is exactly the symptom we have been chasing.
+                //
+                // Stock calls setV4L2RadioChannelMode immediately after enable and re-issues
+                // the frequency straight afterwards, so do both.
+                val modeOk = FmV4L2.setChannelMode(if (stereoRequested.value) 1 else 0)
+                Log.i(TAG, "setV4L2RadioChannelMode(${if (stereoRequested.value) 1 else 0}) " +
+                    "accepted=$modeOk readback=${FmV4L2.channelMode()} " +
+                    "(0x0000=16-bit stereo, 0x0004=16-bit mono, 0x0006=24-bit mono = static)")
+
+                // The part's own output volume is deliberately NOT set here. It used to be
+                // written as SI4705_MAX_VOLUME=63, which looked like "turn it up" and is the
+                // opposite: the driver registers V4L2_CID_AUDIO_VOLUME with a range of 0..15
+                // against a chip whose RX_VOLUME default is 63, so the v4l2 core clamps the
+                // write to 15 and ATTENUATES the tuner by roughly 12 dB. Stock never touches
+                // this control at all. The sweep knob on the debug receiver still can.
                 rx.registerRdsGroupProcessing(
                     FmReceiver.FM_RX_RDS_GRP_RT_EBL or FmReceiver.FM_RX_RDS_GRP_PS_EBL or
                         FmReceiver.FM_RX_RDS_GRP_AF_EBL or FmReceiver.FM_RX_RDS_GRP_PS_SIMPLE_EBL or
@@ -547,6 +841,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
                     }
                 }, UNMUTE_SETTLE_MS)
 
+                startRdsReader()
                 startPolling()
                 Log.i(TAG, "FM tuner ON at $freq kHz")
             } catch (t: Throwable) {
@@ -580,6 +875,7 @@ class QualcommFmHardwareEngine(private val context: Context) {
                 FmV4L2.setMute(true)
                 pollJob?.cancel(); pollJob = null
                 wav.stop()
+                stopRdsReader()
                 stopAudioBridge()
                 stopHalAudio()
                 val rx = receiver
@@ -631,18 +927,16 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     private fun startHalAudio() {
         val route = FmAudioRoute.current(audioManager)
-        val written = FmAudioRoute.start(audioManager, route.code)
+        val written = FmAudioRoute.start(audioManager, route.code, currentFmGain())
         activeRouteCode = route.code
         FmAudioRoute.setMuted(audioManager, isMuted.value)
-        val gain = FmAudioRoute.applyVolume(audioManager, route.code)
-        lastVolumeIndex = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         diagnostics.value = diagnostics.value.copy(
             routeCode = route.code,
             routeLabel = route.label,
             handleFmWritten = written,
             halLoopback = FmAudioRoute.loopbackActive(audioManager),
-            fmVolumeLinear = gain,
         )
+        applyFmVolume()
     }
 
     private fun stopHalAudio() {
@@ -662,7 +956,11 @@ class QualcommFmHardwareEngine(private val context: Context) {
         if (route.code == activeRouteCode) return
         val written = FmAudioRoute.reroute(audioManager, route.code)
         activeRouteCode = route.code
-        val gain = FmAudioRoute.applyVolume(audioManager, route.code)
+        // Re-assert the tuner's own level on the new backend. This used to re-read
+        // STREAM_MUSIC, so plugging headphones in could silently re-gain the radio from
+        // whatever the music volume happened to be.
+        val gain = currentFmGain()
+        FmAudioRoute.setGain(audioManager, gain)
         diagnostics.value = diagnostics.value.copy(
             routeCode = route.code,
             routeLabel = route.label,
@@ -696,39 +994,63 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     // ------------------------------------------------------------------ volume
 
-    fun setVolumeIndex(index: Int) {
-        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val clamped = index.coerceIn(0, max)
-        // setStreamVolume rather than adjustStreamVolume: HiBy's framework gates the ADJUST path
-        // behind a per-jack raise lock, which silently swallows increases (see the volume-knob
-        // work in the player). The absolute setter is not gated.
-        runCatching { audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, clamped, 0) }
-        volumeIndex.value = clamped
-        activeRouteCode?.let { code ->
-            val gain = FmAudioRoute.applyVolume(audioManager, code)
-            diagnostics.value = diagnostics.value.copy(fmVolumeLinear = gain)
-        }
-        lastVolumeIndex = clamped
+    // The old setVolumeIndex lived here and drove STREAM_MUSIC. Removed: the tuner must not
+    // move the system media volume, and must not read it either. See setFmVolumeLevel.
+
+    /**
+     * The tuner's own volume, 0..100, independent of STREAM_MUSIC.
+     *
+     * It used to follow the media stream, and that was wrong in a way that is obvious in
+     * hindsight: turning the music down made the radio inaudible, and there is no reason the
+     * two should share a level. Worse, it failed silently — the media stream sat at 21 of 100,
+     * the radio was 12 dB quieter than when it had last worked, and nothing on screen said so.
+     *
+     * Now it is its own persisted value with its own taper, and nothing the rest of the system
+     * does to its volume moves it.
+     */
+    fun setFmVolumeLevel(level: Int) {
+        val l = level.coerceIn(0, 100)
+        fmVolumeLevel.value = l
+        prefs.edit().putInt("fm_volume", l).apply()
+        applyFmVolume()
     }
 
-    private fun followSystemVolume() {
-        val idx = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        volumeIndex.value = idx
-        volumeMax.value = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        if (idx != lastVolumeIndex) {
-            lastVolumeIndex = idx
-            activeRouteCode?.let { code ->
-                val gain = FmAudioRoute.applyVolume(audioManager, code)
-                diagnostics.value = diagnostics.value.copy(fmVolumeLinear = gain)
-            }
-        }
+    fun nudgeFmVolume(up: Boolean) = setFmVolumeLevel(fmVolumeLevel.value + if (up) 5 else -5)
+
+    /** Which receiver-panel style the band display draws in. Persisted; purely cosmetic. */
+    val sdrSkin = MutableStateFlow(
+        runCatching { SdrSkin.valueOf(prefs.getString("sdr_skin", null) ?: "") }
+            .getOrDefault(SdrSkin.CLASSIC))
+
+    fun setSdrSkin(s: SdrSkin) {
+        sdrSkin.value = s
+        prefs.edit().putString("sdr_skin", s.name).apply()
+    }
+
+    fun cycleSdrSkin() {
+        val all = SdrSkin.entries
+        setSdrSkin(all[(all.indexOf(sdrSkin.value) + 1) % all.size])
+    }
+
+    /** The linear HAL gain for the current level. 48 dB taper: full scale at 100, silent at 0. */
+    private fun currentFmGain(): Float {
+        val l = fmVolumeLevel.value
+        return if (l <= 0) 0f else Math.pow(10.0, ((l - 100) * 48.0 / 100.0) / 20.0).toFloat()
+    }
+
+    private fun applyFmVolume() {
+        if (activeRouteCode == null) return
+        val gain = currentFmGain()
+        FmAudioRoute.setGain(audioManager, gain)
+        diagnostics.value = diagnostics.value.copy(fmVolumeLinear = gain)
+        Log.i(TAG, "fm volume level ${fmVolumeLevel.value} -> fm_volume $gain")
     }
 
     // ------------------------------------------------------------------ tuning
 
     fun tune(freqKHz: Int) {
         val plan = band.value
-        val clamped = freqKHz.coerceIn(plan.lowKHz, plan.highKHz)
+        val clamped = snapToGrid(freqKHz).coerceIn(plan.lowKHz, plan.highKHz)
         currentFrequencyKHz.value = clamped
         onNewStation()
         prefs.edit().putInt("last_freq", clamped).apply()
@@ -751,10 +1073,55 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     fun step(up: Boolean) {
         val plan = band.value
-        var next = currentFrequencyKHz.value + if (up) plan.stepKHz else -plan.stepKHz
+        val cur = snapToGrid(currentFrequencyKHz.value)
+        var next = cur + if (up) gridStep() else -gridStep()
         if (next > plan.highKHz) next = plan.lowKHz
         if (next < plan.lowKHz) next = plan.highKHz
         tune(next)
+    }
+
+    /**
+     * Snap a frequency onto the channel grid.
+     *
+     * The grid is anchored to the band's LOW LIMIT, not to zero. Rounding to a multiple of the
+     * step from zero is what made 100.1 untunable: with 200 kHz spacing the only reachable
+     * frequencies were even tenths, and in North America every station is on an odd one.
+     */
+    fun snapToGrid(freqKHz: Int): Int {
+        val plan = band.value
+        val st = gridStep()
+        if (st <= 0) return freqKHz.coerceIn(plan.lowKHz, plan.highKHz)   // free tuning
+        val base = gridBase()
+        val n = Math.round((freqKHz - base).toDouble() / st).toInt()
+        return (base + n * st).coerceIn(plan.lowKHz, plan.highKHz)
+    }
+
+    /** Effective step, after the user's grid preference. */
+    fun gridStep(): Int = when (channelGrid.value) {
+        FmChannelGrid.AUTO -> band.value.stepKHz
+        FmChannelGrid.ODD_TENTHS, FmChannelGrid.EVEN_TENTHS -> 200
+        FmChannelGrid.EVERY_TENTH -> 100
+        FmChannelGrid.FREE -> 0
+    }
+
+    /** Where the grid starts, which is what decides odd versus even tenths. */
+    private fun gridBase(): Int = when (channelGrid.value) {
+        // Anchor on the first real channel of the plan, not on the band's lower edge. For
+        // North America that is 87.9 (channel 200); the band itself starts at 87.5, and
+        // anchoring there would put the whole grid on even tenths where no stations exist.
+        FmChannelGrid.AUTO -> if (band.value == FmBandPlan.US) 87900 else band.value.lowKHz
+        // 87.9 is odd-tenth, 88.0 is even-tenth; everything else follows from the 200 kHz step.
+        FmChannelGrid.ODD_TENTHS -> 87900
+        FmChannelGrid.EVEN_TENTHS -> 88000
+        FmChannelGrid.EVERY_TENTH -> 87500
+        FmChannelGrid.FREE -> band.value.lowKHz
+    }
+
+    fun setChannelGrid(g: FmChannelGrid) {
+        channelGrid.value = g
+        prefs.edit().putString("grid", g.name).apply()
+        // Re-snap where we are, so the setting takes effect visibly rather than at the next tune.
+        if (g != FmChannelGrid.FREE) tune(snapToGrid(currentFrequencyKHz.value))
     }
 
     fun seek(up: Boolean) {
@@ -800,48 +1167,77 @@ class QualcommFmHardwareEngine(private val context: Context) {
      * where the chip stops uses only calls this device is known to answer, and it gives a real
      * signal reading per hit instead of a bare frequency.
      */
+    /**
+     * Sweep the band, measuring RSSI at every channel, and collect the ones the chip calls real.
+     *
+     * This replaced a scan built out of repeated hardware seeks. Seeks only report where they
+     * stopped, which gives a list of frequencies and nothing to draw; and on this device the
+     * HCI seek drives the Qualcomm core, which has no antenna, so it found nothing. Tuning the
+     * Si4705 across the band and reading its own signal meter gives both the station list and a
+     * picture of the band, from the part that is actually receiving.
+     *
+     * A station is one the chip validates: `valid=1`, or SNR above zero. Those are the Si4705's
+     * own thresholds rather than a number picked here, which is why a sweep over an unconnected
+     * antenna correctly returns nothing instead of a list of noise peaks.
+     */
     fun scanBand() {
         val rx = receiver
         if (rx == null || !hardwareOnline.value || scanJob?.isActive == true) return
         scanJob = scope.launch(tunerDispatcher) {
             val plan = band.value
             val startFreq = currentFrequencyKHz.value
-            val hits = LinkedHashMap<Int, FmScanHit>()
-            scanResults.value = emptyList()
-            scanProgress.value = 0f
+            val channels = ((plan.highKHz - plan.lowKHz) / plan.stepKHz) + 1
+            val profile = FloatArray(channels)
+            val raw = IntArray(channels)
+            val hits = ArrayList<FmScanHit>()
+            val wasMuted = isMuted.value
             sweeping = true
             isScanning.value = true
+            scanResults.value = emptyList()
+            scanProgress.value = 0f
             try {
-                var guard = 0
-                val maxStops = ((plan.highKHz - plan.lowKHz) / plan.stepKHz) + 1
-                var wrappedPast = false
-                var previous = startFreq
-                while (isActive && guard++ < maxStops) {
-                    val freq = seekOnce(rx, true) ?: break
-                    // Seek wraps at the top of the band; stop once it comes back round.
-                    if (freq < previous) {
-                        if (wrappedPast) break
-                        wrappedPast = true
+                // The chip clicks its way across the band; muting keeps that out of your ears.
+                if (!wasMuted) FmV4L2.setMute(true)
+                for (i in 0 until channels) {
+                    if (!isActive || !isPoweredOn.value) break
+                    val f = plan.lowKHz + i * plan.stepKHz
+                    FmV4L2.setTunedKHz(f)
+                    delay(SWEEP_SETTLE_MS)
+                    val sig = FmV4L2.signal()
+                    val rssi = sig?.rssi ?: 0
+                    raw[i] = rssi
+                    profile[i] = (rssi / SWEEP_RSSI_FULL_SCALE).coerceIn(0f, 1f)
+                    if (sig?.valid == true || (sig?.snr ?: 0) > 0) {
+                        hits += FmScanHit(f, rssi, sig?.snr)
                     }
-                    previous = freq
-                    if (hits.containsKey(freq)) break
-                    delay(350)                       // let the chip settle before reading signal
-                    val s = FmV4L2.signal()
-                    hits[freq] = FmScanHit(freq, s?.rssi ?: runCatching { rx.rssi }.getOrNull(), s?.snr)
-                    scanResults.value = hits.values.sortedBy { it.freqKHz }
-                    scanProgress.value =
-                        ((freq - plan.lowKHz).toFloat() / (plan.highKHz - plan.lowKHz)).coerceIn(0f, 1f)
+                    if (i % 4 == 0) {
+                        bandProfile.value = profile.copyOf()
+                        bandRssi.value = raw.copyOf()
+                        scanResults.value = hits.toList()
+                    }
+                    scanProgress.value = (i + 1).toFloat() / channels
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "band scan ended early: $t")
+                Log.w(TAG, "band sweep ended early: $t")
             } finally {
+                bandProfile.value = profile
+                bandRssi.value = raw
+                scanResults.value = hits.toList()
+                sweepHistory.addFirst(profile)
+                sweepTimes.addFirst(System.currentTimeMillis())
+                while (sweepHistory.size > SWEEP_HISTORY) sweepHistory.removeLast()
+                while (sweepTimes.size > SWEEP_HISTORY) sweepTimes.removeLast()
+                bandHistory.value = sweepHistory.toList()
+                bandHistoryTimes.value = sweepTimes.toList()
                 sweeping = false
                 isScanning.value = false
                 scanProgress.value = 0f
-                scanResults.value = hits.values.sortedBy { it.freqKHz }
-                Log.i(TAG, "band scan found ${hits.size} station(s)")
-                if (hits.isNotEmpty()) tune(hits.keys.minByOrNull { kotlin.math.abs(it - startFreq) } ?: startFreq)
-                else tune(startFreq)
+                // Back where we started, and unmuted only if it was unmuted before.
+                FmV4L2.setTunedKHz(startFreq)
+                currentFrequencyKHz.value = startFreq
+                runCatching { rx.setStation(startFreq) }
+                if (!wasMuted) FmV4L2.setMute(false)
+                Log.i(TAG, "band sweep: $channels channels, ${hits.size} validated station(s)")
             }
         }
     }
@@ -864,7 +1260,21 @@ class QualcommFmHardwareEngine(private val context: Context) {
     fun setStereo(enabled: Boolean) {
         stereoRequested.value = enabled
         prefs.edit().putBoolean("stereo", enabled).apply()
+        // setStereoMode is the WCN core's blend setting and does not touch the part that
+        // carries our audio. The Si4705's own stereo/mono IS its digital output format, so it
+        // has to be set through V4L2 as well or this switch changes nothing audible.
         runCatching { receiver?.setStereoMode(enabled) }
+        if (isPoweredOn.value) {
+            scope.launch(tunerDispatcher) {
+                val ok = FmV4L2.setChannelMode(if (enabled) 1 else 0)
+                // Stock always re-issues the frequency straight after a mode change; the
+                // driver rewrites DIGITAL_OUTPUT_FORMAT inside VIDIOC_S_TUNER and the chip
+                // wants retuning behind it.
+                FmV4L2.setTunedKHz(currentFrequencyKHz.value)
+                Log.i(TAG, "stereo=$enabled -> channel mode accepted=$ok " +
+                    "readback=${FmV4L2.channelMode()}")
+            }
+        }
     }
 
     fun toggleStereo() = setStereo(!stereoRequested.value)
@@ -910,41 +1320,71 @@ class QualcommFmHardwareEngine(private val context: Context) {
 
     // ------------------------------------------------------------------ polling
 
+    /**
+     * One I2C read per tick, and nothing else.
+     *
+     * This used to do six blocking calls a second: three V4L2 reads on the Si4705, an HCI RSSI
+     * and SINR round trip to the Qualcomm core, and an AudioManager.getParameters binder call
+     * into the audio HAL. That cost real CPU on three threads and, worse, it degraded
+     * reception: hammering a Si47xx's status registers over I2C while it is demodulating is a
+     * documented way to put artefacts in the audio, and the tuner audibly got dirtier.
+     *
+     * So: the signal read is the only thing on the hot path. The Qualcomm core is read ONCE at
+     * power-on, because it has no antenna and polling a deaf chip every second was pure waste
+     * that happened to share a mutex with the FM HCI transport. Mute state, driver frequency
+     * and the HAL loopback flag moved to [refreshDiagnostics], which runs only when someone is
+     * looking at the diagnostics sheet.
+     */
     private fun refreshSignal() {
         if (!hardwareOnline.value) return
-        // Read BOTH paths, not one with the other as a fallback. They are different parts and
-        // the interesting question is whether they disagree.
-        val s = FmV4L2.signal()
+        val s = FmV4L2.signal() ?: return
+        signal.value = s
+        s.rssi?.let { rssi.value = it }
+        s.stereo?.let { isStereo.value = it }
+        diagnostics.value = diagnostics.value.copy(rssiSi4705 = s.rssi)
+        val now = (s.rssi ?: 0).let { (it / SWEEP_RSSI_FULL_SCALE).coerceIn(0f, 1f) }
+        histBuf.addFirst(now)
+        while (histBuf.size > SIGNAL_HISTORY) histBuf.removeLast()
+        signalHistory.value = histBuf.toFloatArray()
+    }
+
+    /** The Qualcomm side, read once. It is deaf here; the value is for the comparison, not a poll. */
+    private fun readQualcommOnce() {
         val hciRssi = runCatching { receiver?.rssi }.getOrNull()?.takeIf { it >= 0 }
         val hciSinr = runCatching { receiver?.getSINR() }.getOrNull()
-        if (s != null) {
-            signal.value = s
-            s.rssi?.let { rssi.value = it }
-        } else {
-            hciRssi?.let { rssi.value = it }
+        diagnostics.value = diagnostics.value.copy(rssiQualcomm = hciRssi, sinrQualcomm = hciSinr)
+    }
+
+    /** Everything expensive, on demand only: the UI calls this when the diagnostics sheet opens. */
+    fun refreshDiagnostics() {
+        if (!hardwareOnline.value) return
+        scope.launch(tunerDispatcher) {
+            diagnostics.value = diagnostics.value.copy(
+                fmState = runCatching { receiver?.fmState }.getOrNull(),
+                halLoopback = FmAudioRoute.loopbackActive(audioManager),
+                driverMuted = FmV4L2.isMuted(),
+                driverFreqKHz = FmV4L2.tunedKHz(),
+            )
+            readQualcommOnce()
         }
-        diagnostics.value = diagnostics.value.copy(
-            rssiSi4705 = s?.rssi,
-            rssiQualcomm = hciRssi,
-            sinrQualcomm = hciSinr,
-        )
     }
 
     private fun startPolling() {
         pollJob?.cancel()
         pollJob = scope.launch {
+            readQualcommOnce()
+            var tick = 0
             while (isActive && isPoweredOn.value) {
-                refreshSignal()
-                followSystemVolume()
-                if (hardwareOnline.value) {
-                    diagnostics.value = diagnostics.value.copy(
-                        fmState = runCatching { receiver?.fmState }.getOrNull(),
-                        halLoopback = FmAudioRoute.loopbackActive(audioManager),
-                        driverMuted = FmV4L2.isMuted(),
-                        driverFreqKHz = FmV4L2.tunedKHz(),
-                    )
+                // Only meter while someone is looking. Every tick is an I2C transaction on a
+                // chip that is demodulating, and in the background nothing reads the result:
+                // the radio plays through the hardware loopback whether we poll or not.
+                if (uiVisible) {
+                    refreshSignal()
+                    tick++
+                    delay(SIGNAL_POLL_MS)
+                } else {
+                    delay(4000)
                 }
-                delay(1000)
             }
         }
     }
@@ -1065,6 +1505,109 @@ class QualcommFmHardwareEngine(private val context: Context) {
         }, "MikuFmAudioBridgeThread").apply { start() }
     }
 
+    // ------------------------------------------------------------------ RDS
+
+    private var rdsThread: Thread? = null
+    @Volatile private var rdsRunning = false
+
+    /** True/false once known, null before the first attempt. Surfaced in diagnostics. */
+    val rdsSupported = MutableStateFlow<Boolean?>(null)
+    val rdsArtist = MutableStateFlow<String?>(null)
+    val rdsTitle = MutableStateFlow<String?>(null)
+    val rdsGroups = MutableStateFlow(0)
+
+    /**
+     * Read RDS straight off /dev/radio0, the way HiBy's driver actually serves it.
+     *
+     * The HCI RDS callbacks belong to the Qualcomm core, which has no antenna on this board, so
+     * they were never going to deliver anything. The Si4705 is the part receiving. Its driver
+     * only switches RDS on from poll(), hands out one whole group per read(), and returns 0 from
+     * read() either way; FmRdsReader has the details. So the loop is: arm, then read until the
+     * chip has nothing, sleep a little, and re-arm whenever groups stop for a second (a retune or
+     * a fade loses sync, and only poll() turns reception back on).
+     *
+     * It runs for as long as the tuner is on. A station with no RDS, or a signal too weak to
+     * carry it, just costs one I2C status read per 80 ms.
+     */
+    /** When the current station was tuned, so "no RDS" is timed from the tune, not from power-on. */
+    @Volatile private var rdsTunedAt = 0L
+
+    private fun startRdsReader() {
+        if (rdsRunning) return
+        rdsRunning = true
+        FmRdsReader.newStation()
+        rdsThread = Thread({
+            val fd = FmRdsReader.open()
+            if (fd == null) {
+                rdsSupported.value = false
+                rdsRunning = false
+                return@Thread
+            }
+            rdsSupported.value = true
+            val buf = ByteArray(FmRdsReader.GROUP_BYTES)
+            rdsTunedAt = SystemClock.elapsedRealtime()
+            var lastGroupAt = 0L
+            var lastArmAt = 0L
+            try {
+                while (rdsRunning && isPoweredOn.value) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastGroupAt > RDS_REARM_MS && now - lastArmAt > RDS_REARM_MS) {
+                        FmRdsReader.arm(fd)
+                        lastArmAt = now
+                    }
+                    var changed = false
+                    var drained = 0
+                    // The chip's FIFO holds a handful of groups; empty it, then rest.
+                    while (drained < 16 && FmRdsReader.readGroup(fd, buf)) {
+                        drained++
+                        if (FmRdsReader.offerGroup(buf)) changed = true
+                    }
+                    if (drained > 0) {
+                        lastGroupAt = now
+                        rdsGroups.value = FmRdsReader.state.groups
+                        rdsAvailable.value = true
+                    } else if (now - maxOf(lastGroupAt, rdsTunedAt) > RDS_ABSENT_MS &&
+                        rdsAvailable.value != false && FmRdsReader.state.groups == 0) {
+                        // Ten seconds tuned with not one clean group: say so, but keep listening,
+                        // because the signal can come up.
+                        rdsAvailable.value = false
+                    }
+                    if (changed) publishRds()
+                    Thread.sleep(if (drained > 0) 40 else 80)
+                }
+            } catch (_: InterruptedException) {
+            } catch (e: android.system.ErrnoException) {
+                Log.w(TAG, "RDS read failed: ${android.system.OsConstants.errnoName(e.errno)}")
+            } finally {
+                FmRdsReader.close(fd)
+                rdsRunning = false
+                Log.i(TAG, "RDS reader stopped (${FmRdsReader.state.groups} group(s), " +
+                    "whole=${FmRdsReader.wholeGroups})")
+            }
+        }, "MikuFmRdsReader").apply { isDaemon = true; start() }
+    }
+
+    private fun publishRds() {
+        val r = FmRdsReader.state
+        when {
+            r.ps.isNotEmpty() -> stationName.value = r.ps
+            // No PS yet (or a driver that cannot deliver it): the call letters are in the PI
+            // code itself, so the station can still be named by what it actually transmits.
+            r.callSign != null && stationName.value.isEmpty() -> stationName.value = r.callSign
+        }
+        if (r.rt.isNotEmpty()) radioText.value = r.rt
+        r.pty?.let { if (it > 0) programmeType.value = it }
+        r.pi?.let { if (it != 0) programmeId.value = it }
+        rdsArtist.value = r.rtPlusArtist
+        rdsTitle.value = r.rtPlusTitle
+    }
+
+    private fun stopRdsReader() {
+        rdsRunning = false
+        rdsThread?.interrupt()
+        rdsThread = null
+    }
+
     private fun stopAudioBridge() {
         if (!isAudioRecordRunning) return
         isAudioRecordRunning = false
@@ -1161,12 +1704,45 @@ class QualcommFmHardwareEngine(private val context: Context) {
                         "seek_up" -> seek(true)
                         "seek_down" -> seek(false)
                         "scan" -> scanBand()
+                        // Power the tuner from adb. The foreground service is not exported, so
+                        // without this the only way to switch the radio on is a finger on the
+                        // screen - which is why every audio question this session has needed the
+                        // user present. The receiver is already reachable; this just uses it.
+                        "power" -> {
+                            val on = intent.getIntExtra("on", 1) == 1
+                            Log.i(TAG, "debug: power ${if (on) "on" else "off"}")
+                            if (on) powerOn() else powerOff()
+                        }
+                        "state" -> Log.i(TAG, "STATE poweredOn=${isPoweredOn.value} " +
+                            "muted=${isMuted.value} driverMuted=${FmV4L2.isMuted()} " +
+                            "freq=${currentFrequencyKHz.value} driverFreq=${FmV4L2.tunedKHz()} " +
+                            "channelMode=${FmV4L2.channelMode()} " +
+                            "level=${fmVolumeLevel.value} route=$activeRouteCode " +
+                            "halLoopback=${FmAudioRoute.loopbackActive(audioManager)}")
                         "mute" -> mute()
                         "unmute" -> unmute()
-                        "vol" -> setVolumeIndex(intent.getIntExtra("index", volumeIndex.value))
+                        "vol" -> setFmVolumeLevel(intent.getIntExtra("level", fmVolumeLevel.value))
                         // Sweep the tuner part's own volume to find both the working range and
                         // whether it is the thing standing between a correct route and silence.
                         "sysfs" -> FmDriverSysfs.logProbe()
+                        "nearby" -> {
+                            refreshNearby(force = true)
+                            Log.i(TAG, "catalogue size=${FmStationCatalogue.size()} " +
+                                "pos=${FmStationCatalogue.listenerPosition(context)}")
+                        }
+                        // Live knobs, so the remaining options can be swept over adb while
+                        // someone listens, instead of costing a flash per guess.
+                        "v4l2mode" -> {
+                            val m = intent.getIntExtra("m", 0)
+                            val ok = FmV4L2.setChannelMode(m)
+                            // Stock always re-issues the frequency straight after this.
+                            FmV4L2.setTunedKHz(currentFrequencyKHz.value)
+                            Log.i(TAG, "setV4L2RadioChannelMode($m) accepted=$ok readback=${FmV4L2.channelMode()}")
+                        }
+                        "retune" -> {
+                            val f = currentFrequencyKHz.value
+                            Log.i(TAG, "retune: v4l2=${FmV4L2.setTunedKHz(f)} driverFreq=${FmV4L2.tunedKHz()}")
+                        }
                         "v4l2vol" -> {
                             val v = intent.getIntExtra("v", 63)
                             val ok = FmV4L2.setRadioVolume(v)

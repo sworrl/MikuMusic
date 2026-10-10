@@ -742,10 +742,9 @@ fun AudioDacScreen(ctx: Context) {
             }
         }
 
-        // Section 3.5: Dual Simultaneous Audio Sharing Matrix
+        // Section 3.5: Play to every output (com.miku.player.MikuMirrorOutput does the work)
         item {
             var audioShareEnabled by remember { mutableStateOf(CirrusLogicManager.isAudioShareEnabled(ctx)) }
-            var audioShareTarget by remember { mutableStateOf(CirrusLogicManager.getAudioShareTarget(ctx)) }
 
             Column(Modifier.mikuCard().padding(14.dp)) {
                 Row(
@@ -755,14 +754,15 @@ fun AudioDacScreen(ctx: Context) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "DUAL SIMULTANEOUS AUDIO MATRIX",
+                            "PLAY TO EVERY OUTPUT",
                             color = MikuPinkBright,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.sp
                         )
                         Text(
-                            "Simultaneous audio broadcast across CS43198 DAC and Bluetooth",
+                            "Wired, USB and Bluetooth outputs all play at once (never the built-in " +
+                                "speaker). The wired jack stays bit-perfect; the others get a synced copy.",
                             color = MikuMuted,
                             fontSize = 11.sp
                         )
@@ -778,50 +778,6 @@ fun AudioDacScreen(ctx: Context) {
                     )
                 }
 
-                if (audioShareEnabled) {
-                    Spacer(Modifier.height(10.dp))
-                    HorizontalDivider(color = Color(0x22FFFFFF), thickness = 0.8.dp)
-                    Spacer(Modifier.height(10.dp))
-
-                    Text(
-                        "DUAL AUDIO STREAM TARGETS",
-                        color = MikuPinkBright,
-                        fontSize = 11.5.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(Modifier.height(6.dp))
-
-                    CirrusLogicManager.AudioShareTarget.values().forEach { target ->
-                        val isSel = audioShareTarget == target
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(if (isSel) MikuPinkBright.copy(alpha = 0.15f) else Color.Transparent)
-                                .border(1.dp, if (isSel) MikuPinkBright.copy(alpha = 0.5f) else Color.Transparent, RoundedCornerShape(10.dp))
-                                .clickable {
-                                    audioShareTarget = target
-                                    scope.launch { CirrusLogicManager.setAudioShareTarget(ctx, target) }
-                                }
-                                .padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(target.label, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(target.description, color = MikuMuted, fontSize = 11.sp, lineHeight = 14.sp)
-                            }
-                            RadioButton(
-                                selected = isSel,
-                                onClick = {
-                                    audioShareTarget = target
-                                    scope.launch { CirrusLogicManager.setAudioShareTarget(ctx, target) }
-                                },
-                                colors = RadioButtonDefaults.colors(selectedColor = MikuPinkBright, unselectedColor = MikuMuted)
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                    }
-                }
             }
         }
 
